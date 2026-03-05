@@ -14,6 +14,8 @@ import {
   AlertTriangle,
   ChevronDown,
   Download,
+  Layers,
+  Briefcase
 } from "lucide-react";
 import {
   BarChart,
@@ -37,9 +39,9 @@ import { useThemeColors } from "./ThemeContext";
 /* ------------------------------------------------------------------ */
 
 interface CostEntry {
-  shipper: string;
-  shipperId: string;
-  category: string;
+  id: string;
+  name: string;
+  category?: string;
   workers: { fullTime: number; partner: number; dispatch: number };
   hours: { fullTime: number; partner: number; dispatch: number };
   cost: { fullTime: number; partner: number; dispatch: number; overhead: number };
@@ -49,42 +51,87 @@ interface CostEntry {
   trend: "up" | "down" | "stable";
 }
 
-const costData: CostEntry[] = [
+const shipperCostData: CostEntry[] = [
   {
-    shipper: "荷主A (家電)", shipperId: "S001", category: "家電",
+    id: "S001", name: "荷主A (家電)", category: "家電",
     workers: { fullTime: 25, partner: 20, dispatch: 40 },
     hours: { fullTime: 200, partner: 160, dispatch: 320 },
     cost: { fullTime: 340000, partner: 224000, dispatch: 400000, overhead: 58000 },
     volume: 73400, costPerUnit: 13.9, budgetVariance: 3.2, trend: "up",
   },
   {
-    shipper: "荷主B (食品)", shipperId: "S002", category: "食品",
+    id: "S002", name: "荷主B (食品)", category: "食品",
     workers: { fullTime: 18, partner: 15, dispatch: 29 },
     hours: { fullTime: 144, partner: 120, dispatch: 232 },
     cost: { fullTime: 244800, partner: 168000, dispatch: 290000, overhead: 42000 },
     volume: 89600, costPerUnit: 8.3, budgetVariance: -1.5, trend: "down",
   },
   {
-    shipper: "荷主C (アパレル)", shipperId: "S003", category: "アパレル",
+    id: "S003", name: "荷主C (アパレル)", category: "アパレル",
     workers: { fullTime: 12, partner: 10, dispatch: 26 },
     hours: { fullTime: 96, partner: 80, dispatch: 208 },
     cost: { fullTime: 163200, partner: 112000, dispatch: 260000, overhead: 32000 },
     volume: 35900, costPerUnit: 15.8, budgetVariance: 7.8, trend: "up",
   },
   {
-    shipper: "荷主D (日用品)", shipperId: "S004", category: "日用品",
+    id: "S004", name: "荷主D (日用品)", category: "日用品",
     workers: { fullTime: 15, partner: 12, dispatch: 25 },
     hours: { fullTime: 120, partner: 96, dispatch: 200 },
     cost: { fullTime: 204000, partner: 134400, dispatch: 250000, overhead: 38000 },
     volume: 101000, costPerUnit: 6.2, budgetVariance: -0.5, trend: "stable",
   },
   {
-    shipper: "荷主E (医薬品)", shipperId: "S005", category: "医薬品",
+    id: "S005", name: "荷主E (医薬品)", category: "医薬品",
     workers: { fullTime: 20, partner: 8, dispatch: 15 },
     hours: { fullTime: 160, partner: 64, dispatch: 120 },
     cost: { fullTime: 272000, partner: 89600, dispatch: 150000, overhead: 52000 },
     volume: 22800, costPerUnit: 24.7, budgetVariance: -2.1, trend: "down",
   },
+];
+
+const processCostData: CostEntry[] = [
+  {
+    id: "P001", name: "入荷", category: "共通",
+    workers: { fullTime: 8, partner: 5, dispatch: 15 },
+    hours: { fullTime: 64, partner: 40, dispatch: 120 },
+    cost: { fullTime: 108800, partner: 56000, dispatch: 150000, overhead: 20000 },
+    volume: 85000, costPerUnit: 3.9, budgetVariance: -1.2, trend: "down"
+  },
+  {
+    id: "P002", name: "検品", category: "作業",
+    workers: { fullTime: 15, partner: 10, dispatch: 20 },
+    hours: { fullTime: 120, partner: 80, dispatch: 160 },
+    cost: { fullTime: 204000, partner: 112000, dispatch: 200000, overhead: 35000 },
+    volume: 82000, costPerUnit: 6.7, budgetVariance: 2.5, trend: "up"
+  },
+  {
+    id: "P003", name: "仕分け", category: "作業",
+    workers: { fullTime: 10, partner: 20, dispatch: 30 },
+    hours: { fullTime: 80, partner: 160, dispatch: 240 },
+    cost: { fullTime: 136000, partner: 224000, dispatch: 300000, overhead: 45000 },
+    volume: 80000, costPerUnit: 8.8, budgetVariance: 5.1, trend: "up"
+  },
+  {
+    id: "P004", name: "流通加工", category: "加工作業",
+    workers: { fullTime: 20, partner: 15, dispatch: 25 },
+    hours: { fullTime: 160, partner: 120, dispatch: 200 },
+    cost: { fullTime: 272000, partner: 168000, dispatch: 250000, overhead: 50000 },
+    volume: 45000, costPerUnit: 16.4, budgetVariance: -0.8, trend: "stable"
+  },
+  {
+    id: "P005", name: "梱包", category: "最終作業",
+    workers: { fullTime: 12, partner: 10, dispatch: 25 },
+    hours: { fullTime: 96, partner: 80, dispatch: 200 },
+    cost: { fullTime: 163200, partner: 112000, dispatch: 250000, overhead: 38000 },
+    volume: 78000, costPerUnit: 7.2, budgetVariance: 8.4, trend: "up"
+  },
+  {
+    id: "P006", name: "出荷", category: "共通",
+    workers: { fullTime: 15, partner: 5, dispatch: 20 },
+    hours: { fullTime: 120, partner: 40, dispatch: 160 },
+    cost: { fullTime: 204000, partner: 56000, dispatch: 200000, overhead: 40000 },
+    volume: 82000, costPerUnit: 6.1, budgetVariance: -2.0, trend: "down"
+  }
 ];
 
 const monthlyTrendData = [
@@ -114,7 +161,8 @@ const unitRates = {
 /* ------------------------------------------------------------------ */
 
 export function CostAnalysis() {
-  const [selectedShipper, setSelectedShipper] = useState<string | null>(null);
+  const [viewType, setViewType] = useState<"shipper" | "process">("shipper");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [periodFilter, setPeriodFilter] = useState("month");
   const c = useThemeColors();
 
@@ -125,18 +173,20 @@ export function CostAnalysis() {
   const tooltipBorder = c.isDark ? "#2a2a3e" : "#e5e7eb";
   const tooltipColor = c.isDark ? "#e0e0e0" : "#1f2937";
 
+  const activeData = viewType === "shipper" ? shipperCostData : processCostData;
+
   // Totals
-  const totalCost = costData.reduce((s, d) => s + d.cost.fullTime + d.cost.partner + d.cost.dispatch + d.cost.overhead, 0);
-  const totalWorkers = costData.reduce((s, d) => s + d.workers.fullTime + d.workers.partner + d.workers.dispatch, 0);
-  const totalHours = costData.reduce((s, d) => s + d.hours.fullTime + d.hours.partner + d.hours.dispatch, 0);
-  const totalVolume = costData.reduce((s, d) => s + d.volume, 0);
+  const totalCost = activeData.reduce((s, d) => s + d.cost.fullTime + d.cost.partner + d.cost.dispatch + d.cost.overhead, 0);
+  const totalWorkers = activeData.reduce((s, d) => s + d.workers.fullTime + d.workers.partner + d.workers.dispatch, 0);
+  const totalHours = activeData.reduce((s, d) => s + d.hours.fullTime + d.hours.partner + d.hours.dispatch, 0);
+  const totalVolume = activeData.reduce((s, d) => s + d.volume, 0);
   const avgCostPerUnit = Math.round((totalCost / totalVolume) * 10) / 10;
 
   const totalByType = {
-    fullTime: costData.reduce((s, d) => s + d.cost.fullTime, 0),
-    partner: costData.reduce((s, d) => s + d.cost.partner, 0),
-    dispatch: costData.reduce((s, d) => s + d.cost.dispatch, 0),
-    overhead: costData.reduce((s, d) => s + d.cost.overhead, 0),
+    fullTime: activeData.reduce((s, d) => s + d.cost.fullTime, 0),
+    partner: activeData.reduce((s, d) => s + d.cost.partner, 0),
+    dispatch: activeData.reduce((s, d) => s + d.cost.dispatch, 0),
+    overhead: activeData.reduce((s, d) => s + d.cost.overhead, 0),
   };
 
   const pieData = [
@@ -146,20 +196,25 @@ export function CostAnalysis() {
     { name: "管理費", value: totalByType.overhead, color: COLORS.overhead },
   ];
 
-  // Shipper bar chart data
-  const shipperBarData = costData.map((d) => ({
-    name: d.shipper.replace(/ \(.+\)/, ""),
+  // Bar chart data
+  const barData = activeData.map((d) => ({
+    name: d.name.replace(/ \(.+\)/, ""),
     正社員: Math.round(d.cost.fullTime / 10000),
     パートナー: Math.round(d.cost.partner / 10000),
     派遣: Math.round(d.cost.dispatch / 10000),
     管理費: Math.round(d.cost.overhead / 10000),
   }));
 
-  const selected = selectedShipper ? costData.find((d) => d.shipperId === selectedShipper) : null;
+  const selected = selectedId ? activeData.find((d) => d.id === selectedId) : null;
 
   const formatYen = (v: number) => {
-    if (v >= 10000) return `¥${(v / 10000).toFixed(1)}万`;
-    return `¥${v.toLocaleString()}`;
+    if (v >= 10000) return \`¥\${(v / 10000).toFixed(1)}万\`;
+    return \`¥\${v.toLocaleString()}\`;
+  };
+
+  const handleTabChange = (type: "shipper" | "process") => {
+    setViewType(type);
+    setSelectedId(null);
   };
 
   return (
@@ -167,27 +222,48 @@ export function CostAnalysis() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className={c.textPrimary}>荷主別原価分析</h1>
-          <p className={`${c.textSecondary} text-[14px] mt-1`}>
-            雇用形態別（正社員・パートナー・派遣）の原価構成と荷主別収益性を分析
+          <h1 className={c.textPrimary}>原価分析</h1>
+          <p className={\`\${c.textSecondary} text-[14px] mt-1\`}>
+            雇用形態別（正社員・パートナー・派遣）の原価構成と収益性を分析
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className={`flex items-center rounded-lg border ${c.borderCard} overflow-hidden`}>
+        <div className="flex items-center gap-4">
+          <div className={\`flex items-center rounded-lg \${c.bgCard} p-1 border \${c.borderCard}\`}>
+            <button
+              onClick={() => handleTabChange("shipper")}
+              className={\`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-[13px] font-medium transition-all \${
+                viewType === "shipper" ? "bg-cyan-600 text-white shadow" : c.textSecondary
+              }\`}
+            >
+              <Briefcase className="w-4 h-4" /> 荷主別
+            </button>
+            <button
+              onClick={() => handleTabChange("process")}
+              className={\`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-[13px] font-medium transition-all \${
+                viewType === "process" ? "bg-cyan-600 text-white shadow" : c.textSecondary
+              }\`}
+            >
+              <Layers className="w-4 h-4" /> 工程別
+            </button>
+          </div>
+
+          <div className={\`flex items-center justify-center w-[1px] h-6 \${c.isDark ? "bg-slate-700" : "bg-gray-300"}\`}></div>
+
+          <div className={\`flex items-center rounded-lg border \${c.borderCard} overflow-hidden\`}>
             {[
               { key: "week", label: "週" },
               { key: "month", label: "月" },
               { key: "quarter", label: "四半期" },
             ].map((p) => (
               <button key={p.key} onClick={() => setPeriodFilter(p.key)}
-                className={`px-3 py-1.5 text-[12px] transition-all ${
+                className={\`px-3 py-1.5 text-[12px] transition-all \${
                   periodFilter === p.key
-                    ? "bg-cyan-600 text-white"
-                    : `${c.bgSurface} ${c.textSecondary}`
-                }`}>{p.label}</button>
+                    ? "bg-slate-700 text-white"
+                    : \`\${c.bgSurface} \${c.textSecondary}\`
+                }\`}>{p.label}</button>
             ))}
           </div>
-          <button className={`flex items-center gap-2 px-4 py-2 rounded-lg ${c.bgSurface} border ${c.borderCard} ${c.textSecondary} text-[13px] hover:opacity-80 transition-all`}>
+          <button className={\`flex items-center gap-2 px-4 py-1.5 rounded-lg \${c.bgSurface} border \${c.borderCard} \${c.textSecondary} text-[13px] hover:opacity-80 transition-all\`}>
             <Download className="w-4 h-4" />CSV出力
           </button>
         </div>
@@ -197,40 +273,40 @@ export function CostAnalysis() {
       <div className="grid grid-cols-5 gap-4">
         {[
           { icon: DollarSign, label: "総原価", value: formatYen(totalCost), sub: "今月累計", iconColor: "text-cyan-400", bgIcon: "bg-cyan-500/10" },
-          { icon: Users, label: "総作業員", value: `${totalWorkers}名`, sub: `正${costData.reduce((s,d)=>s+d.workers.fullTime,0)} / P${costData.reduce((s,d)=>s+d.workers.partner,0)} / 派${costData.reduce((s,d)=>s+d.workers.dispatch,0)}`, iconColor: "text-violet-400", bgIcon: "bg-violet-500/10" },
-          { icon: Clock, label: "総実働時間", value: `${totalHours.toLocaleString()}h`, sub: "全雇用形態合計", iconColor: "text-emerald-400", bgIcon: "bg-emerald-500/10" },
-          { icon: Package, label: "総処理量", value: `${(totalVolume / 1000).toFixed(1)}K`, sub: "全荷主合計", iconColor: "text-amber-400", bgIcon: "bg-amber-500/10" },
-          { icon: BarChart3, label: "平均個あたり原価", value: `¥${avgCostPerUnit}`, sub: "全荷主平均", iconColor: "text-rose-400", bgIcon: "bg-rose-500/10" },
+          { icon: Users, label: "総作業員", value: \`\${totalWorkers}名\`, sub: \`正\${activeData.reduce((s,d)=>s+d.workers.fullTime,0)} / P\${activeData.reduce((s,d)=>s+d.workers.partner,0)} / 派\${activeData.reduce((s,d)=>s+d.workers.dispatch,0)}\`, iconColor: "text-violet-400", bgIcon: "bg-violet-500/10" },
+          { icon: Clock, label: "総実働時間", value: \`\${totalHours.toLocaleString()}h\`, sub: "全雇用形態合計", iconColor: "text-emerald-400", bgIcon: "bg-emerald-500/10" },
+          { icon: Package, label: "総処理量", value: \`\${(totalVolume / 1000).toFixed(1)}K\`, sub: viewType === "shipper" ? "全荷主合計" : "全工程合計", iconColor: "text-amber-400", bgIcon: "bg-amber-500/10" },
+          { icon: BarChart3, label: "平均個あたり原価", value: \`¥\${avgCostPerUnit}\`, sub: viewType === "shipper" ? "全荷主平均" : "全工程平均", iconColor: "text-rose-400", bgIcon: "bg-rose-500/10" },
         ].map((kpi) => (
-          <div key={kpi.label} className={`${c.bgCard} rounded-xl border ${c.border} p-4`}>
+          <div key={kpi.label} className={\`\${c.bgCard} rounded-xl border \${c.border} p-4\`}>
             <div className="flex items-center gap-2 mb-2">
-              <div className={`w-8 h-8 rounded-lg ${kpi.bgIcon} flex items-center justify-center`}>
-                <kpi.icon className={`w-4 h-4 ${kpi.iconColor}`} />
+              <div className={\`w-8 h-8 rounded-lg \${kpi.bgIcon} flex items-center justify-center\`}>
+                <kpi.icon className={\`w-4 h-4 \${kpi.iconColor}\`} />
               </div>
-              <span className={`text-[12px] ${c.textMuted}`}>{kpi.label}</span>
+              <span className={\`text-[12px] \${c.textMuted}\`}>{kpi.label}</span>
             </div>
-            <div className={`text-[22px] ${c.textPrimary} tabular-nums`}>{kpi.value}</div>
-            <div className={`text-[11px] ${c.textDimmed} mt-1`}>{kpi.sub}</div>
+            <div className={\`text-[22px] \${c.textPrimary} tabular-nums\`}>{kpi.value}</div>
+            <div className={\`text-[11px] \${c.textDimmed} mt-1\`}>{kpi.sub}</div>
           </div>
         ))}
       </div>
 
       {/* Unit Rate Reference */}
-      <div className={`flex items-center gap-6 px-4 py-2.5 rounded-lg ${c.bgSurface} border ${c.borderCard}`}>
-        <span className={`text-[12px] ${c.textMuted}`}>基準単価:</span>
-        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.fullTime }} /><span className={`text-[12px] ${c.textSecondary}`}>正社員 {unitRates.fullTime}</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.partner }} /><span className={`text-[12px] ${c.textSecondary}`}>パートナー {unitRates.partner}</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.dispatch }} /><span className={`text-[12px] ${c.textSecondary}`}>派遣 {unitRates.dispatch}</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.overhead }} /><span className={`text-[12px] ${c.textSecondary}`}>管理OH</span></div>
+      <div className={\`flex items-center gap-6 px-4 py-2.5 rounded-lg \${c.bgSurface} border \${c.borderCard}\`}>
+        <span className={\`text-[12px] \${c.textMuted}\`}>基準単価:</span>
+        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.fullTime }} /><span className={\`text-[12px] \${c.textSecondary}\`}>正社員 {unitRates.fullTime}</span></div>
+        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.partner }} /><span className={\`text-[12px] \${c.textSecondary}\`}>パートナー {unitRates.partner}</span></div>
+        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.dispatch }} /><span className={\`text-[12px] \${c.textSecondary}\`}>派遣 {unitRates.dispatch}</span></div>
+        <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS.overhead }} /><span className={\`text-[12px] \${c.textSecondary}\`}>管理OH</span></div>
       </div>
 
       {/* Charts Row */}
       <div className="grid grid-cols-3 gap-4">
         {/* Pie: Cost Breakdown */}
-        <div className={`${c.bgCard} rounded-xl border ${c.border} p-5`}>
+        <div className={\`\${c.bgCard} rounded-xl border \${c.border} p-5\`}>
           <div className="flex items-center gap-2 mb-4">
             <PieChartIcon className="w-4 h-4 text-cyan-400" />
-            <h3 className={`${c.textPrimary} text-[14px]`}>原価構成比</h3>
+            <h3 className={\`\${c.textPrimary} text-[14px]\`}>原価構成比</h3>
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <PieChart>
@@ -240,7 +316,7 @@ export function CostAnalysis() {
                 ))}
               </Pie>
               <Tooltip
-                contentStyle={{ backgroundColor: tooltipBg, border: `1px solid ${tooltipBorder}`, borderRadius: "8px", color: tooltipColor, fontSize: "12px" }}
+                contentStyle={{ backgroundColor: tooltipBg, border: \`1px solid \${tooltipBorder}\`, borderRadius: "8px", color: tooltipColor, fontSize: "12px" }}
                 formatter={(value: number) => [formatYen(value), ""]}
               />
             </PieChart>
@@ -249,25 +325,25 @@ export function CostAnalysis() {
             {pieData.map((d) => (
               <div key={d.name} className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: d.color }} />
-                <span className={`text-[11px] ${c.textSecondary}`}>{d.name}</span>
-                <span className={`text-[11px] ${c.textMuted} ml-auto tabular-nums`}>{Math.round(d.value / totalCost * 100)}%</span>
+                <span className={\`text-[11px] \${c.textSecondary}\`}>{d.name}</span>
+                <span className={\`text-[11px] \${c.textMuted} ml-auto tabular-nums\`}>{Math.round(d.value / totalCost * 100)}%</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Bar: Shipper Breakdown */}
-        <div className={`${c.bgCard} rounded-xl border ${c.border} p-5`}>
+        {/* Bar: Breakdown */}
+        <div className={\`\${c.bgCard} rounded-xl border \${c.border} p-5\`}>
           <div className="flex items-center gap-2 mb-4">
             <BarChart3 className="w-4 h-4 text-violet-400" />
-            <h3 className={`${c.textPrimary} text-[14px]`}>荷主別原価（万円）</h3>
+            <h3 className={\`\${c.textPrimary} text-[14px]\`}>{viewType === "shipper" ? "荷主別原価（万円）" : "工程別原価（万円）"}</h3>
           </div>
           <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={shipperBarData} layout="vertical">
+            <BarChart data={barData} layout="vertical">
               <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
               <XAxis type="number" stroke={axisStroke} tick={{ fontSize: 11, fill: tickFill }} />
-              <YAxis dataKey="name" type="category" stroke={axisStroke} tick={{ fontSize: 11, fill: tickFill }} width={50} />
-              <Tooltip contentStyle={{ backgroundColor: tooltipBg, border: `1px solid ${tooltipBorder}`, borderRadius: "8px", color: tooltipColor, fontSize: "12px" }} />
+              <YAxis dataKey="name" type="category" stroke={axisStroke} tick={{ fontSize: 11, fill: tickFill }} width={60} />
+              <Tooltip contentStyle={{ backgroundColor: tooltipBg, border: \`1px solid \${tooltipBorder}\`, borderRadius: "8px", color: tooltipColor, fontSize: "12px" }} />
               <Bar dataKey="正社員" stackId="a" fill={COLORS.fullTime} radius={0} />
               <Bar dataKey="パートナー" stackId="a" fill={COLORS.partner} radius={0} />
               <Bar dataKey="派遣" stackId="a" fill={COLORS.dispatch} radius={0} />
@@ -277,17 +353,17 @@ export function CostAnalysis() {
         </div>
 
         {/* Line: Monthly Trend */}
-        <div className={`${c.bgCard} rounded-xl border ${c.border} p-5`}>
+        <div className={\`\${c.bgCard} rounded-xl border \${c.border} p-5\`}>
           <div className="flex items-center gap-2 mb-4">
             <TrendingUp className="w-4 h-4 text-emerald-400" />
-            <h3 className={`${c.textPrimary} text-[14px]`}>月次推移（千円）</h3>
+            <h3 className={\`\${c.textPrimary} text-[14px]\`}>月次推移（千円）</h3>
           </div>
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={monthlyTrendData}>
               <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
               <XAxis dataKey="month" stroke={axisStroke} tick={{ fontSize: 11, fill: tickFill }} />
               <YAxis stroke={axisStroke} tick={{ fontSize: 11, fill: tickFill }} />
-              <Tooltip contentStyle={{ backgroundColor: tooltipBg, border: `1px solid ${tooltipBorder}`, borderRadius: "8px", color: tooltipColor, fontSize: "12px" }} />
+              <Tooltip contentStyle={{ backgroundColor: tooltipBg, border: \`1px solid \${tooltipBorder}\`, borderRadius: "8px", color: tooltipColor, fontSize: "12px" }} />
               <Line type="monotone" dataKey="正社員" stroke={COLORS.fullTime} strokeWidth={2} dot={{ r: 3 }} />
               <Line type="monotone" dataKey="パートナー" stroke={COLORS.partner} strokeWidth={2} dot={{ r: 3 }} />
               <Line type="monotone" dataKey="派遣" stroke={COLORS.dispatch} strokeWidth={2} dot={{ r: 3 }} />
@@ -298,14 +374,14 @@ export function CostAnalysis() {
       </div>
 
       {/* Detail Table */}
-      <div className={`${c.bgCard} rounded-xl border ${c.border} overflow-hidden`}>
-        <div className={`px-5 py-4 border-b ${c.border} flex items-center justify-between`}>
+      <div className={\`\${c.bgCard} rounded-xl border \${c.border} overflow-hidden\`}>
+        <div className={\`px-5 py-4 border-b \${c.border} flex items-center justify-between\`}>
           <div>
-            <h3 className={c.textPrimary}>荷主別原価明細</h3>
-            <p className={`${c.textMuted} text-[12px] mt-1`}>原価算出: (累計実働時間 × 雇用形態別単価) + 管理オーバーヘッド</p>
+            <h3 className={c.textPrimary}>{viewType === "shipper" ? "荷主別原価明細" : "工程別原価明細"}</h3>
+            <p className={\`\${c.textMuted} text-[12px] mt-1\`}>原価算出: (累計実働時間 × 雇用形態別単価) + 管理オーバーヘッド</p>
           </div>
           <div className="flex items-center gap-2">
-            <button className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg ${c.bgSurface} border ${c.borderCard} ${c.textSecondary} text-[12px]`}>
+            <button className={\`flex items-center gap-1.5 px-3 py-1.5 rounded-lg \${c.bgSurface} border \${c.borderCard} \${c.textSecondary} text-[12px]\`}>
               <Filter className="w-3.5 h-3.5" />フィルタ
             </button>
           </div>
@@ -313,54 +389,54 @@ export function CostAnalysis() {
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className={`border-b ${c.border}`}>
-                {["荷主", "正社員", "パートナー", "派遣", "管理OH", "原価合計", "処理量", "個あたり原価", "予算比", ""].map((h) => (
-                  <th key={h} className={`text-left text-[11px] ${c.textMuted} px-4 py-3 whitespace-nowrap`}>{h}</th>
+              <tr className={\`border-b \${c.border}\`}>
+                {[(viewType === "shipper" ? "荷主" : "工程"), "正社員", "パートナー", "派遣", "管理OH", "原価合計", "処理量", "個あたり原価", "予算比", ""].map((h) => (
+                  <th key={h} className={\`text-left text-[11px] \${c.textMuted} px-4 py-3 whitespace-nowrap\`}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {costData.map((row) => {
+              {activeData.map((row) => {
                 const rowTotal = row.cost.fullTime + row.cost.partner + row.cost.dispatch + row.cost.overhead;
-                const isSelected = selectedShipper === row.shipperId;
+                const isSelected = selectedId === row.id;
                 return (
-                  <tr key={row.shipperId}
-                    onClick={() => setSelectedShipper(isSelected ? null : row.shipperId)}
-                    className={`border-b ${c.border} cursor-pointer transition-all ${isSelected ? "bg-cyan-500/5" : c.bgCardHover}`}>
+                  <tr key={row.id}
+                    onClick={() => setSelectedId(isSelected ? null : row.id)}
+                    className={\`border-b \${c.border} cursor-pointer transition-all \${isSelected ? "bg-cyan-500/5" : c.bgCardHover}\`}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <span className={`text-[13px] ${c.textPrimary}`}>{row.shipper}</span>
+                        <span className={\`text-[13px] \${c.textPrimary}\`}>{row.name}</span>
                         {row.budgetVariance > 5 && <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />}
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <div>
                         <span className="text-[12px] text-cyan-400 tabular-nums">{formatYen(row.cost.fullTime)}</span>
-                        <div className={`text-[10px] ${c.textDimmed}`}>{row.workers.fullTime}名 / {row.hours.fullTime}h</div>
+                        <div className={\`text-[10px] \${c.textDimmed}\`}>{row.workers.fullTime}名 / {row.hours.fullTime}h</div>
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <div>
                         <span className="text-[12px] text-violet-400 tabular-nums">{formatYen(row.cost.partner)}</span>
-                        <div className={`text-[10px] ${c.textDimmed}`}>{row.workers.partner}名 / {row.hours.partner}h</div>
+                        <div className={\`text-[10px] \${c.textDimmed}\`}>{row.workers.partner}名 / {row.hours.partner}h</div>
                       </div>
                     </td>
                     <td className="px-4 py-3">
                       <div>
                         <span className="text-[12px] text-orange-400 tabular-nums">{formatYen(row.cost.dispatch)}</span>
-                        <div className={`text-[10px] ${c.textDimmed}`}>{row.workers.dispatch}名 / {row.hours.dispatch}h</div>
+                        <div className={\`text-[10px] \${c.textDimmed}\`}>{row.workers.dispatch}名 / {row.hours.dispatch}h</div>
                       </div>
                     </td>
-                    <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{formatYen(row.cost.overhead)}</td>
+                    <td className={\`px-4 py-3 text-[12px] \${c.textSecondary} tabular-nums\`}>{formatYen(row.cost.overhead)}</td>
                     <td className="px-4 py-3">
-                      <span className={`text-[13px] ${c.textPrimary} tabular-nums`}>{formatYen(rowTotal)}</span>
+                      <span className={\`text-[13px] \${c.textPrimary} tabular-nums\`}>{formatYen(rowTotal)}</span>
                     </td>
-                    <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{row.volume.toLocaleString()}</td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>¥{row.costPerUnit}</td>
+                    <td className={\`px-4 py-3 text-[12px] \${c.textSecondary} tabular-nums\`}>{row.volume.toLocaleString()}</td>
+                    <td className={\`px-4 py-3 text-[13px] \${c.textPrimary} tabular-nums\`}>¥{row.costPerUnit}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
                         {row.budgetVariance > 0 ? <TrendingUp className="w-3 h-3 text-red-400" /> : <TrendingDown className="w-3 h-3 text-emerald-400" />}
-                        <span className={`text-[13px] tabular-nums ${row.budgetVariance > 0 ? "text-red-400" : "text-emerald-400"}`}>
+                        <span className={\`text-[13px] tabular-nums \${row.budgetVariance > 0 ? "text-red-400" : "text-emerald-400"}\`}>
                           {row.budgetVariance > 0 ? "+" : ""}{row.budgetVariance}%
                         </span>
                       </div>
@@ -373,15 +449,15 @@ export function CostAnalysis() {
               })}
             </tbody>
             <tfoot>
-              <tr className={`${c.bgSurface}`}>
-                <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>合計</td>
+              <tr className={\`\${c.bgSurface}\`}>
+                <td className={\`px-4 py-3 text-[13px] \${c.textPrimary}\`}>合計</td>
                 <td className="px-4 py-3 text-[12px] text-cyan-400 tabular-nums">{formatYen(totalByType.fullTime)}</td>
                 <td className="px-4 py-3 text-[12px] text-violet-400 tabular-nums">{formatYen(totalByType.partner)}</td>
                 <td className="px-4 py-3 text-[12px] text-orange-400 tabular-nums">{formatYen(totalByType.dispatch)}</td>
-                <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{formatYen(totalByType.overhead)}</td>
-                <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>{formatYen(totalCost)}</td>
-                <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{totalVolume.toLocaleString()}</td>
-                <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>¥{avgCostPerUnit}</td>
+                <td className={\`px-4 py-3 text-[12px] \${c.textSecondary} tabular-nums\`}>{formatYen(totalByType.overhead)}</td>
+                <td className={\`px-4 py-3 text-[13px] \${c.textPrimary} tabular-nums\`}>{formatYen(totalCost)}</td>
+                <td className={\`px-4 py-3 text-[12px] \${c.textSecondary} tabular-nums\`}>{totalVolume.toLocaleString()}</td>
+                <td className={\`px-4 py-3 text-[13px] \${c.textPrimary} tabular-nums\`}>¥{avgCostPerUnit}</td>
                 <td className="px-4 py-3" />
                 <td className="px-4 py-3" />
               </tr>
@@ -390,21 +466,21 @@ export function CostAnalysis() {
         </div>
       </div>
 
-      {/* Selected Shipper Detail */}
+      {/* Selected Detail */}
       {selected && (
-        <div className={`${c.bgCard} rounded-xl border ${c.border} p-5`}>
+        <div className={\`\${c.bgCard} rounded-xl border \${c.border} p-5\`}>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <h3 className={c.textPrimary}>{selected.shipper} 詳細分析</h3>
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${c.bgSurface} ${c.textMuted}`}>{selected.category}</span>
+              <h3 className={c.textPrimary}>{selected.name} 詳細分析</h3>
+              {selected.category && <span className={\`text-[11px] px-2 py-0.5 rounded-full \${c.bgSurface} \${c.textMuted}\`}>{selected.category}</span>}
             </div>
-            <button onClick={() => setSelectedShipper(null)} className={`${c.textMuted} text-[12px]`}>閉じる ×</button>
+            <button onClick={() => setSelectedId(null)} className={\`\${c.textMuted} text-[12px]\`}>閉じる ×</button>
           </div>
 
           <div className="grid grid-cols-4 gap-4">
             {/* Workforce mix */}
-            <div className={`${c.bgSurface} rounded-xl p-4`}>
-              <h4 className={`text-[12px] ${c.textMuted} mb-3`}>人員構成</h4>
+            <div className={\`\${c.bgSurface} rounded-xl p-4\`}>
+              <h4 className={\`text-[12px] \${c.textMuted} mb-3\`}>人員構成</h4>
               <div className="space-y-3">
                 {[
                   { label: "正社員", count: selected.workers.fullTime, color: COLORS.fullTime, total: selected.workers.fullTime + selected.workers.partner + selected.workers.dispatch },
@@ -415,12 +491,12 @@ export function CostAnalysis() {
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-1.5">
                         <div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.color }} />
-                        <span className={`text-[12px] ${c.textSecondary}`}>{item.label}</span>
+                        <span className={\`text-[12px] \${c.textSecondary}\`}>{item.label}</span>
                       </div>
-                      <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{item.count}名 ({Math.round(item.count / item.total * 100)}%)</span>
+                      <span className={\`text-[12px] \${c.textPrimary} tabular-nums\`}>{item.count}名 ({Math.round(item.count / item.total * 100)}%)</span>
                     </div>
-                    <div className={`w-full h-1.5 rounded-full ${c.isDark ? "bg-gray-800" : "bg-gray-200"} overflow-hidden`}>
-                      <div className="h-full rounded-full" style={{ width: `${(item.count / item.total) * 100}%`, backgroundColor: item.color }} />
+                    <div className={\`w-full h-1.5 rounded-full \${c.isDark ? "bg-gray-800" : "bg-gray-200"} overflow-hidden\`}>
+                      <div className="h-full rounded-full" style={{ width: \`\${(item.count / item.total) * 100}%\`, backgroundColor: item.color }} />
                     </div>
                   </div>
                 ))}
@@ -428,72 +504,72 @@ export function CostAnalysis() {
             </div>
 
             {/* Hours breakdown */}
-            <div className={`${c.bgSurface} rounded-xl p-4`}>
-              <h4 className={`text-[12px] ${c.textMuted} mb-3`}>実働時間</h4>
+            <div className={\`\${c.bgSurface} rounded-xl p-4\`}>
+              <h4 className={\`text-[12px] \${c.textMuted} mb-3\`}>実働時間</h4>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className={`text-[12px] ${c.textSecondary}`}>正社員</span>
+                  <span className={\`text-[12px] \${c.textSecondary}\`}>正社員</span>
                   <span className="text-[12px] text-cyan-400 tabular-nums">{selected.hours.fullTime}h</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className={`text-[12px] ${c.textSecondary}`}>パートナー</span>
+                  <span className={\`text-[12px] \${c.textSecondary}\`}>パートナー</span>
                   <span className="text-[12px] text-violet-400 tabular-nums">{selected.hours.partner}h</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className={`text-[12px] ${c.textSecondary}`}>派遣</span>
+                  <span className={\`text-[12px] \${c.textSecondary}\`}>派遣</span>
                   <span className="text-[12px] text-orange-400 tabular-nums">{selected.hours.dispatch}h</span>
                 </div>
-                <div className={`border-t ${c.border} pt-2 mt-2 flex items-center justify-between`}>
-                  <span className={`text-[12px] ${c.textPrimary}`}>合計</span>
-                  <span className={`text-[13px] ${c.textPrimary} tabular-nums`}>{selected.hours.fullTime + selected.hours.partner + selected.hours.dispatch}h</span>
+                <div className={\`border-t \${c.border} pt-2 mt-2 flex items-center justify-between\`}>
+                  <span className={\`text-[12px] \${c.textPrimary}\`}>合計</span>
+                  <span className={\`text-[13px] \${c.textPrimary} tabular-nums\`}>{selected.hours.fullTime + selected.hours.partner + selected.hours.dispatch}h</span>
                 </div>
               </div>
             </div>
 
             {/* Cost breakdown */}
-            <div className={`${c.bgSurface} rounded-xl p-4`}>
-              <h4 className={`text-[12px] ${c.textMuted} mb-3`}>原価内訳</h4>
+            <div className={\`\${c.bgSurface} rounded-xl p-4\`}>
+              <h4 className={\`text-[12px] \${c.textMuted} mb-3\`}>原価内訳</h4>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className={`text-[12px] ${c.textSecondary}`}>正社員</span>
+                  <span className={\`text-[12px] \${c.textSecondary}\`}>正社員</span>
                   <span className="text-[12px] text-cyan-400 tabular-nums">{formatYen(selected.cost.fullTime)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className={`text-[12px] ${c.textSecondary}`}>パートナー</span>
+                  <span className={\`text-[12px] \${c.textSecondary}\`}>パートナー</span>
                   <span className="text-[12px] text-violet-400 tabular-nums">{formatYen(selected.cost.partner)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className={`text-[12px] ${c.textSecondary}`}>派遣</span>
+                  <span className={\`text-[12px] \${c.textSecondary}\`}>派遣</span>
                   <span className="text-[12px] text-orange-400 tabular-nums">{formatYen(selected.cost.dispatch)}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className={`text-[12px] ${c.textSecondary}`}>管理OH</span>
-                  <span className={`text-[12px] ${c.textSecondary} tabular-nums`}>{formatYen(selected.cost.overhead)}</span>
+                  <span className={\`text-[12px] \${c.textSecondary}\`}>管理OH</span>
+                  <span className={\`text-[12px] \${c.textSecondary} tabular-nums\`}>{formatYen(selected.cost.overhead)}</span>
                 </div>
-                <div className={`border-t ${c.border} pt-2 mt-2 flex items-center justify-between`}>
-                  <span className={`text-[12px] ${c.textPrimary}`}>合計</span>
-                  <span className={`text-[13px] ${c.textPrimary} tabular-nums`}>{formatYen(selected.cost.fullTime + selected.cost.partner + selected.cost.dispatch + selected.cost.overhead)}</span>
+                <div className={\`border-t \${c.border} pt-2 mt-2 flex items-center justify-between\`}>
+                  <span className={\`text-[12px] \${c.textPrimary}\`}>合計</span>
+                  <span className={\`text-[13px] \${c.textPrimary} tabular-nums\`}>{formatYen(selected.cost.fullTime + selected.cost.partner + selected.cost.dispatch + selected.cost.overhead)}</span>
                 </div>
               </div>
             </div>
 
             {/* Efficiency metrics */}
-            <div className={`${c.bgSurface} rounded-xl p-4`}>
-              <h4 className={`text-[12px] ${c.textMuted} mb-3`}>効率指標</h4>
+            <div className={\`\${c.bgSurface} rounded-xl p-4\`}>
+              <h4 className={\`text-[12px] \${c.textMuted} mb-3\`}>効率指標</h4>
               <div className="space-y-3">
                 <div className="text-center">
-                  <div className={`text-[22px] ${c.textPrimary} tabular-nums`}>¥{selected.costPerUnit}</div>
-                  <div className={`text-[11px] ${c.textMuted}`}>個あたり原価</div>
+                  <div className={\`text-[22px] \${c.textPrimary} tabular-nums\`}>¥{selected.costPerUnit}</div>
+                  <div className={\`text-[11px] \${c.textMuted}\`}>個あたり原価</div>
                 </div>
                 <div className="text-center">
-                  <div className={`text-[22px] tabular-nums ${selected.budgetVariance > 0 ? "text-red-400" : "text-emerald-400"}`}>
+                  <div className={\`text-[22px] tabular-nums \${selected.budgetVariance > 0 ? "text-red-400" : "text-emerald-400"}\`}>
                     {selected.budgetVariance > 0 ? "+" : ""}{selected.budgetVariance}%
                   </div>
-                  <div className={`text-[11px] ${c.textMuted}`}>予算比</div>
+                  <div className={\`text-[11px] \${c.textMuted}\`}>予算比</div>
                 </div>
                 <div className="text-center">
-                  <div className={`text-[22px] ${c.textPrimary} tabular-nums`}>{selected.volume.toLocaleString()}</div>
-                  <div className={`text-[11px] ${c.textMuted}`}>処理量</div>
+                  <div className={\`text-[22px] \${c.textPrimary} tabular-nums\`}>{selected.volume.toLocaleString()}</div>
+                  <div className={\`text-[11px] \${c.textMuted}\`}>処理量</div>
                 </div>
               </div>
             </div>
