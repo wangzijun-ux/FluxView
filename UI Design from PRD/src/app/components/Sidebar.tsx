@@ -44,17 +44,21 @@ export function Sidebar() {
 
   return (
     <div
-      className={`h-full ${c.bgSidebar} border-r ${c.border} flex flex-col transition-all duration-300 ${
-        collapsed ? "w-[68px]" : "w-[240px]"
-      }`}
+      className={`h-full ${c.bgSidebar} border-r ${c.border} flex flex-col transition-all duration-300 ${collapsed ? "w-[68px]" : "w-[240px]"
+        }`}
     >
       {/* Logo */}
-      <div className={`flex items-center gap-3 px-4 py-5 border-b ${c.border}`}>
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shrink-0">
-          <Activity className="w-5 h-5 text-white" />
-        </div>
-        {!collapsed && (
-          <span className={`${c.textPrimary} tracking-wider`}>FluxView</span>
+      <div className={`flex items-center px-4 py-5 border-b ${c.border} min-h-[73px]`}>
+        {collapsed ? (
+          <div className="w-8 h-8 mx-auto rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shrink-0">
+            <Activity className="w-5 h-5 text-white" />
+          </div>
+        ) : (
+          <img
+            src={isDark ? "/logo-dark.png" : "/logo-light.png"}
+            alt="FluxView Logo"
+            className="h-8 object-contain"
+          />
         )}
       </div>
 
@@ -66,9 +70,8 @@ export function Sidebar() {
             <button
               key={item.path}
               onClick={() => navigate(item.path)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all ${
-                isActive ? c.navActive : c.navInactive
-              }`}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all ${isActive ? c.navActive : c.navInactive
+                }`}
             >
               <item.icon className="w-5 h-5 shrink-0" />
               {!collapsed && <span className="text-[14px]">{item.label}</span>}
