@@ -12,8 +12,13 @@ import { UserManagement } from "./components/UserManagement";
 import { WorkerView } from "./components/WorkerView";
 import { LiveCommand } from "./components/LiveCommand";
 import { ProcessSummary } from "./components/ProcessSummary";
+import { Login } from "./components/Login";
 
 export const router = createBrowserRouter([
+  {
+    path: "/login",
+    Component: Login,
+  },
   {
     path: "/",
     Component: Layout,
