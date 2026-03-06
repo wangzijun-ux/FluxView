@@ -90,7 +90,7 @@ interface AdjustmentEntry {
 /*  Mock Workers                                                       */
 /* ------------------------------------------------------------------ */
 
-const allWorkers: Worker[] = [
+const INITIAL_WORKERS: Worker[] = [
   { id: "w1", name: "田中 太郎", initials: "田", color: "bg-blue-500", skills: [{ label: "L", icon: "✅" }, { label: "FL", icon: "🔑" }], status: "active" },
   { id: "w2", name: "渡辺 謙", initials: "渡", color: "bg-emerald-500", skills: [{ label: "検品", icon: "🔍" }], status: "active" },
   { id: "w3", name: "佐藤 花子", initials: "佐", color: "bg-violet-500", skills: [{ label: "検品", icon: "🔍" }, { label: "品質", icon: "○" }], status: "active" },
@@ -98,7 +98,7 @@ const allWorkers: Worker[] = [
   { id: "w5", name: "伊藤 健", initials: "伊", color: "bg-rose-400", skills: [{ label: "梱包", icon: "📦" }], status: "active" },
   { id: "w6", name: "鈴木 一郎", initials: "鈴", color: "bg-orange-500", skills: [{ label: "FL", icon: "🔑" }, { label: "出荷", icon: "🚛" }], status: "active" },
   { id: "w7", name: "小林 さくら", initials: "小", color: "bg-pink-400", skills: [{ label: "New", icon: "🌱" }], status: "active" },
-  { id: "w8", name: "中村 敏", initials: "中", color: "bg-gray-400", skills: [{ label: "FL", icon: "🔑" }], status: "break" },
+  { id: "w8", name: "中村 敏", initials: "中", color: "bg-gray-400", skills: [{ label: "FL", icon: "🔑" }], status: "absent" },
   { id: "w9", name: "山田 裕子", initials: "山", color: "bg-teal-500", skills: [{ label: "仕分", icon: "📋" }], status: "active" },
   { id: "w10", name: "松本 翔", initials: "松", color: "bg-indigo-500", skills: [{ label: "仕分", icon: "📋" }, { label: "FL", icon: "🔑" }], status: "active" },
 ];
@@ -136,18 +136,18 @@ function formatTime(mins: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
-const NOW_MINUTES = 10 * 60 + 15;
-const NOW_LABEL = formatTime(NOW_MINUTES);
 
-/** Generate time slots from 06:00 to 22:00 every 30 min */
-function generateTimeSlots(): string[] {
+
+/** Generate time slots from 00:00 to 24:00 with variable interval */
+function generateTimeSlots(intervalMin: number = 30): string[] {
   const slots: string[] = [];
-  for (let m = 6 * 60; m <= 22 * 60; m += 30) slots.push(formatTime(m));
+  for (let m = 0; m < 24 * 60; m += intervalMin) {
+    slots.push(formatTime(m));
+  }
   return slots;
 }
-const TIME_SLOTS = generateTimeSlots();
 
-function calcZoneMetrics(zone: Zone, nowMin: number = NOW_MINUTES) {
+function calcZoneMetrics(zone: Zone, nowMin: number) {
   const { production: p } = zone;
   const filled = zone.slots.filter((s) => s.workerId).length;
   const remaining = Math.max(0, p.planned - p.actual);
@@ -169,7 +169,7 @@ function calcZoneMetrics(zone: Zone, nowMin: number = NOW_MINUTES) {
 }
 
 /** Diff two zone snapshots → list of StaffChange */
-function diffSnapshots(before: Zone[], after: Zone[]): StaffChange[] {
+function diffSnapshots(before: Zone[], after: Zone[], workers: Worker[]): StaffChange[] {
   const changes: StaffChange[] = [];
   const mapBefore = new Map<string, string | null>();
   const mapAfter = new Map<string, string | null>();
@@ -180,7 +180,7 @@ function diffSnapshots(before: Zone[], after: Zone[]): StaffChange[] {
     const from = mapBefore.get(wId) ?? null;
     const to = mapAfter.get(wId) ?? null;
     if (from !== to) {
-      const w = allWorkers.find((w) => w.id === wId);
+      const w = workers.find((w) => w.id === wId);
       const fromName = from ? before.find((z) => z.processId === from)?.name ?? null : null;
       const toName = to ? after.find((z) => z.processId === to)?.name ?? null : null;
       changes.push({ workerId: wId, workerName: w?.name ?? wId, fromZone: fromName, toZone: toName });
@@ -202,6 +202,10 @@ export function LiveCommand() {
     return () => clearInterval(timer);
   }, []);
 
+  const n = new Date();
+  const currentMinutes = n.getHours() * 60 + n.getMinutes();
+  const nowLabel = formatTime(currentMinutes);
+
   const timeStr = now.toLocaleTimeString("ja-JP", {
     hour: "2-digit",
     minute: "2-digit",
@@ -214,19 +218,27 @@ export function LiveCommand() {
     day: "2-digit"
   }).replace(/\//g, "/");
 
+  // --- Timeline config ---
+  const [timelineInterval, setTimelineInterval] = useState<15 | 30 | 60>(30);
+  const timeSlots = useMemo(() => generateTimeSlots(timelineInterval), [timelineInterval]);
+
+  // --- Workers State ---
+  const [workers, setWorkers] = useState<Worker[]>(INITIAL_WORKERS);
+
+
   // --- Area selection ---
   const [areas] = useState<Area[]>(defaultAreas);
   const [selectedAreaId, setSelectedAreaId] = useState<string | "all">("all");
 
   // --- Time Axis ---
-  const [selectedTime, setSelectedTime] = useState(NOW_LABEL);
-  const isCurrentTime = selectedTime === NOW_LABEL;
+  const [selectedTime, setSelectedTime] = useState(nowLabel);
+  const isCurrentTime = selectedTime === nowLabel;
   const selectedMinutes = parseTime(selectedTime);
   const sliderRef = useRef<HTMLDivElement>(null);
 
   // --- Zone snapshots keyed by time ---
   const [snapshotsByTime, setSnapshotsByTime] = useState<Record<string, Zone[]>>(() => ({
-    [NOW_LABEL]: buildInitialZones(),
+    [nowLabel]: buildInitialZones(),
   }));
 
   // Current zones for the selected time
@@ -294,7 +306,7 @@ export function LiveCommand() {
   const isZoneExpanded = (zone: { areaId: string }) => expandedAreas.has(zone.areaId);
   const [showCalculator, setShowCalculator] = useState(false);
   const [calcProcessId, setCalcProcessId] = useState(defaultProcessSteps[0].id);
-  const [calcStartTime, setCalcStartTime] = useState(NOW_LABEL);
+  const [calcStartTime, setCalcStartTime] = useState(nowLabel);
   const [calcEndTime, setCalcEndTime] = useState("18:00");
   const [calcQuantity, setCalcQuantity] = useState("");
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -309,14 +321,16 @@ export function LiveCommand() {
     return ids;
   }, [allZones]);
 
-  const freeWorkers = allWorkers.filter((w) => w.status === "active" && !assignedWorkerIds.has(w.id));
-  const breakWorkers = allWorkers.filter((w) => w.status === "break" || w.status === "absent");
-  const filteredFreeWorkers = freeWorkers.filter((w) => w.name.includes(searchTerm) || w.skills.some((s) => s.label.includes(searchTerm)));
-  const filteredBreakWorkers = breakWorkers.filter((w) => w.name.includes(searchTerm) || w.skills.some((s) => s.label.includes(searchTerm)));
-  const totalActive = allWorkers.filter((w) => w.status === "active").length;
-  const totalAll = allWorkers.length;
-  const totalBreakAbsent = breakWorkers.length;
-  const operationRate = Math.round((totalActive / totalAll) * 100);
+  const freeWorkers = workers.filter((w: Worker) => w.status === "active" && !assignedWorkerIds.has(w.id));
+  const absentWorkers = workers.filter((w: Worker) => w.status === "absent");
+  const filteredFreeWorkers = freeWorkers.filter((w: Worker) => w.name.includes(searchTerm) || w.skills.some((s: any) => s.label.includes(searchTerm)));
+  const filteredAbsentWorkers = absentWorkers.filter((w: Worker) => w.name.includes(searchTerm) || w.skills.some((s: any) => s.label.includes(searchTerm)));
+
+  const totalActive = workers.filter((w: Worker) => w.status === "active" || w.status === "break").length;
+  const totalAll = workers.length;
+  const totalAbsent = workers.filter((w: Worker) => w.status === "absent").length;
+  const totalBreak = workers.filter((w: Worker) => w.status === "break").length;
+  const operationRate = Math.round(((totalActive - totalBreak) / totalAll) * 100);
   const criticalZones = allZones.filter((z) => { const filled = z.slots.filter((s) => s.workerId).length; return filled / z.capacity < 0.25 && z.production.planned > 0; });
 
   // Per-area stats
@@ -330,7 +344,7 @@ export function LiveCommand() {
       for (const z of areaZones) {
         const filled = z.slots.filter((s) => s.workerId).length;
         workers += filled;
-        const m = calcZoneMetrics(z, selectedMinutes);
+        const m = calcZoneMetrics(z, currentMinutes);
         totalProgress += m.progress;
         if (filled / z.capacity < 0.25 && z.production.planned > 0) critical++;
       }
@@ -346,10 +360,10 @@ export function LiveCommand() {
   // Check if current time snapshot differs from the NOW snapshot
   const hasChanges = useMemo(() => {
     if (isCurrentTime) return false;
-    const baseSnapshot = snapshotsByTime[NOW_LABEL];
+    const baseSnapshot = snapshotsByTime[nowLabel]; // Optimized to use nowLabel
     if (!baseSnapshot) return false;
-    return diffSnapshots(baseSnapshot, allZones).length > 0;
-  }, [isCurrentTime, allZones, snapshotsByTime]);
+    return diffSnapshots(baseSnapshot, allZones, workers).length > 0;
+  }, [isCurrentTime, allZones, snapshotsByTime, workers, nowLabel]);
 
   // Calculator result
   const calcResult = useMemo(() => {
@@ -369,14 +383,14 @@ export function LiveCommand() {
 
   // --- Handlers ---
   const addToAdjustmentQueue = () => {
-    const baseSnapshot = snapshotsByTime[NOW_LABEL];
+    const baseSnapshot = snapshotsByTime[nowLabel];
     if (!baseSnapshot) return;
-    const changes = diffSnapshots(baseSnapshot, allZones);
+    const changes = diffSnapshots(baseSnapshot, allZones, workers);
     if (changes.length === 0) { showToast("配置変更がありません"); return; }
     const entry: AdjustmentEntry = {
       id: `adj-${Date.now()}`,
       scheduledTime: selectedTime,
-      createdAt: NOW_LABEL,
+      createdAt: nowLabel,
       changes,
       status: "pending",
       memo: adjMemo || `${selectedTime}の配置変更`,
@@ -440,30 +454,48 @@ export function LiveCommand() {
   const removeWorkerFromSlot = (processId: string, slotIndex: number) => {
     setZones((prev) => prev.map((z) => z.processId === processId ? { ...z, slots: z.slots.map((s, i) => i === slotIndex ? { workerId: null } : s) } : z));
   };
-  const getWorker = (id: string) => allWorkers.find((w) => w.id === id);
+  const getWorker = (id: string) => workers.find((w) => w.id === id);
+
+  const updateWorkerStatus = (workerId: string, newStatus: Worker["status"]) => {
+    setWorkers((prev) => prev.map((w) => w.id === workerId ? { ...w, status: newStatus } : w));
+
+    // If setting to 'absent', automatically remove from any zone slots
+    if (newStatus === "absent") {
+      setZones((prev) => prev.map((z) => ({
+        ...z,
+        slots: z.slots.map((s) => s.workerId === workerId ? { workerId: null } : s)
+      })));
+      showToast(`${getWorker(workerId)?.name}さんが退勤しました（配置から解除）`);
+    } else if (newStatus === "break") {
+      showToast(`${getWorker(workerId)?.name}さんが休憩に入りました`);
+    } else {
+      showToast(`${getWorker(workerId)?.name}さんが復帰しました`);
+    }
+  };
+
   const updateZoneTime = (processId: string, field: "startTime" | "targetEndTime", value: string) => {
     setZones((prev) => prev.map((z) => z.processId === processId ? { ...z, production: { ...z.production, [field]: value } } : z));
   };
 
   // Timeline navigation
   const goToPrevSlot = () => {
-    const idx = TIME_SLOTS.indexOf(selectedTime);
-    if (idx > 0) setSelectedTime(TIME_SLOTS[idx - 1]);
+    const idx = timeSlots.indexOf(selectedTime);
+    if (idx > 0) setSelectedTime(timeSlots[idx - 1]);
   };
   const goToNextSlot = () => {
-    const idx = TIME_SLOTS.indexOf(selectedTime);
-    if (idx < TIME_SLOTS.length - 1) setSelectedTime(TIME_SLOTS[idx + 1]);
+    const idx = timeSlots.indexOf(selectedTime);
+    if (idx < timeSlots.length - 1) setSelectedTime(timeSlots[idx + 1]);
   };
-  const goToNow = () => setSelectedTime(NOW_LABEL);
+  const goToNow = () => setSelectedTime(nowLabel);
 
   // Scroll timeline to keep selection visible
   useEffect(() => {
     if (sliderRef.current) {
-      const idx = TIME_SLOTS.indexOf(selectedTime);
+      const idx = timeSlots.indexOf(selectedTime);
       const btn = sliderRef.current.children[idx] as HTMLElement | undefined;
       if (btn) btn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
     }
-  }, [selectedTime]);
+  }, [selectedTime, timeSlots]);
 
   /* ================================================================ */
   /*  Render                                                           */
@@ -492,7 +524,8 @@ export function LiveCommand() {
         </div>
         <div className={`flex items-center gap-5 border-l ${c.border} pl-5`}>
           <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>出勤</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalActive}<span className={`text-[12px] ${c.textSecondary}`}>/{totalAll}</span></div></div>
-          <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>休憩</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalBreakAbsent}</div></div>
+          <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>休憩</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalBreak}</div></div>
+          <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>未出勤・退勤</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalAbsent}</div></div>
           <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>稼働率</div><div className="text-[17px] text-emerald-500 tabular-nums">{operationRate}%</div></div>
         </div>
         {criticalZones.length > 0 && (
@@ -525,10 +558,10 @@ export function LiveCommand() {
         <button
           onClick={() => setSelectedAreaId("all")}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${selectedAreaId === "all"
-              ? c.isDark
-                ? "bg-blue-500/15 border-blue-500/40 text-blue-300"
-                : "bg-blue-50 border-blue-300 text-blue-700"
-              : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
+            ? c.isDark
+              ? "bg-blue-500/15 border-blue-500/40 text-blue-300"
+              : "bg-blue-50 border-blue-300 text-blue-700"
+            : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
             }`}
         >
           <Layers className="w-3.5 h-3.5" />
@@ -546,8 +579,8 @@ export function LiveCommand() {
               key={area.id}
               onClick={() => setSelectedAreaId(area.id)}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${isActive
-                  ? `${aColors.bg} ${aColors.border} ${aColors.text}`
-                  : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
+                ? `${aColors.bg} ${aColors.border} ${aColors.text}`
+                : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
                 }`}
             >
               <div className={`w-2 h-2 rounded-full ${aColors.bg} border ${aColors.border}`} />
@@ -557,7 +590,7 @@ export function LiveCommand() {
                   <Users className="w-2.5 h-2.5" />{stats?.workers ?? 0}
                 </span>
                 <span className={`text-[10px] tabular-nums ${(stats?.progress ?? 0) >= 70 ? "text-emerald-400"
-                    : (stats?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
+                  : (stats?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
                   }`}>{stats?.progress ?? 0}%</span>
                 {(stats?.critical ?? 0) > 0 && (
                   <AlertTriangle className="w-3 h-3 text-amber-400" />
@@ -571,17 +604,33 @@ export function LiveCommand() {
       {/* ══════════ Time Axis ══════════ */}
       <div className={`${c.bgCard} border-b ${c.border} px-3 py-2`}>
         <div className="flex items-center gap-2">
+          {/* Interval Selector */}
+          <div className={`flex items-center gap-1 p-1 rounded-lg ${c.bgSurface} border ${c.borderCard} mr-2 shrink-0`}>
+            {[15, 30, 60].map((v) => (
+              <button
+                key={v}
+                onClick={() => setTimelineInterval(v as any)}
+                className={`px-2 py-0.5 rounded text-[10px] transition-all ${timelineInterval === v
+                  ? "bg-blue-600 text-white"
+                  : `${c.textMuted} hover:${c.textPrimary}`
+                  }`}
+              >
+                {v === 60 ? "1h" : `${v}m`}
+              </button>
+            ))}
+          </div>
+
           <button onClick={goToPrevSlot} className={`${c.textMuted} hover:${c.textPrimary} p-1 rounded transition-colors`}><ChevronLeft className="w-4 h-4" /></button>
 
           {/* Timeline slider */}
           <div className="flex-1 relative overflow-hidden">
             <div ref={sliderRef} className="flex items-center gap-0 overflow-x-auto scrollbar-hide" style={{ scrollbarWidth: "none" }}>
-              {TIME_SLOTS.map((t) => {
+              {timeSlots.map((t) => {
                 const mins = parseTime(t);
-                const isNow = t === NOW_LABEL;
+                const isNow = t === nowLabel;
                 const isSelected = t === selectedTime;
-                const isPast = mins < NOW_MINUTES;
-                const hasSnapshot = !!snapshotsByTime[t] && t !== NOW_LABEL;
+                const isPast = mins < currentMinutes;
+                const hasSnapshot = !!snapshotsByTime[t] && t !== nowLabel;
                 const hasAdj = adjustments.some((a) => a.scheduledTime === t);
                 const isHour = mins % 60 === 0;
 
@@ -590,14 +639,14 @@ export function LiveCommand() {
                     key={t}
                     onClick={() => setSelectedTime(t)}
                     className={`relative flex flex-col items-center shrink-0 transition-all ${isHour ? "min-w-[48px]" : "min-w-[36px]"} py-1 rounded-lg ${isSelected
-                        ? c.isDark ? "bg-blue-500/20 ring-1 ring-blue-500/50" : "bg-blue-50 ring-1 ring-blue-300"
-                        : "hover:bg-white/5"
+                      ? c.isDark ? "bg-blue-500/20 ring-1 ring-blue-500/50" : "bg-blue-50 ring-1 ring-blue-300"
+                      : "hover:bg-white/5"
                       }`}
                   >
                     <span className={`text-[10px] tabular-nums ${isSelected ? (c.isDark ? "text-blue-300" : "text-blue-600")
-                        : isNow ? "text-emerald-400"
-                          : isPast ? c.textDimmed
-                            : c.textMuted
+                      : isNow ? "text-emerald-400"
+                        : isPast ? (c.isDark ? "text-gray-500" : "text-gray-400")
+                          : (c.isDark ? "text-blue-400" : "text-blue-500")
                       } ${!isHour ? "text-[9px]" : ""}`}>{t}</span>
 
                     <div className="relative mt-1">
@@ -608,7 +657,10 @@ export function LiveCommand() {
                       ) : hasSnapshot || hasAdj ? (
                         <div className={`w-2 h-2 rounded-full ${hasAdj ? "bg-orange-400" : "bg-cyan-400"}`} />
                       ) : (
-                        <div className={`w-1.5 h-1.5 rounded-full ${isPast ? (c.isDark ? "bg-gray-700" : "bg-gray-300") : (c.isDark ? "bg-gray-600" : "bg-gray-300")}`} />
+                        <div className={`w-1.5 h-1.5 rounded-full ${isPast
+                          ? (c.isDark ? "bg-gray-700" : "bg-gray-300")
+                          : (c.isDark ? "bg-blue-500/40" : "bg-blue-200")
+                          }`} />
                       )}
                     </div>
 
@@ -637,11 +689,11 @@ export function LiveCommand() {
               {isCurrentTime ? "▶ 現在の配置" : `⏱ ${selectedTime} の配置計画`}
             </span>
             {!isCurrentTime && (
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${selectedMinutes > NOW_MINUTES
-                  ? c.isDark ? "bg-blue-500/10 text-blue-400 border border-blue-500/30" : "bg-blue-50 text-blue-600 border border-blue-200"
-                  : c.isDark ? "bg-gray-700 text-gray-400" : "bg-gray-100 text-gray-500"
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${selectedMinutes > currentMinutes
+                ? c.isDark ? "bg-blue-500/10 text-blue-400 border border-blue-500/30" : "bg-blue-50 text-blue-600 border border-blue-200"
+                : c.isDark ? "bg-gray-700 text-gray-400" : "bg-gray-100 text-gray-500"
                 }`}>
-                {selectedMinutes > NOW_MINUTES ? `${Math.round((selectedMinutes - NOW_MINUTES) / 60 * 10) / 10}時間後` : "過去"}
+                {selectedMinutes > currentMinutes ? `${Math.round((selectedMinutes - currentMinutes) / 60 * 10) / 10}時間後` : "過去"}
               </span>
             )}
           </div>
@@ -722,13 +774,13 @@ export function LiveCommand() {
                         <Users className="w-2.5 h-2.5" />{areaStats[area.id]?.workers ?? 0}名
                       </span>
                       <span className={`text-[10px] tabular-nums ${(areaStats[area.id]?.progress ?? 0) >= 70 ? "text-emerald-400"
-                          : (areaStats[area.id]?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
+                        : (areaStats[area.id]?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
                         }`}>{areaStats[area.id]?.progress ?? 0}%</span>
                       <button
                         onClick={() => toggleAreaExpand(area.id)}
                         className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] transition-all ${expandedAreas.has(area.id)
-                            ? `${aColors.bg} ${aColors.border} border ${aColors.text}`
-                            : `${c.bgSurface} border ${c.borderCard} ${c.textMuted}`
+                          ? `${aColors.bg} ${aColors.border} border ${aColors.text}`
+                          : `${c.bgSurface} border ${c.borderCard} ${c.textMuted}`
                           }`}
                       >
                         {expandedAreas.has(area.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -741,7 +793,7 @@ export function LiveCommand() {
                     <span className={`text-[10px] ${c.textMuted} mr-1 shrink-0`}>フロー:</span>
                     {areaZones.map((zone, idx) => {
                       const colors = processColorClasses[zone.color];
-                      const m = calcZoneMetrics(zone, selectedMinutes);
+                      const m = calcZoneMetrics(zone, currentMinutes);
                       return (
                         <div key={zone.processId} className="flex items-center gap-1 shrink-0">
                           <button onClick={() => toggleAreaExpand(zone.areaId)}
@@ -776,8 +828,8 @@ export function LiveCommand() {
                     <button
                       onClick={() => toggleAreaExpand(aId)}
                       className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all shrink-0 mr-1 border ${expandedAreas.has(aId)
-                          ? `${areaC.bg} ${areaC.border} ${areaC.text}`
-                          : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
+                        ? `${areaC.bg} ${areaC.border} ${areaC.text}`
+                        : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
                         }`}
                     >
                       {expandedAreas.has(aId) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -852,14 +904,14 @@ export function LiveCommand() {
                     <span className={`text-[10px] ${c.textSecondary} ${c.bgSurface} px-1.5 py-0.5 rounded-full`}>{filteredFreeWorkers.length}</span>
                   </div>
                   <div className="space-y-1">
-                    {filteredFreeWorkers.map((worker) => (
+                    {filteredFreeWorkers.map((worker: Worker) => (
                       <div key={worker.id} draggable onDragStart={() => handleDragStartFromPool(worker.id)} onDragEnd={handleDragEnd}
                         className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${c.border} ${c.bgCard} cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow`}>
                         <div className={`w-7 h-7 rounded-full ${worker.color} text-white flex items-center justify-center text-[11px] shrink-0`}>{worker.initials}</div>
                         <div className="flex-1 min-w-0">
                           <div className={`text-[11px] ${c.textPrimary} truncate`}>{worker.name}</div>
                           <div className="flex items-center gap-0.5 mt-0.5">
-                            {worker.skills.map((skill) => (
+                            {worker.skills.map((skill: any) => (
                               <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${skill.label === "New" ? "bg-green-100 text-green-600" : skill.label === "FL" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
                                 }`}>{skill.icon}{skill.label}</span>
                             ))}
@@ -873,24 +925,32 @@ export function LiveCommand() {
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className={`text-[11px] ${c.textMuted}`}>休憩・離席</span>
-                    <span className={`text-[10px] ${c.textSecondary} ${c.bgSurface} px-1.5 py-0.5 rounded-full`}>{filteredBreakWorkers.length}</span>
+                    <span className={`text-[11px] ${c.textMuted}`}>未出勤・退勤</span>
+                    <span className={`text-[10px] ${c.textSecondary} ${c.bgSurface} px-1.5 py-0.5 rounded-full`}>{filteredAbsentWorkers.length}</span>
                   </div>
                   <div className="space-y-1">
-                    {filteredBreakWorkers.map((worker) => (
-                      <div key={worker.id} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${c.border} ${c.bgSurface} opacity-60`}>
-                        <div className={`w-7 h-7 rounded-full ${worker.color} text-white flex items-center justify-center text-[11px] shrink-0`}>{worker.initials}</div>
+                    {filteredAbsentWorkers.map((worker: Worker) => (
+                      <div key={worker.id} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${c.border} ${c.bgSurface} group`}>
+                        <div className={`w-7 h-7 rounded-full ${worker.color} text-white flex items-center justify-center text-[11px] shrink-0 opacity-60`}>{worker.initials}</div>
                         <div className="flex-1 min-w-0">
                           <div className={`text-[11px] ${c.textSecondary} truncate`}>{worker.name}</div>
                           <div className="flex items-center gap-0.5 mt-0.5">
-                            {worker.skills.map((skill) => (
+                            {worker.skills.map((skill: any) => (
                               <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${c.bgSurface} ${c.textMuted}`}>{skill.icon}{skill.label}</span>
                             ))}
                           </div>
                         </div>
-                        <div className="w-2 h-2 rounded-full bg-gray-400 shrink-0" />
+                        <button
+                          onClick={() => updateWorkerStatus(worker.id, "active")}
+                          className="opacity-0 group-hover:opacity-100 bg-blue-600 text-white p-1 rounded transition-opacity"
+                          title="出勤に復帰"
+                        >
+                          <Zap className="w-3 h-3" />
+                        </button>
+                        <div className="w-2 h-2 rounded-full bg-gray-600 shrink-0" />
                       </div>
                     ))}
+                    {filteredAbsentWorkers.length === 0 && <p className={`text-[11px] ${c.textSecondary} text-center py-2`}>該当なし</p>}
                   </div>
                 </div>
               </div>
@@ -922,22 +982,22 @@ export function LiveCommand() {
                 {adjustments
                   .sort((a, b) => parseTime(a.scheduledTime) - parseTime(b.scheduledTime))
                   .map((adj) => {
-                    const isPast = parseTime(adj.scheduledTime) <= NOW_MINUTES;
+                    const isPast = parseTime(adj.scheduledTime) <= currentMinutes;
                     return (
                       <div key={adj.id} className={`rounded-xl border ${c.border} overflow-hidden ${adj.status === "applied" ? "opacity-50" : ""
                         }`}>
                         {/* Entry Header */}
                         <div className={`px-3 py-2 flex items-center justify-between ${adj.status === "pending"
-                            ? c.isDark ? "bg-orange-500/10" : "bg-orange-50"
-                            : adj.status === "notified"
-                              ? c.isDark ? "bg-blue-500/10" : "bg-blue-50"
-                              : c.isDark ? "bg-emerald-500/10" : "bg-emerald-50"
+                          ? c.isDark ? "bg-orange-500/10" : "bg-orange-50"
+                          : adj.status === "notified"
+                            ? c.isDark ? "bg-blue-500/10" : "bg-blue-50"
+                            : c.isDark ? "bg-emerald-500/10" : "bg-emerald-50"
                           }`}>
                           <div className="flex items-center gap-2">
                             <span className={`text-[14px] tabular-nums ${c.textPrimary}`}>{adj.scheduledTime}</span>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${adj.status === "pending" ? "bg-orange-500/20 text-orange-400"
-                                : adj.status === "notified" ? "bg-blue-500/20 text-blue-400"
-                                  : "bg-emerald-500/20 text-emerald-400"
+                              : adj.status === "notified" ? "bg-blue-500/20 text-blue-400"
+                                : "bg-emerald-500/20 text-emerald-400"
                               }`}>
                               {adj.status === "pending" ? "未送信" : adj.status === "notified" ? "通知済" : "適用済"}
                             </span>
@@ -1101,8 +1161,8 @@ export function LiveCommand() {
               </div>
             </div>
             <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] ${metrics.recommendedWorkers > metrics.filled
-                ? c.isDark ? "bg-red-500/10 text-red-400 border border-red-500/30" : "bg-red-50 text-red-600 border border-red-200"
-                : c.isDark ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30" : "bg-emerald-50 text-emerald-600 border border-emerald-200"
+              ? c.isDark ? "bg-red-500/10 text-red-400 border border-red-500/30" : "bg-red-50 text-red-600 border border-red-200"
+              : c.isDark ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30" : "bg-emerald-50 text-emerald-600 border border-emerald-200"
               }`}>
               <Zap className="w-2.5 h-2.5" />推薦{metrics.recommendedWorkers}名
               {metrics.recommendedWorkers > metrics.filled && <span className="text-[9px]">(+{metrics.recommendedWorkers - metrics.filled})</span>}
@@ -1117,24 +1177,48 @@ export function LiveCommand() {
               {zone.slots.map((slot, slotIdx) => {
                 const worker = slot.workerId ? getWorker(slot.workerId) : null;
                 if (worker) {
+                  const isBreak = worker.status === "break";
                   return (
-                    <div key={slotIdx} draggable onDragStart={() => handleDragStartFromSlot(worker.id, zone.processId, slotIdx)} onDragEnd={handleDragEnd}
-                      className={`relative group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${c.border} ${c.bgCard} cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow`}>
-                      <div className={`w-7 h-7 rounded-full ${worker.color} text-white flex items-center justify-center text-[11px] shrink-0`}>{worker.initials}</div>
+                    <div key={slotIdx} draggable={!isBreak} onDragStart={() => handleDragStartFromSlot(worker.id, zone.processId, slotIdx)} onDragEnd={handleDragEnd}
+                      className={`relative group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${c.border} ${c.bgCard} ${isBreak ? "opacity-75" : "cursor-grab active:cursor-grabbing hover:shadow-md"} transition-all`}>
+                      <div className={`w-7 h-7 rounded-full ${isBreak ? "bg-gray-400" : worker.color} text-white flex items-center justify-center text-[11px] shrink-0 transition-colors`}>
+                        {isBreak ? "☕" : worker.initials}
+                      </div>
                       <div className="min-w-0 flex-1">
-                        <div className={`text-[11px] ${c.textPrimary} truncate`}>{worker.name}</div>
+                        <div className={`text-[11px] ${isBreak ? c.textMuted : c.textPrimary} truncate flex items-center gap-1`}>
+                          {worker.name}
+                          {isBreak && <span className="text-[9px] px-1 rounded bg-gray-700 text-gray-400">休憩</span>}
+                        </div>
                         <div className="flex items-center gap-0.5 mt-0.5">
                           {worker.skills.slice(0, 2).map((skill) => (
-                            <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${skill.label === "New" ? "bg-green-100 text-green-600" : skill.label === "FL" || skill.label === "L" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
+                            <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${isBreak ? "bg-gray-800 text-gray-500" :
+                              skill.label === "New" ? "bg-green-100 text-green-600" :
+                                skill.label === "FL" || skill.label === "L" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
                               }`}>{skill.icon}{skill.label}</span>
                           ))}
                         </div>
                       </div>
-                      <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
-                      <button onClick={(e) => { e.stopPropagation(); removeWorkerFromSlot(zone.processId, slotIdx); }}
-                        className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <X className="w-2.5 h-2.5" />
-                      </button>
+
+                      {/* Status quick actions on hover */}
+                      <div className="absolute inset-0 bg-gray-900/80 rounded-lg flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                        {isBreak ? (
+                          <button onClick={() => updateWorkerStatus(worker.id, "active")} className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-500" title="仕事に復帰">
+                            <Zap className="w-3.5 h-3.5" />
+                          </button>
+                        ) : (
+                          <button onClick={() => updateWorkerStatus(worker.id, "break")} className="p-1 rounded bg-amber-600 text-white hover:bg-amber-500" title="休憩・離席">
+                            <Timer className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button onClick={() => updateWorkerStatus(worker.id, "absent")} className="p-1 rounded bg-rose-600 text-white hover:bg-rose-500" title="退勤（配置解除）">
+                          <SkipForward className="w-3.5 h-3.5" />
+                        </button>
+                        <button onClick={() => removeWorkerFromSlot(zone.processId, slotIdx)} className="p-1 rounded bg-gray-700 text-white hover:bg-gray-600" title="解除してプールへ">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+
+                      <div className={`w-2 h-2 rounded-full ${isBreak ? "bg-gray-500" : "bg-emerald-400"} shrink-0`} />
                     </div>
                   );
                 }
