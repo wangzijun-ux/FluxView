@@ -91,16 +91,16 @@ interface AdjustmentEntry {
 /* ------------------------------------------------------------------ */
 
 const allWorkers: Worker[] = [
-  { id: "w1",  name: "田中 太郎",   initials: "田", color: "bg-blue-500",    skills: [{ label: "L", icon: "✅" }, { label: "FL", icon: "🔑" }], status: "active" },
-  { id: "w2",  name: "渡辺 謙",     initials: "渡", color: "bg-emerald-500", skills: [{ label: "検品", icon: "🔍" }],  status: "active" },
-  { id: "w3",  name: "佐藤 花子",   initials: "佐", color: "bg-violet-500",  skills: [{ label: "検品", icon: "🔍" }, { label: "品質", icon: "○" }], status: "active" },
-  { id: "w4",  name: "高橋 優子",   initials: "高", color: "bg-amber-500",   skills: [{ label: "加工", icon: "✂" }, { label: "ラベル", icon: "🏷" }], status: "active" },
-  { id: "w5",  name: "伊藤 健",     initials: "伊", color: "bg-rose-400",    skills: [{ label: "梱包", icon: "📦" }], status: "active" },
-  { id: "w6",  name: "鈴木 一郎",   initials: "鈴", color: "bg-orange-500",  skills: [{ label: "FL", icon: "🔑" }, { label: "出荷", icon: "🚛" }], status: "active" },
-  { id: "w7",  name: "小林 さくら", initials: "小", color: "bg-pink-400",    skills: [{ label: "New", icon: "🌱" }], status: "active" },
-  { id: "w8",  name: "中村 敏",     initials: "中", color: "bg-gray-400",    skills: [{ label: "FL", icon: "🔑" }],  status: "break" },
-  { id: "w9",  name: "山田 裕子",   initials: "山", color: "bg-teal-500",    skills: [{ label: "仕分", icon: "📋" }], status: "active" },
-  { id: "w10", name: "松本 翔",     initials: "松", color: "bg-indigo-500",  skills: [{ label: "仕分", icon: "📋" }, { label: "FL", icon: "🔑" }], status: "active" },
+  { id: "w1", name: "田中 太郎", initials: "田", color: "bg-blue-500", skills: [{ label: "L", icon: "✅" }, { label: "FL", icon: "🔑" }], status: "active" },
+  { id: "w2", name: "渡辺 謙", initials: "渡", color: "bg-emerald-500", skills: [{ label: "検品", icon: "🔍" }], status: "active" },
+  { id: "w3", name: "佐藤 花子", initials: "佐", color: "bg-violet-500", skills: [{ label: "検品", icon: "🔍" }, { label: "品質", icon: "○" }], status: "active" },
+  { id: "w4", name: "高橋 優子", initials: "高", color: "bg-amber-500", skills: [{ label: "加工", icon: "✂" }, { label: "ラベル", icon: "🏷" }], status: "active" },
+  { id: "w5", name: "伊藤 健", initials: "伊", color: "bg-rose-400", skills: [{ label: "梱包", icon: "📦" }], status: "active" },
+  { id: "w6", name: "鈴木 一郎", initials: "鈴", color: "bg-orange-500", skills: [{ label: "FL", icon: "🔑" }, { label: "出荷", icon: "🚛" }], status: "active" },
+  { id: "w7", name: "小林 さくら", initials: "小", color: "bg-pink-400", skills: [{ label: "New", icon: "🌱" }], status: "active" },
+  { id: "w8", name: "中村 敏", initials: "中", color: "bg-gray-400", skills: [{ label: "FL", icon: "🔑" }], status: "break" },
+  { id: "w9", name: "山田 裕子", initials: "山", color: "bg-teal-500", skills: [{ label: "仕分", icon: "📋" }], status: "active" },
+  { id: "w10", name: "松本 翔", initials: "松", color: "bg-indigo-500", skills: [{ label: "仕分", icon: "📋" }, { label: "FL", icon: "🔑" }], status: "active" },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -172,17 +172,17 @@ function calcZoneMetrics(zone: Zone, nowMin: number = NOW_MINUTES) {
 function diffSnapshots(before: Zone[], after: Zone[]): StaffChange[] {
   const changes: StaffChange[] = [];
   const mapBefore = new Map<string, string | null>();
-  const mapAfter  = new Map<string, string | null>();
+  const mapAfter = new Map<string, string | null>();
   for (const z of before) for (const s of z.slots) if (s.workerId) mapBefore.set(s.workerId, z.processId);
-  for (const z of after)  for (const s of z.slots) if (s.workerId) mapAfter.set(s.workerId, z.processId);
+  for (const z of after) for (const s of z.slots) if (s.workerId) mapAfter.set(s.workerId, z.processId);
   const allIds = new Set([...mapBefore.keys(), ...mapAfter.keys()]);
   for (const wId of allIds) {
     const from = mapBefore.get(wId) ?? null;
-    const to   = mapAfter.get(wId)  ?? null;
+    const to = mapAfter.get(wId) ?? null;
     if (from !== to) {
       const w = allWorkers.find((w) => w.id === wId);
       const fromName = from ? before.find((z) => z.processId === from)?.name ?? null : null;
-      const toName   = to   ? after.find((z) => z.processId === to)?.name   ?? null : null;
+      const toName = to ? after.find((z) => z.processId === to)?.name ?? null : null;
       changes.push({ workerId: wId, workerName: w?.name ?? wId, fromZone: fromName, toZone: toName });
     }
   }
@@ -195,6 +195,24 @@ function diffSnapshots(before: Zone[], after: Zone[]): StaffChange[] {
 
 export function LiveCommand() {
   const c = useThemeColors();
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const timeStr = now.toLocaleTimeString("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+  const dateStr = now.toLocaleDateString("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).replace(/\//g, "/");
 
   // --- Area selection ---
   const [areas] = useState<Area[]>(defaultAreas);
@@ -457,9 +475,8 @@ export function LiveCommand() {
       {/* ── Toast ── */}
       {toastMsg && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-[fadeIn_0.2s_ease]">
-          <div className={`flex items-center gap-2 px-5 py-3 rounded-xl shadow-lg ${
-            c.isDark ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-300" : "bg-emerald-50 border border-emerald-200 text-emerald-700"
-          }`}>
+          <div className={`flex items-center gap-2 px-5 py-3 rounded-xl shadow-lg ${c.isDark ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-300" : "bg-emerald-50 border border-emerald-200 text-emerald-700"
+            }`}>
             <Check className="w-4 h-4" />
             <span className="text-[13px]">{toastMsg}</span>
           </div>
@@ -470,8 +487,8 @@ export function LiveCommand() {
       <div className={`${c.bgCard} border-b ${c.border} px-5 py-2.5 flex items-center gap-5`}>
         <div className="flex items-center gap-2">
           <Clock className={`w-5 h-5 ${c.textMuted}`} />
-          <span className={`text-[26px] ${c.textPrimary} tracking-tight tabular-nums`}>10:15</span>
-          <span className={`text-[13px] ${c.textSecondary} ml-1`}>2026/3/4</span>
+          <span className={`text-[26px] ${c.textPrimary} tracking-tight tabular-nums`}>{timeStr}</span>
+          <span className={`text-[13px] ${c.textSecondary} ml-1`}>{dateStr}</span>
         </div>
         <div className={`flex items-center gap-5 border-l ${c.border} pl-5`}>
           <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>出勤</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalActive}<span className={`text-[12px] ${c.textSecondary}`}>/{totalAll}</span></div></div>
@@ -507,13 +524,12 @@ export function LiveCommand() {
         <MapPin className={`w-4 h-4 ${c.textMuted} shrink-0`} />
         <button
           onClick={() => setSelectedAreaId("all")}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${
-            selectedAreaId === "all"
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${selectedAreaId === "all"
               ? c.isDark
                 ? "bg-blue-500/15 border-blue-500/40 text-blue-300"
                 : "bg-blue-50 border-blue-300 text-blue-700"
               : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
-          }`}
+            }`}
         >
           <Layers className="w-3.5 h-3.5" />
           全エリア
@@ -529,11 +545,10 @@ export function LiveCommand() {
             <button
               key={area.id}
               onClick={() => setSelectedAreaId(area.id)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${
-                isActive
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${isActive
                   ? `${aColors.bg} ${aColors.border} ${aColors.text}`
                   : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
-              }`}
+                }`}
             >
               <div className={`w-2 h-2 rounded-full ${aColors.bg} border ${aColors.border}`} />
               <span className="max-w-[120px] truncate">{area.name}</span>
@@ -541,10 +556,9 @@ export function LiveCommand() {
                 <span className={`text-[10px] ${c.textMuted} flex items-center gap-0.5`}>
                   <Users className="w-2.5 h-2.5" />{stats?.workers ?? 0}
                 </span>
-                <span className={`text-[10px] tabular-nums ${
-                  (stats?.progress ?? 0) >= 70 ? "text-emerald-400"
+                <span className={`text-[10px] tabular-nums ${(stats?.progress ?? 0) >= 70 ? "text-emerald-400"
                     : (stats?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
-                }`}>{stats?.progress ?? 0}%</span>
+                  }`}>{stats?.progress ?? 0}%</span>
                 {(stats?.critical ?? 0) > 0 && (
                   <AlertTriangle className="w-3 h-3 text-amber-400" />
                 )}
@@ -575,18 +589,16 @@ export function LiveCommand() {
                   <button
                     key={t}
                     onClick={() => setSelectedTime(t)}
-                    className={`relative flex flex-col items-center shrink-0 transition-all ${isHour ? "min-w-[48px]" : "min-w-[36px]"} py-1 rounded-lg ${
-                      isSelected
+                    className={`relative flex flex-col items-center shrink-0 transition-all ${isHour ? "min-w-[48px]" : "min-w-[36px]"} py-1 rounded-lg ${isSelected
                         ? c.isDark ? "bg-blue-500/20 ring-1 ring-blue-500/50" : "bg-blue-50 ring-1 ring-blue-300"
                         : "hover:bg-white/5"
-                    }`}
+                      }`}
                   >
-                    <span className={`text-[10px] tabular-nums ${
-                      isSelected ? (c.isDark ? "text-blue-300" : "text-blue-600")
+                    <span className={`text-[10px] tabular-nums ${isSelected ? (c.isDark ? "text-blue-300" : "text-blue-600")
                         : isNow ? "text-emerald-400"
-                        : isPast ? c.textDimmed
-                        : c.textMuted
-                    } ${!isHour ? "text-[9px]" : ""}`}>{t}</span>
+                          : isPast ? c.textDimmed
+                            : c.textMuted
+                      } ${!isHour ? "text-[9px]" : ""}`}>{t}</span>
 
                     <div className="relative mt-1">
                       {isNow ? (
@@ -625,11 +637,10 @@ export function LiveCommand() {
               {isCurrentTime ? "▶ 現在の配置" : `⏱ ${selectedTime} の配置計画`}
             </span>
             {!isCurrentTime && (
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${
-                selectedMinutes > NOW_MINUTES
+              <span className={`text-[11px] px-2 py-0.5 rounded-full ${selectedMinutes > NOW_MINUTES
                   ? c.isDark ? "bg-blue-500/10 text-blue-400 border border-blue-500/30" : "bg-blue-50 text-blue-600 border border-blue-200"
                   : c.isDark ? "bg-gray-700 text-gray-400" : "bg-gray-100 text-gray-500"
-              }`}>
+                }`}>
                 {selectedMinutes > NOW_MINUTES ? `${Math.round((selectedMinutes - NOW_MINUTES) / 60 * 10) / 10}時間後` : "過去"}
               </span>
             )}
@@ -710,17 +721,15 @@ export function LiveCommand() {
                       <span className={`text-[10px] ${c.textMuted} flex items-center gap-0.5`}>
                         <Users className="w-2.5 h-2.5" />{areaStats[area.id]?.workers ?? 0}名
                       </span>
-                      <span className={`text-[10px] tabular-nums ${
-                        (areaStats[area.id]?.progress ?? 0) >= 70 ? "text-emerald-400"
+                      <span className={`text-[10px] tabular-nums ${(areaStats[area.id]?.progress ?? 0) >= 70 ? "text-emerald-400"
                           : (areaStats[area.id]?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
-                      }`}>{areaStats[area.id]?.progress ?? 0}%</span>
+                        }`}>{areaStats[area.id]?.progress ?? 0}%</span>
                       <button
                         onClick={() => toggleAreaExpand(area.id)}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] transition-all ${
-                          expandedAreas.has(area.id)
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] transition-all ${expandedAreas.has(area.id)
                             ? `${aColors.bg} ${aColors.border} border ${aColors.text}`
                             : `${c.bgSurface} border ${c.borderCard} ${c.textMuted}`
-                        }`}
+                          }`}
                       >
                         {expandedAreas.has(area.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                         {expandedAreas.has(area.id) ? "閉じる" : "展開"}
@@ -736,9 +745,8 @@ export function LiveCommand() {
                       return (
                         <div key={zone.processId} className="flex items-center gap-1 shrink-0">
                           <button onClick={() => toggleAreaExpand(zone.areaId)}
-                            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all ${
-                              isZoneExpanded(zone) ? `${colors.bg} ${colors.border} border` : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`
-                            }`}>
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all ${isZoneExpanded(zone) ? `${colors.bg} ${colors.border} border` : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`
+                              }`}>
                             <zone.icon className={`w-3 h-3 ${colors.text}`} />
                             <span className={isZoneExpanded(zone) ? colors.text : c.textSecondary}>{zone.name}</span>
                             <span className={`tabular-nums ${m.progress >= 80 ? "text-emerald-400" : m.progress >= 40 ? "text-amber-400" : "text-red-400"}`}>{m.progress}%</span>
@@ -767,11 +775,10 @@ export function LiveCommand() {
                   return (
                     <button
                       onClick={() => toggleAreaExpand(aId)}
-                      className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all shrink-0 mr-1 border ${
-                        expandedAreas.has(aId)
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all shrink-0 mr-1 border ${expandedAreas.has(aId)
                           ? `${areaC.bg} ${areaC.border} ${areaC.text}`
                           : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
-                      }`}
+                        }`}
                     >
                       {expandedAreas.has(aId) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                       {expandedAreas.has(aId) ? "全閉じ" : "全展開"}
@@ -784,9 +791,8 @@ export function LiveCommand() {
                   return (
                     <div key={zone.processId} className="flex items-center gap-1 shrink-0">
                       <button onClick={() => toggleAreaExpand(zone.areaId)}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all ${
-                          isZoneExpanded(zone) ? `${colors.bg} ${colors.border} border` : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`
-                        }`}>
+                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all ${isZoneExpanded(zone) ? `${colors.bg} ${colors.border} border` : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`
+                          }`}>
                         <zone.icon className={`w-3 h-3 ${colors.text}`} />
                         <span className={isZoneExpanded(zone) ? colors.text : c.textSecondary}>{zone.name}</span>
                         <span className={`tabular-nums ${m.progress >= 80 ? "text-emerald-400" : m.progress >= 40 ? "text-amber-400" : "text-red-400"}`}>{m.progress}%</span>
@@ -812,17 +818,15 @@ export function LiveCommand() {
           <div className={`flex border-b ${c.border}`}>
             <button
               onClick={() => setShowAdjPanel(false)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] transition-all ${
-                !showAdjPanel ? `${c.textPrimary} border-b-2 border-blue-500` : `${c.textMuted}`
-              }`}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] transition-all ${!showAdjPanel ? `${c.textPrimary} border-b-2 border-blue-500` : `${c.textMuted}`
+                }`}
             >
               <Users className="w-3.5 h-3.5" />スタッフ
             </button>
             <button
               onClick={() => setShowAdjPanel(true)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] transition-all relative ${
-                showAdjPanel ? `${c.textPrimary} border-b-2 border-orange-500` : `${c.textMuted}`
-              }`}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] transition-all relative ${showAdjPanel ? `${c.textPrimary} border-b-2 border-orange-500` : `${c.textMuted}`
+                }`}
             >
               <ListChecks className="w-3.5 h-3.5" />調整リスト
               {pendingCount > 0 && (
@@ -856,9 +860,8 @@ export function LiveCommand() {
                           <div className={`text-[11px] ${c.textPrimary} truncate`}>{worker.name}</div>
                           <div className="flex items-center gap-0.5 mt-0.5">
                             {worker.skills.map((skill) => (
-                              <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${
-                                skill.label === "New" ? "bg-green-100 text-green-600" : skill.label === "FL" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
-                              }`}>{skill.icon}{skill.label}</span>
+                              <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${skill.label === "New" ? "bg-green-100 text-green-600" : skill.label === "FL" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
+                                }`}>{skill.icon}{skill.label}</span>
                             ))}
                           </div>
                         </div>
@@ -921,24 +924,21 @@ export function LiveCommand() {
                   .map((adj) => {
                     const isPast = parseTime(adj.scheduledTime) <= NOW_MINUTES;
                     return (
-                      <div key={adj.id} className={`rounded-xl border ${c.border} overflow-hidden ${
-                        adj.status === "applied" ? "opacity-50" : ""
-                      }`}>
+                      <div key={adj.id} className={`rounded-xl border ${c.border} overflow-hidden ${adj.status === "applied" ? "opacity-50" : ""
+                        }`}>
                         {/* Entry Header */}
-                        <div className={`px-3 py-2 flex items-center justify-between ${
-                          adj.status === "pending"
+                        <div className={`px-3 py-2 flex items-center justify-between ${adj.status === "pending"
                             ? c.isDark ? "bg-orange-500/10" : "bg-orange-50"
                             : adj.status === "notified"
-                            ? c.isDark ? "bg-blue-500/10" : "bg-blue-50"
-                            : c.isDark ? "bg-emerald-500/10" : "bg-emerald-50"
-                        }`}>
+                              ? c.isDark ? "bg-blue-500/10" : "bg-blue-50"
+                              : c.isDark ? "bg-emerald-500/10" : "bg-emerald-50"
+                          }`}>
                           <div className="flex items-center gap-2">
                             <span className={`text-[14px] tabular-nums ${c.textPrimary}`}>{adj.scheduledTime}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                              adj.status === "pending" ? "bg-orange-500/20 text-orange-400"
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${adj.status === "pending" ? "bg-orange-500/20 text-orange-400"
                                 : adj.status === "notified" ? "bg-blue-500/20 text-blue-400"
-                                : "bg-emerald-500/20 text-emerald-400"
-                            }`}>
+                                  : "bg-emerald-500/20 text-emerald-400"
+                              }`}>
                               {adj.status === "pending" ? "未送信" : adj.status === "notified" ? "通知済" : "適用済"}
                             </span>
                           </div>
@@ -1046,9 +1046,8 @@ export function LiveCommand() {
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              <span className={`text-[11px] flex items-center gap-0.5 ${
-                metrics.filled === 0 && zone.production.planned > 0 ? "text-red-400" : metrics.filled < zone.capacity / 2 ? "text-amber-400" : c.textMuted
-              }`}>
+              <span className={`text-[11px] flex items-center gap-0.5 ${metrics.filled === 0 && zone.production.planned > 0 ? "text-red-400" : metrics.filled < zone.capacity / 2 ? "text-amber-400" : c.textMuted
+                }`}>
                 {metrics.filled === 0 && zone.production.planned > 0 && <AlertTriangle className="w-3 h-3" />}
                 <Users className="w-3 h-3" />{metrics.filled}/{zone.capacity}
               </span>
@@ -1101,11 +1100,10 @@ export function LiveCommand() {
                   className={`${c.bgSurface} border ${c.borderCard} rounded px-1 py-0.5 text-[10px] ${c.textPrimary} outline-none w-[64px] tabular-nums`} />
               </div>
             </div>
-            <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] ${
-              metrics.recommendedWorkers > metrics.filled
+            <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] ${metrics.recommendedWorkers > metrics.filled
                 ? c.isDark ? "bg-red-500/10 text-red-400 border border-red-500/30" : "bg-red-50 text-red-600 border border-red-200"
                 : c.isDark ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30" : "bg-emerald-50 text-emerald-600 border border-emerald-200"
-            }`}>
+              }`}>
               <Zap className="w-2.5 h-2.5" />推薦{metrics.recommendedWorkers}名
               {metrics.recommendedWorkers > metrics.filled && <span className="text-[9px]">(+{metrics.recommendedWorkers - metrics.filled})</span>}
             </div>
@@ -1127,9 +1125,8 @@ export function LiveCommand() {
                         <div className={`text-[11px] ${c.textPrimary} truncate`}>{worker.name}</div>
                         <div className="flex items-center gap-0.5 mt-0.5">
                           {worker.skills.slice(0, 2).map((skill) => (
-                            <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${
-                              skill.label === "New" ? "bg-green-100 text-green-600" : skill.label === "FL" || skill.label === "L" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
-                            }`}>{skill.icon}{skill.label}</span>
+                            <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${skill.label === "New" ? "bg-green-100 text-green-600" : skill.label === "FL" || skill.label === "L" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
+                              }`}>{skill.icon}{skill.label}</span>
                           ))}
                         </div>
                       </div>
@@ -1143,9 +1140,8 @@ export function LiveCommand() {
                 }
                 return (
                   <div key={slotIdx} onDragOver={handleDragOver} onDrop={() => handleDropOnSlot(zone.processId, slotIdx)}
-                    className={`flex items-center justify-center px-2 py-2.5 rounded-lg border-2 border-dashed transition-colors ${
-                      draggedWorkerId ? "border-blue-300 bg-blue-50/30" : `${c.border} ${c.bgSurface}`
-                    }`}>
+                    className={`flex items-center justify-center px-2 py-2.5 rounded-lg border-2 border-dashed transition-colors ${draggedWorkerId ? "border-blue-300 bg-blue-50/30" : `${c.border} ${c.bgSurface}`
+                      }`}>
                     <span className={`text-[11px] ${c.textDimmed}`}>空き</span>
                   </div>
                 );
