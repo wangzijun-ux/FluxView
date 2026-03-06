@@ -24,6 +24,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Users,
+  PlusCircle,
   SkipForward,
   MapPin,
   Layers,
@@ -118,7 +119,7 @@ function buildInitialZones(): Zone[] {
         processId: step.id, areaId: area.id, name: step.name, description: step.zoneDescription,
         color: step.color, icon: step.icon, capacity: step.defaultCapacity,
         baseUph: step.baseUph, requiredSkills: step.requiredSkills,
-        slots: slotAssign.map((wId) => ({ workerId: wId })),
+        slots: slotAssign.filter((wId) => wId !== null).map((wId) => ({ workerId: wId })),
         production: { ...prod },
       });
     }
@@ -424,16 +425,45 @@ export function LiveCommand() {
   // Drag handlers
   const handleDragStartFromPool = (workerId: string) => { setDraggedWorkerId(workerId); setDragSource(null); };
   const handleDragStartFromSlot = (workerId: string, processId: string, slotIndex: number) => { setDraggedWorkerId(workerId); setDragSource({ processId, slotIndex }); };
-  const handleDropOnSlot = (processId: string, slotIndex: number) => {
+  const handleDropOnSlot = (processId: string, slotIndex: number | "new") => {
     if (!draggedWorkerId) return;
     setZones((prev) => {
       const nz = cloneZones(prev);
-      if (dragSource) { const src = nz.find((z) => z.processId === dragSource.processId); if (src) src.slots[dragSource.slotIndex].workerId = null; }
-      const tgt = nz.find((z) => z.processId === processId);
-      if (tgt) {
-        const existing = tgt.slots[slotIndex].workerId;
-        if (existing && dragSource) { const src = nz.find((z) => z.processId === dragSource.processId); if (src) src.slots[dragSource.slotIndex].workerId = existing; }
-        tgt.slots[slotIndex].workerId = draggedWorkerId;
+
+      if (slotIndex === "new") {
+        // Remove from old slot if moving
+        if (dragSource) {
+          const src = nz.find((z) => z.processId === dragSource.processId);
+          if (src) src.slots = src.slots.filter((_, i) => i !== dragSource.slotIndex);
+        }
+        // Append to new zone
+        const tgt = nz.find((z) => z.processId === processId);
+        if (tgt) tgt.slots.push({ workerId: draggedWorkerId });
+      } else {
+        // Existing slot - Handle Swap or Replace
+        const tgt = nz.find((z) => z.processId === processId);
+        if (tgt) {
+          const existingWorkerId = tgt.slots[slotIndex].workerId;
+
+          if (dragSource) {
+            // Internal move: swap
+            const src = nz.find((z) => z.processId === dragSource.processId);
+            if (src) {
+              if (existingWorkerId) {
+                // Swap
+                src.slots[dragSource.slotIndex].workerId = existingWorkerId;
+                tgt.slots[slotIndex].workerId = draggedWorkerId;
+              } else {
+                // Only move (safety, though slots shouldn't be empty anymore)
+                src.slots = src.slots.filter((_, i) => i !== dragSource.slotIndex);
+                tgt.slots[slotIndex].workerId = draggedWorkerId;
+              }
+            }
+          } else {
+            // From pool: replace
+            tgt.slots[slotIndex].workerId = draggedWorkerId;
+          }
+        }
       }
       return nz;
     });
@@ -1030,7 +1060,7 @@ export function LiveCommand() {
                           {adj.memo && <p className={`text-[11px] ${c.textSecondary} mb-1.5`}>{adj.memo}</p>}
                           <div className="space-y-1">
                             {adj.changes.map((ch, i) => {
-                              const worker = allWorkers.find((w) => w.id === ch.workerId);
+                              const worker = workers.find((w: Worker) => w.id === ch.workerId);
                               return (
                                 <div key={i} className="flex items-center gap-1.5 text-[10px]">
                                   {worker && (
@@ -1176,60 +1206,65 @@ export function LiveCommand() {
             <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
               {zone.slots.map((slot, slotIdx) => {
                 const worker = slot.workerId ? getWorker(slot.workerId) : null;
-                if (worker) {
-                  const isBreak = worker.status === "break";
-                  return (
-                    <div key={slotIdx} draggable={!isBreak} onDragStart={() => handleDragStartFromSlot(worker.id, zone.processId, slotIdx)} onDragEnd={handleDragEnd}
-                      className={`relative group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${c.border} ${c.bgCard} ${isBreak ? "opacity-75" : "cursor-grab active:cursor-grabbing hover:shadow-md"} transition-all`}>
-                      <div className={`w-7 h-7 rounded-full ${isBreak ? "bg-gray-400" : worker.color} text-white flex items-center justify-center text-[11px] shrink-0 transition-colors`}>
-                        {isBreak ? "☕" : worker.initials}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className={`text-[11px] ${isBreak ? c.textMuted : c.textPrimary} truncate flex items-center gap-1`}>
-                          {worker.name}
-                          {isBreak && <span className="text-[9px] px-1 rounded bg-gray-700 text-gray-400">休憩</span>}
-                        </div>
-                        <div className="flex items-center gap-0.5 mt-0.5">
-                          {worker.skills.slice(0, 2).map((skill) => (
-                            <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${isBreak ? "bg-gray-800 text-gray-500" :
-                              skill.label === "New" ? "bg-green-100 text-green-600" :
-                                skill.label === "FL" || skill.label === "L" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
-                              }`}>{skill.icon}{skill.label}</span>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Status quick actions on hover */}
-                      <div className="absolute inset-0 bg-gray-900/80 rounded-lg flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                        {isBreak ? (
-                          <button onClick={() => updateWorkerStatus(worker.id, "active")} className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-500" title="仕事に復帰">
-                            <Zap className="w-3.5 h-3.5" />
-                          </button>
-                        ) : (
-                          <button onClick={() => updateWorkerStatus(worker.id, "break")} className="p-1 rounded bg-amber-600 text-white hover:bg-amber-500" title="休憩・離席">
-                            <Timer className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        <button onClick={() => updateWorkerStatus(worker.id, "absent")} className="p-1 rounded bg-rose-600 text-white hover:bg-rose-500" title="退勤（配置解除）">
-                          <SkipForward className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => removeWorkerFromSlot(zone.processId, slotIdx)} className="p-1 rounded bg-gray-700 text-white hover:bg-gray-600" title="解除してプールへ">
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-
-                      <div className={`w-2 h-2 rounded-full ${isBreak ? "bg-gray-500" : "bg-emerald-400"} shrink-0`} />
-                    </div>
-                  );
-                }
+                if (!worker) return null;
+                const isBreak = worker.status === "break";
                 return (
-                  <div key={slotIdx} onDragOver={handleDragOver} onDrop={() => handleDropOnSlot(zone.processId, slotIdx)}
-                    className={`flex items-center justify-center px-2 py-2.5 rounded-lg border-2 border-dashed transition-colors ${draggedWorkerId ? "border-blue-300 bg-blue-50/30" : `${c.border} ${c.bgSurface}`
-                      }`}>
-                    <span className={`text-[11px] ${c.textDimmed}`}>空き</span>
+                  <div key={slotIdx} draggable={!isBreak} onDragStart={() => handleDragStartFromSlot(worker.id, zone.processId, slotIdx)} onDragEnd={handleDragEnd}
+                    className={`relative group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${c.border} ${c.bgCard} ${isBreak ? "opacity-75" : "cursor-grab active:cursor-grabbing hover:shadow-md"} transition-all`}>
+                    <div className={`w-7 h-7 rounded-full ${isBreak ? "bg-gray-400" : worker.color} text-white flex items-center justify-center text-[11px] shrink-0 transition-colors`}>
+                      {isBreak ? "☕" : worker.initials}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className={`text-[11px] ${isBreak ? c.textMuted : c.textPrimary} truncate flex items-center gap-1`}>
+                        {worker.name}
+                        {isBreak && <span className="text-[9px] px-1 rounded bg-gray-700 text-gray-400">休憩</span>}
+                      </div>
+                      <div className="flex items-center gap-0.5 mt-0.5">
+                        {worker.skills.slice(0, 2).map((skill: any) => (
+                          <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${isBreak ? "bg-gray-800 text-gray-500" :
+                            skill.label === "New" ? "bg-green-100 text-green-600" :
+                              skill.label === "FL" || skill.label === "L" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
+                            }`}>{skill.icon}{skill.label}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Status quick actions on hover */}
+                    <div className="absolute inset-0 bg-gray-900/80 rounded-lg flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                      {isBreak ? (
+                        <button onClick={() => updateWorkerStatus(worker.id, "active")} className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-500" title="仕事に復帰">
+                          <Zap className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <button onClick={() => updateWorkerStatus(worker.id, "break")} className="p-1 rounded bg-amber-600 text-white hover:bg-amber-500" title="休憩・離席">
+                          <Timer className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <button onClick={() => updateWorkerStatus(worker.id, "absent")} className="p-1 rounded bg-rose-600 text-white hover:bg-rose-500" title="退勤（配置解除）">
+                        <SkipForward className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => removeWorkerFromSlot(zone.processId, slotIdx)} className="p-1 rounded bg-gray-700 text-white hover:bg-gray-600" title="解除してプールへ">
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className={`w-2 h-2 rounded-full ${isBreak ? "bg-gray-500" : "bg-emerald-400"} shrink-0`} />
                   </div>
                 );
               })}
+
+              {/* Add New Slot Target */}
+              <div
+                onDragOver={handleDragOver}
+                onDrop={() => handleDropOnSlot(zone.processId, "new")}
+                className={`flex items-center justify-center p-2 rounded-lg border-2 border-dashed transition-all h-[42px] ${draggedWorkerId ? "border-blue-400 bg-blue-500/10 scale-102" : `border-gray-700 hover:border-blue-500/50 hover:bg-blue-500/5`
+                  }`}
+              >
+                <div className={`flex items-center gap-2 ${draggedWorkerId ? "text-blue-400" : "text-gray-500"}`}>
+                  <PlusCircle className={`w-4 h-4 ${draggedWorkerId ? "animate-pulse" : ""}`} />
+                  <span className="text-[10px]">追加</span>
+                </div>
+              </div>
             </div>
           </div>
         )}
