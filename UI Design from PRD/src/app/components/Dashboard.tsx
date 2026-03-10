@@ -20,6 +20,24 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import {
+  alpha,
+  Avatar,
+  Box,
+  Card,
+  CardContent,
+  Chip,
+  Divider,
+  IconButton,
+  LinearProgress,
+  List,
+  ListItem,
+  ListItemText,
+  Paper,
+  Stack,
+  Typography,
+  useTheme as useMuiTheme,
+} from "@mui/material";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import { processColorClasses } from "./processStore";
@@ -240,6 +258,19 @@ function statusConfig(status: StatusTone) {
       return { label: "未着手", className: "bg-slate-500/15 text-slate-500", icon: Clock3 };
     default:
       return { label: "進行中", className: "bg-cyan-500/15 text-cyan-500", icon: TrendingUp };
+  }
+}
+
+function statusColor(status: StatusTone): "default" | "info" | "warning" | "success" {
+  switch (status) {
+    case "done":
+      return "success";
+    case "delayed":
+      return "warning";
+    case "not_started":
+      return "default";
+    default:
+      return "info";
   }
 }
 

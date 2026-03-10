@@ -7,7 +7,7 @@ import {
   Warehouse,
   type LucideIcon,
 } from "lucide-react";
-import type { AreaMaster, ProcessMaster, Shipper, WorkflowDefinition } from "./masterStore";
+import type { AreaMaster, ProcessMaster, Shipper, Site, WorkflowDefinition } from "./masterStore";
 
 export const FIELD_DEPLOYMENT_STORAGE_PREFIX = "fluxview-field-deployment-v1";
 const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
@@ -81,6 +81,27 @@ export function buildFieldDeploymentStorageKey(siteId: string) {
   return `${FIELD_DEPLOYMENT_STORAGE_PREFIX}:${siteId || "default"}`;
 }
 
+export function buildSiteScope(sites: Site[], selectedSiteId: string) {
+  const selectedSite = sites.find((site) => site.id === selectedSiteId);
+  if (!selectedSite) {
+    return {
+      siteName: "拠点未選択",
+      siteIds: selectedSiteId ? [selectedSiteId] : [],
+      storageScopeKey: selectedSiteId || "default",
+    };
+  }
+
+  const relatedSiteIds = sites
+    .filter((site) => site.name === selectedSite.name)
+    .map((site) => site.id);
+
+  return {
+    siteName: selectedSite.name,
+    siteIds: relatedSiteIds.length > 0 ? relatedSiteIds : [selectedSite.id],
+    storageScopeKey: `name:${encodeURIComponent(selectedSite.name)}`,
+  };
+}
+
 export function parseTimeLabel(value: string) {
   const [hours, minutes] = value.split(":").map(Number);
   return (hours || 0) * 60 + (minutes || 0);
@@ -93,7 +114,7 @@ export function formatTimeLabel(totalMinutes: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-export function createTimeSlots(intervalMinutes: number, startMinutes = 6 * 60, endMinutes = 20 * 60 + 30) {
+export function createTimeSlots(intervalMinutes: number, startMinutes = 0, endMinutes = 24 * 60) {
   const slots: string[] = [];
   for (let minute = startMinutes; minute <= endMinutes; minute += intervalMinutes) {
     slots.push(formatTimeLabel(minute));
@@ -233,12 +254,23 @@ export function createSeededDeploymentSnapshots(
   baseSnapshot: AssignmentSnapshot,
 ) {
   const snapshots: Record<string, AssignmentSnapshot> = {};
-  let previous = materializeSnapshot(baseSnapshot, steps);
+  const emptySnapshot = materializeSnapshot({}, steps);
+  const baseMaterializedSnapshot = materializeSnapshot(baseSnapshot, steps);
+  const earliestStartMinute = steps.length > 0 ? Math.min(...steps.map((step) => parseTimeLabel(step.startTime))) : 0;
+  const rawSeedStartIndex = timeSlots.findIndex((timeLabel) => parseTimeLabel(timeLabel) > earliestStartMinute);
+  const seedStartIndex = rawSeedStartIndex === -1 ? Math.max(timeSlots.length - 1, 0) : Math.max(rawSeedStartIndex - 1, 0);
+  let previous = emptySnapshot;
 
   timeSlots.forEach((timeLabel, index) => {
-    const next = cloneSnapshot(previous);
+    if (index < seedStartIndex) {
+      snapshots[timeLabel] = cloneSnapshot(emptySnapshot);
+      previous = snapshots[timeLabel];
+      return;
+    }
 
-    if (index > 0 && steps.length > 0) {
+    const next = cloneSnapshot(index === seedStartIndex ? baseMaterializedSnapshot : previous);
+
+    if (index > seedStartIndex && steps.length > 0) {
       if (index % 2 === 1 && steps.length > 1) {
         const sourceStep = steps[(index - 1) % steps.length];
         const targetStep = steps[index % steps.length];
@@ -282,4 +314,3 @@ export function createSeededDeploymentSnapshots(
 
   return snapshots;
 }
-

@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { CssBaseline, GlobalStyles, ThemeProvider as MuiThemeProvider, createTheme, alpha } from "@mui/material";
 
 type Theme = "dark" | "light";
 
@@ -26,9 +27,107 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const toggleTheme = () => setTheme((prev) => (prev === "dark" ? "light" : "dark"));
 
+  const muiTheme = useMemo(
+    () =>
+      createTheme({
+        palette: {
+          mode: theme,
+          primary: { main: "#2563eb" },
+          secondary: { main: "#06b6d4" },
+          background: {
+            default: theme === "dark" ? "#0d0f16" : "#f3f6fb",
+            paper: theme === "dark" ? "#121621" : "#ffffff",
+          },
+          text: {
+            primary: theme === "dark" ? "#f8fafc" : "#0f172a",
+            secondary: theme === "dark" ? "#94a3b8" : "#475569",
+          },
+          divider: theme === "dark" ? "rgba(148, 163, 184, 0.12)" : "rgba(15, 23, 42, 0.08)",
+        },
+        shape: { borderRadius: 18 },
+        typography: {
+          fontFamily: '"Noto Sans JP", "Segoe UI", sans-serif',
+          h6: { fontWeight: 700, letterSpacing: "-0.02em" },
+          subtitle1: { fontWeight: 600 },
+          button: { fontWeight: 700, textTransform: "none" },
+        },
+        components: {
+          MuiCssBaseline: {
+            styleOverrides: {
+              body: {
+                backgroundImage:
+                  theme === "dark"
+                    ? "radial-gradient(circle at top left, rgba(37,99,235,0.12), transparent 28%), radial-gradient(circle at top right, rgba(6,182,212,0.08), transparent 24%)"
+                    : "radial-gradient(circle at top left, rgba(37,99,235,0.08), transparent 24%), radial-gradient(circle at top right, rgba(6,182,212,0.06), transparent 22%)",
+              },
+            },
+          },
+          MuiPaper: {
+            styleOverrides: {
+              root: {
+                backgroundImage: "none",
+                border: `1px solid ${theme === "dark" ? "rgba(148, 163, 184, 0.12)" : "rgba(15, 23, 42, 0.08)"}`,
+                boxShadow:
+                  theme === "dark"
+                    ? "0 18px 40px rgba(2, 6, 23, 0.32)"
+                    : "0 18px 40px rgba(15, 23, 42, 0.08)",
+              },
+            },
+          },
+          MuiButton: {
+            styleOverrides: {
+              root: {
+                borderRadius: 14,
+                paddingInline: 14,
+              },
+            },
+          },
+          MuiIconButton: {
+            styleOverrides: {
+              root: {
+                borderRadius: 14,
+              },
+            },
+          },
+          MuiOutlinedInput: {
+            styleOverrides: {
+              root: {
+                borderRadius: 14,
+                backgroundColor: theme === "dark" ? alpha("#0f172a", 0.28) : alpha("#ffffff", 0.85),
+              },
+            },
+          },
+          MuiListItemButton: {
+            styleOverrides: {
+              root: {
+                borderRadius: 14,
+              },
+            },
+          },
+        },
+      }),
+    [theme],
+  );
+
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme, isDark: theme === "dark" }}>
-      {children}
+      <MuiThemeProvider theme={muiTheme}>
+        <CssBaseline />
+        <GlobalStyles
+          styles={{
+            "*": { boxSizing: "border-box" },
+            "::-webkit-scrollbar": { width: 10, height: 10 },
+            "::-webkit-scrollbar-thumb": {
+              background: theme === "dark" ? "rgba(148,163,184,0.22)" : "rgba(148,163,184,0.45)",
+              borderRadius: 999,
+            },
+            "::-webkit-scrollbar-track": {
+              background: theme === "dark" ? "rgba(15,23,42,0.24)" : "rgba(226,232,240,0.5)",
+            },
+          }}
+        />
+        {children}
+      </MuiThemeProvider>
     </ThemeContext.Provider>
   );
 }

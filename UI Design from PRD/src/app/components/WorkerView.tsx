@@ -22,6 +22,7 @@ import { processColorClasses } from "./processStore";
 import {
   buildWorkerDayTasks,
   buildWorkerSiteDeploymentData,
+  getPausedMinutes,
   getDefaultWorkerSession,
   getTodayKey,
   getVisibleWorkerNotifications,
@@ -87,8 +88,8 @@ export function WorkerView() {
   const workerMap = useMemo(() => new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker])), []);
   const siteName = sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択";
   const siteData = useMemo(
-    () => buildWorkerSiteDeploymentData(selectedSiteId, workflows, shippers, areas, processes),
-    [selectedSiteId, workflows, shippers, areas, processes],
+    () => buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, areas, processes),
+    [selectedSiteId, sites, workflows, shippers, areas, processes],
   );
   const fallbackWorkerId = useMemo(() => pickFallbackWorkerId(siteData), [siteData]);
   const requestedWorkerId = searchParams.get("workerId");
@@ -166,15 +167,39 @@ export function WorkerView() {
   }, 0);
 
   const updateTaskStatus = (taskId: string, status: WorkerTaskProgressEntry["status"]) => {
-    setTaskProgress((prev) => ({
-      ...prev,
-      [taskId]: {
-        ...prev[taskId],
+    const nowIso = new Date().toISOString();
+    setTaskProgress((prev) => {
+      const current = prev[taskId] ?? { status: "pending" as const };
+      const nextEntry: WorkerTaskProgressEntry = {
+        ...current,
         status,
-        startedAt: status === "working" && !prev[taskId]?.startedAt ? new Date().toISOString() : prev[taskId]?.startedAt,
-        completedAt: status === "completed" ? new Date().toISOString() : prev[taskId]?.completedAt,
-      },
-    }));
+      };
+
+      if (status === "working") {
+        nextEntry.startedAt = current.startedAt ?? nowIso;
+        if (current.status === "paused" && current.pauseStartedAt) {
+          nextEntry.totalPausedMinutes = getPausedMinutes(current);
+          nextEntry.pauseStartedAt = undefined;
+        }
+      }
+
+      if (status === "paused" && current.status !== "paused") {
+        nextEntry.pauseStartedAt = nowIso;
+      }
+
+      if (status === "completed") {
+        nextEntry.completedAt = nowIso;
+        if (current.status === "paused" && current.pauseStartedAt) {
+          nextEntry.totalPausedMinutes = getPausedMinutes(current);
+          nextEntry.pauseStartedAt = undefined;
+        }
+      }
+
+      return {
+        ...prev,
+        [taskId]: nextEntry,
+      };
+    });
   };
 
   const updateTaskQuantity = (taskId: string, nextQuantity: number) => {

@@ -16,15 +16,48 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import { processColorClasses } from "./processStore";
+import {
+  DEPLOYMENT_WORKERS,
+  buildBaseDeploymentSnapshot,
+  buildFieldDeploymentStorageKey,
+  buildSiteScope,
+  createSeededDeploymentSnapshots,
+  createTimeSlots,
+  materializeSnapshot,
+  type AssignmentSnapshot,
+} from "./fieldDeploymentStore";
+import {
+  PLAN_STORAGE_KEY,
+  buildStepPlanDefaults,
+  readProgressPlanStore,
+  resolveStepPlanValues,
+  updateStepPlanEntry,
+  type ProgressPlanStore,
+} from "./progressPlanStore";
+import {
+  buildReportedQuantityMap,
+  buildWorkerSubmissionRecords,
+  type WorkerSubmissionRecord,
+} from "./workerMobileStore";
 import type { AreaMaster, ProcessMaster, Shipper, WorkflowDefinition } from "./masterStore";
 
-const PLAN_STORAGE_KEY = "fluxview-progress-plans-v1";
 const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
+const DEPLOYMENT_INTERVAL_MINUTES = 30;
+const DEPLOYMENT_DAY_END = 24 * 60;
 
-type PlanStore = Record<string, Record<string, number>>;
 type StatusTone = "on_track" | "delayed" | "not_started" | "done";
 type TrendPoint = { label: string; planned: number; actual: number };
 const TREND_SAMPLE_MINUTES = [6 * 60, 8 * 60, 10 * 60, 12 * 60, 14 * 60, 16 * 60, 18 * 60, 20 * 60];
@@ -48,6 +81,8 @@ interface StepView {
   weight: number;
   startTime: string;
   targetEndTime: string;
+  requiredQualificationIds: string[];
+  requiredSkillIds: string[];
 }
 
 interface WorkflowView {
@@ -129,20 +164,34 @@ function pickColor(index: number) {
   return COLORS[index % COLORS.length];
 }
 
-function hashString(value: string) {
-  return Array.from(value).reduce((acc, char, index) => acc + char.charCodeAt(0) * (index + 1), 0);
-}
-
-function readPlanStore(): PlanStore {
+function readDeploymentSnapshots(storageKey: string): Record<string, AssignmentSnapshot> {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(PLAN_STORAGE_KEY);
+    const raw = window.localStorage.getItem(storageKey);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
+    return parsed && typeof parsed === "object" ? parsed as Record<string, AssignmentSnapshot> : {};
   } catch {
     return {};
   }
+}
+
+function sortTimeLabels(labels: string[]) {
+  return [...labels].sort((left, right) => parseTime(left) - parseTime(right));
+}
+
+function detectSnapshotInterval(labels: string[]) {
+  if (labels.length < 2) return DEPLOYMENT_INTERVAL_MINUTES;
+  let minDelta = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < labels.length; index += 1) {
+    const delta = parseTime(labels[index]) - parseTime(labels[index - 1]);
+    if (delta > 0) minDelta = Math.min(minDelta, delta);
+  }
+  return Number.isFinite(minDelta) ? minDelta : DEPLOYMENT_INTERVAL_MINUTES;
+}
+
+function countAssigned(snapshot: AssignmentSnapshot | undefined, stepId: string) {
+  return (snapshot?.[stepId] ?? []).filter((workerId): workerId is string => Boolean(workerId)).length;
 }
 
 function iconForProcess(processId: string, processName: string): LucideIcon {
@@ -186,9 +235,7 @@ function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[]
         const headcount = Math.max(step.standardHeadcount || process?.defaultHeadcount || 1, 1);
         const uph = step.uph || process?.defaultUph || 100;
         const weight = Math.max(headcount * uph, 1);
-        const defaultPlanned = Math.max(400, Math.round((weight * (1.4 + ((workflowIndex + stepIndex) % 3) * 0.25)) / 10) * 10);
-        const startMinutes = 6 * 60 + stepIndex * 70 + (workflowIndex % 2) * 10;
-        const endMinutes = Math.min(startMinutes + 240 - stepIndex * 10, 20 * 60 + 30);
+        const defaults = buildStepPlanDefaults(workflowIndex, stepIndex, headcount, uph);
 
         return {
           id: `${workflow.id}:${step.id}`,
@@ -205,10 +252,12 @@ function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[]
           icon: iconForProcess(step.processId, process?.name ?? ""),
           headcount,
           uph,
-          defaultPlanned,
+          defaultPlanned: defaults.planned,
           weight,
-          startTime: formatTime(startMinutes),
-          targetEndTime: formatTime(endMinutes),
+          startTime: defaults.startTime,
+          targetEndTime: defaults.targetEndTime,
+          requiredQualificationIds: step.requiredQualificationIds,
+          requiredSkillIds: step.requiredSkillIds,
         } satisfies StepView;
       }),
     })) satisfies WorkflowView[];
@@ -248,43 +297,6 @@ function statusConfig(status: StatusTone) {
   }
 }
 
-function getStepMetrics(step: StepView, planned: number, selectedDate: string, today: string, nowMinutes: number): StepMetrics {
-  const seed = hashString(`${selectedDate}:${step.id}`);
-  const selectedDateValue = selectedDate.replaceAll("-", "");
-  const todayValue = today.replaceAll("-", "");
-  const timeFactor = clamp((nowMinutes - 6 * 60) / (14 * 60), 0, 1);
-  const noise = ((seed % 19) - 9) / 100;
-
-  let progressFactor = 0;
-  if (selectedDateValue < todayValue) {
-    progressFactor = 0.88 + (seed % 11) / 100;
-  } else if (selectedDateValue > todayValue) {
-    progressFactor = (seed % 7) / 100;
-  } else {
-    progressFactor = clamp(0.1 + timeFactor * 0.78 + noise, 0, 0.98);
-  }
-
-  const actual = planned > 0 ? Math.min(planned, Math.round((planned * progressFactor) / 10) * 10) : 0;
-  const remaining = Math.max(0, planned - actual);
-  const progress = planned > 0 ? Math.round((actual / planned) * 100) : 0;
-  const totalUph = Math.max(step.headcount * step.uph, step.uph);
-
-  let eta = "--:--";
-  if (planned === 0) eta = "未設定";
-  else if (remaining === 0) eta = "完了";
-  else if (selectedDateValue > todayValue) eta = step.targetEndTime;
-  else eta = formatTime(Math.min(nowMinutes + Math.ceil((remaining / totalUph) * 60), 23 * 60 + 59));
-
-  const expectedProgress = selectedDateValue < todayValue ? 100 : selectedDateValue > todayValue ? 0 : Math.round(timeFactor * 100);
-  let status: StatusTone = "on_track";
-  if (planned === 0) status = "not_started";
-  else if (remaining === 0) status = "done";
-  else if (selectedDateValue > todayValue || actual === 0) status = "not_started";
-  else if (progress + 12 < expectedProgress) status = "delayed";
-
-  return { planned, actual, remaining, progress, totalUph, eta, status };
-}
-
 function formatTimestamp(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
@@ -305,27 +317,188 @@ function getPlannedValueAtMinute(step: StepView, planned: number, minute: number
   return Math.round((planned * progress) / 10) * 10;
 }
 
-function buildStepTrend(step: StepView, planned: number, actual: number, selectedDate: string, today: string, nowMinutes: number): TrendPoint[] {
+function getSubmissionQuantityAtMinute(
+  records: WorkerSubmissionRecord[],
+  minute: number,
+  selectedDate: string,
+  today: string,
+  nowMinutes: number,
+) {
   const selectedDateValue = selectedDate.replaceAll("-", "");
   const todayValue = today.replaceAll("-", "");
-  const effectiveCurrentMinutes = selectedDateValue > todayValue ? 6 * 60 : nowMinutes;
+  const effectiveMinute = selectedDateValue < todayValue ? minute : Math.min(minute, nowMinutes);
+  const isFuture = selectedDateValue > todayValue;
+  if (isFuture) return 0;
+
+  return records.reduce((sum, record) => {
+    const quantity = record.reportedQuantity ?? 0;
+    if (quantity <= 0) return sum;
+
+    const startedMinutes = record.startedAt
+      ? new Date(record.startedAt).getHours() * 60 + new Date(record.startedAt).getMinutes()
+      : parseTime(record.scheduledStartTime);
+    const finishedMinutes = record.completedAt
+      ? new Date(record.completedAt).getHours() * 60 + new Date(record.completedAt).getMinutes()
+      : record.lastReportedAt
+        ? new Date(record.lastReportedAt).getHours() * 60 + new Date(record.lastReportedAt).getMinutes()
+        : startedMinutes;
+
+    const rangeStart = Math.max(0, startedMinutes);
+    const rangeEnd = Math.max(rangeStart, finishedMinutes);
+
+    if (effectiveMinute <= rangeStart) return sum;
+    if (effectiveMinute >= rangeEnd) return sum + quantity;
+    if (rangeEnd === rangeStart) return sum + quantity;
+
+    const progress = (effectiveMinute - rangeStart) / (rangeEnd - rangeStart);
+    return sum + Math.round((quantity * progress) / 10) * 10;
+  }, 0);
+}
+
+function calculateActualRawUntil(
+  step: StepView,
+  minute: number,
+  timeSlots: string[],
+  intervalMinutes: number,
+  snapshotsByTime: Record<string, AssignmentSnapshot>,
+) {
+  const startMinutes = parseTime(step.startTime);
+  let actualRaw = 0;
+
+  timeSlots.forEach((timeLabel) => {
+    const slotStart = parseTime(timeLabel);
+    const slotEnd = Math.min(slotStart + intervalMinutes, DEPLOYMENT_DAY_END);
+    if (slotEnd <= startMinutes || slotStart >= minute) return;
+    const effectiveStart = Math.max(slotStart, startMinutes);
+    const effectiveEnd = Math.min(slotEnd, minute);
+    if (effectiveEnd <= effectiveStart) return;
+    actualRaw += countAssigned(snapshotsByTime[timeLabel], step.id) * step.uph * 0.82 * ((effectiveEnd - effectiveStart) / 60);
+  });
+
+  return actualRaw;
+}
+
+function projectEtaMinutes(
+  step: StepView,
+  planned: number,
+  referenceMinutes: number,
+  timeSlots: string[],
+  intervalMinutes: number,
+  snapshotsByTime: Record<string, AssignmentSnapshot>,
+) {
+  let remainingRaw = Math.max(0, planned - calculateActualRawUntil(step, referenceMinutes, timeSlots, intervalMinutes, snapshotsByTime));
+  if (remainingRaw === 0) return clamp(referenceMinutes, 0, DEPLOYMENT_DAY_END);
+
+  for (let index = 0; index < timeSlots.length; index += 1) {
+    const slotStart = parseTime(timeSlots[index]);
+    const slotEnd = Math.min(slotStart + intervalMinutes, DEPLOYMENT_DAY_END);
+    if (slotEnd <= referenceMinutes) continue;
+
+    const effectiveStart = Math.max(slotStart, referenceMinutes, parseTime(step.startTime));
+    const effectiveEnd = Math.max(effectiveStart, slotEnd);
+    const assignedCount = countAssigned(snapshotsByTime[timeSlots[index]], step.id);
+    if (assignedCount <= 0 || effectiveEnd <= effectiveStart) continue;
+
+    const hourlyCapacity = assignedCount * step.uph * 0.82;
+    const slotCapacity = hourlyCapacity * ((effectiveEnd - effectiveStart) / 60);
+    if (slotCapacity >= remainingRaw) {
+      return Math.ceil(effectiveStart + (remainingRaw / hourlyCapacity) * 60);
+    }
+
+    remainingRaw -= slotCapacity;
+  }
+
+  return null;
+}
+
+function getStepMetrics(
+  step: StepView,
+  planned: number,
+  actualReported: number,
+  selectedDate: string,
+  today: string,
+  nowMinutes: number,
+  timeSlots: string[],
+  intervalMinutes: number,
+  snapshotsByTime: Record<string, AssignmentSnapshot>,
+): StepMetrics {
+  const selectedDateValue = selectedDate.replaceAll("-", "");
+  const todayValue = today.replaceAll("-", "");
+  const isFuture = selectedDateValue > todayValue;
+  const isPast = selectedDateValue < todayValue;
+  const referenceMinutes = isFuture ? parseTime(step.startTime) : isPast ? DEPLOYMENT_DAY_END : nowMinutes;
+  const actual = Math.max(0, actualReported);
+  const remaining = Math.max(0, planned - actual);
+  const progress = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : 0;
+  const totalUph = Math.max(step.headcount * step.uph, step.uph);
+
+  let eta = "--:--";
+  if (planned === 0) {
+    eta = "未設定";
+  } else if (remaining === 0) {
+    eta = "完了";
+  } else {
+    const projectedEta = projectEtaMinutes(
+      step,
+      planned,
+      Math.max(referenceMinutes, parseTime(step.startTime)),
+      timeSlots,
+      intervalMinutes,
+      snapshotsByTime,
+    );
+    eta = projectedEta === null ? "--:--" : formatTime(Math.min(projectedEta, DEPLOYMENT_DAY_END));
+  }
+
+  const plannedAtReference = isPast
+    ? planned
+    : isFuture
+      ? 0
+      : getPlannedValueAtMinute(step, planned, referenceMinutes);
+  const targetMinutes = parseTime(step.targetEndTime);
+
+  let status: StatusTone = "on_track";
+  if (planned === 0) status = "not_started";
+  else if (remaining === 0) status = "done";
+  else if (isFuture || referenceMinutes <= parseTime(step.startTime)) status = "not_started";
+  else if (isPast && actual < planned) status = "delayed";
+  else if (eta !== "--:--" && eta !== "未設定" && eta !== "完了" && parseTime(eta) > targetMinutes) status = "delayed";
+  else if (plannedAtReference > 0 && progress + 12 < Math.round((plannedAtReference / planned) * 100)) status = "delayed";
+
+  return { planned, actual, remaining, progress, totalUph, eta, status };
+}
+
+function buildStepTrend(
+  step: StepView,
+  planned: number,
+  records: WorkerSubmissionRecord[],
+  selectedDate: string,
+  today: string,
+  nowMinutes: number,
+  timeSlots: string[],
+  intervalMinutes: number,
+  snapshotsByTime: Record<string, AssignmentSnapshot>,
+): TrendPoint[] {
+  const selectedDateValue = selectedDate.replaceAll("-", "");
+  const todayValue = today.replaceAll("-", "");
+  const isFuture = selectedDateValue > todayValue;
+  const currentActual = Math.min(
+    planned,
+    getSubmissionQuantityAtMinute(records, selectedDateValue < todayValue ? DEPLOYMENT_DAY_END : nowMinutes, selectedDate, today, nowMinutes),
+  );
 
   return TREND_SAMPLE_MINUTES.map((minute) => {
     const plannedAtPoint = getPlannedValueAtMinute(step, planned, minute);
-    if (selectedDateValue > todayValue) {
+    if (isFuture) {
       return { label: formatTime(minute), planned: plannedAtPoint, actual: 0 };
     }
 
-    const effectiveMinute = selectedDateValue < todayValue ? minute : Math.min(minute, effectiveCurrentMinutes);
-    const plannedAtEffectiveMinute = getPlannedValueAtMinute(step, planned, effectiveMinute);
     const actualAtPoint = planned > 0
-      ? Math.min(actual, Math.round((actual * (plannedAtEffectiveMinute / planned)) / 10) * 10)
+      ? Math.min(planned, getSubmissionQuantityAtMinute(records, minute, selectedDate, today, nowMinutes))
       : 0;
-
     return {
       label: formatTime(minute),
       planned: plannedAtPoint,
-      actual: selectedDateValue < todayValue || minute <= effectiveCurrentMinutes ? actualAtPoint : actual,
+      actual: minute <= nowMinutes || selectedDateValue < todayValue ? actualAtPoint : currentActual,
     };
   });
 }
@@ -339,47 +512,35 @@ function buildWorkflowTrend(stepTrends: TrendPoint[][]): TrendPoint[] {
   }));
 }
 
-function toSparklinePath(values: number[], width: number, height: number, padding = 4) {
-  const maxValue = Math.max(...values, 1);
-  const usableWidth = width - padding * 2;
-  const usableHeight = height - padding * 2;
-  return values.map((value, index) => {
-    const x = padding + (values.length === 1 ? usableWidth / 2 : (usableWidth * index) / (values.length - 1));
-    const y = padding + usableHeight - (value / maxValue) * usableHeight;
-    return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-}
-
 function TrendSparkline({ points, themeColors }: { points: TrendPoint[]; themeColors: ReturnType<typeof useThemeColors> }) {
-  const width = 160;
-  const height = 48;
-  const plannedValues = points.map((point) => point.planned);
-  const actualValues = points.map((point) => point.actual);
-  const guideValues = [0, Math.max(...plannedValues, ...actualValues, 1) / 2, Math.max(...plannedValues, ...actualValues, 1)];
-  const plannedPath = toSparklinePath(plannedValues, width, height);
-  const actualPath = toSparklinePath(actualValues, width, height);
   const lastPoint = points[points.length - 1];
+  const gridStroke = themeColors.isDark ? "#263041" : "#e2e8f0";
+  const tooltipBg = themeColors.isDark ? "#111827" : "#ffffff";
+  const tooltipBorder = themeColors.isDark ? "#334155" : "#cbd5e1";
+  const tooltipColor = themeColors.isDark ? "#e2e8f0" : "#0f172a";
 
   return (
     <div className="min-w-[176px]">
-      <svg viewBox={`0 0 ${width} ${height}`} className="h-12 w-[160px]" role="img" aria-label={`予定 ${lastPoint?.planned ?? 0}、実績 ${lastPoint?.actual ?? 0} の推移`}>
-        {guideValues.map((value, index) => {
-          const y = 4 + ((height - 8) * index) / Math.max(guideValues.length - 1, 1);
-          return (
-            <line
-              key={`${value}-${index}`}
-              x1="4"
-              y1={y}
-              x2={width - 4}
-              y2={y}
-              stroke={themeColors.isDark ? "rgba(148,163,184,0.18)" : "rgba(148,163,184,0.22)"}
-              strokeWidth="1"
+      <div className="h-14 w-[160px]" role="img" aria-label={`予定 ${lastPoint?.planned ?? 0}、実績 ${lastPoint?.actual ?? 0} の推移`}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={points} margin={{ top: 6, right: 4, bottom: 0, left: 4 }}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" stroke={gridStroke} />
+            <XAxis dataKey="label" hide />
+            <YAxis hide />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: tooltipBg,
+                border: `1px solid ${tooltipBorder}`,
+                borderRadius: "8px",
+                color: tooltipColor,
+                fontSize: "12px",
+              }}
             />
-          );
-        })}
-        <path d={plannedPath} fill="none" stroke="#8b5cf6" strokeWidth="2" strokeDasharray="4 3" strokeLinecap="round" strokeLinejoin="round" />
-        <path d={actualPath} fill="none" stroke="#06b6d4" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+            <Line type="monotone" dataKey="planned" stroke="#8b5cf6" strokeWidth={2} dot={false} strokeDasharray="4 3" />
+            <Line type="monotone" dataKey="actual" stroke="#06b6d4" strokeWidth={2.2} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
       <div className={`mt-1 flex items-center gap-3 text-[10px] ${themeColors.textMuted}`}>
         <span className="inline-flex items-center gap-1">
           <span className="h-2 w-2 rounded-full bg-violet-500" />
@@ -395,60 +556,34 @@ function TrendSparkline({ points, themeColors }: { points: TrendPoint[]; themeCo
 }
 
 function TrendDetailChart({ points, themeColors }: { points: TrendPoint[]; themeColors: ReturnType<typeof useThemeColors> }) {
-  const width = 720;
-  const height = 240;
-  const padding = 18;
-  const plannedValues = points.map((point) => point.planned);
-  const actualValues = points.map((point) => point.actual);
-  const maxValue = Math.max(...plannedValues, ...actualValues, 1);
-  const guideValues = [maxValue, Math.round(maxValue / 2), 0];
-  const plannedPath = toSparklinePath(plannedValues, width, height, padding);
-  const actualPath = toSparklinePath(actualValues, width, height, padding);
-  const usableWidth = width - padding * 2;
-  const usableHeight = height - padding * 2;
-  const pointX = (index: number) => padding + (points.length === 1 ? usableWidth / 2 : (usableWidth * index) / Math.max(points.length - 1, 1));
-  const pointY = (value: number) => padding + usableHeight - (value / maxValue) * usableHeight;
+  const gridStroke = themeColors.isDark ? "#1e293b" : "#e2e8f0";
+  const axisStroke = themeColors.isDark ? "#475569" : "#94a3b8";
+  const tickFill = themeColors.isDark ? "#94a3b8" : "#64748b";
+  const tooltipBg = themeColors.isDark ? "#111827" : "#ffffff";
+  const tooltipBorder = themeColors.isDark ? "#334155" : "#cbd5e1";
+  const tooltipColor = themeColors.isDark ? "#e2e8f0" : "#0f172a";
 
   return (
     <div className={`${themeColors.bgSurface} ${themeColors.borderCard} rounded-3xl border p-4`}>
-      <div className="grid gap-4 lg:grid-cols-[56px_minmax(0,1fr)]">
-        <div className={`flex flex-col justify-between py-2 text-[11px] tabular-nums ${themeColors.textMuted}`}>
-          {guideValues.map((value, index) => (
-            <span key={`${value}-${index}`}>{value.toLocaleString("ja-JP")}</span>
-          ))}
-        </div>
-        <div>
-          <svg viewBox={`0 0 ${width} ${height}`} className="h-[240px] w-full" role="img" aria-label="予定数と実績数の推移チャート">
-            {guideValues.map((value, index) => {
-              const y = padding + ((height - padding * 2) * index) / Math.max(guideValues.length - 1, 1);
-              return (
-                <line
-                  key={`${value}-${index}`}
-                  x1={padding}
-                  y1={y}
-                  x2={width - padding}
-                  y2={y}
-                  stroke={themeColors.isDark ? "rgba(148,163,184,0.18)" : "rgba(148,163,184,0.22)"}
-                  strokeWidth="1"
-                />
-              );
-            })}
-            <path d={plannedPath} fill="none" stroke="#8b5cf6" strokeWidth="3" strokeDasharray="8 6" strokeLinecap="round" strokeLinejoin="round" />
-            <path d={actualPath} fill="none" stroke="#06b6d4" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-            {points.map((point, index) => (
-              <g key={point.label}>
-                <circle cx={pointX(index)} cy={pointY(point.planned)} r="4.5" fill="#8b5cf6" />
-                <circle cx={pointX(index)} cy={pointY(point.actual)} r="4.5" fill="#06b6d4" />
-              </g>
-            ))}
-          </svg>
-          <div className={`mt-3 grid grid-cols-4 gap-2 text-[11px] ${themeColors.textMuted} lg:grid-cols-8`}>
-            {points.map((point) => (
-              <div key={point.label} className="text-center">{point.label}</div>
-            ))}
-          </div>
-        </div>
-      </div>
+      <ResponsiveContainer width="100%" height={260}>
+        <LineChart data={points}>
+          <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+          <XAxis dataKey="label" stroke={axisStroke} tick={{ fontSize: 11, fill: tickFill }} />
+          <YAxis stroke={axisStroke} tick={{ fontSize: 11, fill: tickFill }} />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: tooltipBg,
+              border: `1px solid ${tooltipBorder}`,
+              borderRadius: "8px",
+              color: tooltipColor,
+              fontSize: "12px",
+            }}
+          />
+          <Line type="monotone" dataKey="planned" name="予定数" stroke="#8b5cf6" strokeWidth={2} strokeDasharray="6 4" dot={{ r: 3 }} />
+          <Line type="monotone" dataKey="actual" name="実績数" stroke="#06b6d4" strokeWidth={2.4} dot={{ r: 3 }} />
+          <Legend wrapperStyle={{ fontSize: "11px", color: tickFill }} />
+        </LineChart>
+      </ResponsiveContainer>
       <div className={`mt-4 flex flex-wrap items-center gap-4 text-[12px] ${themeColors.textSecondary}`}>
         <span className="inline-flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full bg-violet-500" />
@@ -472,7 +607,7 @@ export function ProcessSummary() {
   const [filterAreaId, setFilterAreaId] = useState("all");
   const [filterProcessId, setFilterProcessId] = useState("all");
   const [filterKeyword, setFilterKeyword] = useState("");
-  const [planStore, setPlanStore] = useState<PlanStore>(() => readPlanStore());
+  const [planStore, setPlanStore] = useState<ProgressPlanStore>(() => readProgressPlanStore());
   const [selectedTrend, setSelectedTrend] = useState<TrendDialogState | null>(null);
 
   useEffect(() => {
@@ -495,10 +630,86 @@ export function ProcessSummary() {
 
   const today = toDateInput(now);
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
+  const deploymentStorageKey = useMemo(
+    () => buildFieldDeploymentStorageKey(siteScope.storageScopeKey),
+    [siteScope.storageScopeKey],
+  );
+  const storedDeploymentSnapshots = useMemo(
+    () => readDeploymentSnapshots(deploymentStorageKey),
+    [deploymentStorageKey],
+  );
 
   const workflowViews = useMemo(
-    () => buildWorkflowViews(workflows.filter((workflow) => workflow.siteId === selectedSiteId), shippers, areas, processes),
-    [workflows, selectedSiteId, shippers, areas, processes],
+    () => buildWorkflowViews(workflows.filter((workflow) => siteScope.siteIds.includes(workflow.siteId)), shippers, areas, processes),
+    [workflows, siteScope.siteIds, shippers, areas, processes],
+  );
+  const deploymentSteps = useMemo(
+    () => workflowViews.flatMap((workflow) => workflow.steps),
+    [workflowViews],
+  );
+  const deploymentTimeSlots = useMemo(() => {
+    const defaultLabels = createTimeSlots(DEPLOYMENT_INTERVAL_MINUTES);
+    const labels = sortTimeLabels(Object.keys(storedDeploymentSnapshots).filter((label) => /^\d{2}:\d{2}$/.test(label)));
+    return sortTimeLabels(Array.from(new Set([...defaultLabels, ...labels])));
+  }, [storedDeploymentSnapshots]);
+  const deploymentIntervalMinutes = useMemo(
+    () => detectSnapshotInterval(deploymentTimeSlots),
+    [deploymentTimeSlots],
+  );
+  const baseDeploymentSnapshot = useMemo(
+    () => buildBaseDeploymentSnapshot(deploymentSteps, DEPLOYMENT_WORKERS),
+    [deploymentSteps],
+  );
+  const seededDeploymentSnapshots = useMemo(
+    () =>
+      createSeededDeploymentSnapshots(
+        deploymentTimeSlots,
+        deploymentSteps,
+        DEPLOYMENT_WORKERS,
+        baseDeploymentSnapshot,
+      ),
+    [deploymentTimeSlots, deploymentSteps, baseDeploymentSnapshot],
+  );
+  const deploymentSnapshotsByTime = useMemo(
+    () =>
+      Object.fromEntries(
+        deploymentTimeSlots.map((timeLabel) => [
+          timeLabel,
+          materializeSnapshot(
+            storedDeploymentSnapshots[timeLabel] ?? seededDeploymentSnapshots[timeLabel] ?? {},
+            deploymentSteps,
+          ),
+        ]),
+      ) as Record<string, AssignmentSnapshot>,
+    [deploymentTimeSlots, storedDeploymentSnapshots, seededDeploymentSnapshots, deploymentSteps],
+  );
+  const submissionRecords = useMemo(
+    () =>
+      buildWorkerSubmissionRecords({
+        dateKey: selectedDate,
+        selectedSiteId,
+        sites,
+        workflows,
+        shippers,
+        areas,
+        processes,
+        now,
+      }),
+    [selectedDate, selectedSiteId, sites, workflows, shippers, areas, processes, now],
+  );
+  const submissionRecordsByStep = useMemo(() => {
+    const map = new Map<string, WorkerSubmissionRecord[]>();
+    submissionRecords.forEach((record) => {
+      const bucket = map.get(record.stepId) ?? [];
+      bucket.push(record);
+      map.set(record.stepId, bucket);
+    });
+    return map;
+  }, [submissionRecords]);
+  const reportedQuantityByStep = useMemo(
+    () => buildReportedQuantityMap(submissionRecords),
+    [submissionRecords],
   );
 
   const shipperOptions = useMemo(
@@ -531,16 +742,46 @@ export function ProcessSummary() {
   const workflowRows = useMemo(() => {
     return filteredWorkflows.map((workflow) => {
       const steps = workflow.steps.map((step) => {
-        const planned = dayPlans[step.id] ?? step.defaultPlanned;
-        const metrics = getStepMetrics(step, planned, selectedDate, today, nowMinutes);
-        const trend = buildStepTrend(step, planned, metrics.actual, selectedDate, today, nowMinutes);
-        return { ...step, ...metrics, trend };
+        const planValues = resolveStepPlanValues(dayPlans, step.id, {
+          planned: step.defaultPlanned,
+          startTime: step.startTime,
+          targetEndTime: step.targetEndTime,
+        });
+        const stepWithPlan = {
+          ...step,
+          planned: planValues.planned,
+          startTime: planValues.startTime,
+          targetEndTime: planValues.targetEndTime,
+        };
+        const metrics = getStepMetrics(
+          stepWithPlan,
+          planValues.planned,
+          reportedQuantityByStep.get(step.id) ?? 0,
+          selectedDate,
+          today,
+          nowMinutes,
+          deploymentTimeSlots,
+          deploymentIntervalMinutes,
+          deploymentSnapshotsByTime,
+        );
+        const trend = buildStepTrend(
+          stepWithPlan,
+          planValues.planned,
+          submissionRecordsByStep.get(step.id) ?? [],
+          selectedDate,
+          today,
+          nowMinutes,
+          deploymentTimeSlots,
+          deploymentIntervalMinutes,
+          deploymentSnapshotsByTime,
+        );
+        return { ...stepWithPlan, ...metrics, trend };
       });
 
       const totalPlanned = sum(steps.map((step) => step.planned));
       const totalActual = sum(steps.map((step) => step.actual));
       const totalRemaining = Math.max(0, totalPlanned - totalActual);
-      const averageProgress = totalPlanned > 0 ? Math.round((totalActual / totalPlanned) * 100) : 0;
+      const averageProgress = totalPlanned > 0 ? Math.min(100, Math.round((totalActual / totalPlanned) * 100)) : 0;
       const delayedCount = steps.filter((step) => step.status === "delayed").length;
       const trend = buildWorkflowTrend(steps.map((step) => step.trend));
       const status: StatusTone = totalPlanned === 0
@@ -567,7 +808,18 @@ export function ProcessSummary() {
         } satisfies WorkflowMetrics,
       };
     });
-  }, [filteredWorkflows, dayPlans, selectedDate, today, nowMinutes]);
+  }, [
+    filteredWorkflows,
+    dayPlans,
+    selectedDate,
+    today,
+    nowMinutes,
+    reportedQuantityByStep,
+    submissionRecordsByStep,
+    deploymentTimeSlots,
+    deploymentIntervalMinutes,
+    deploymentSnapshotsByTime,
+  ]);
 
   const processRows = useMemo(
     () => workflowRows.flatMap((workflow) => workflow.steps.map((step) => ({ ...step, workflowColor: workflow.color }))).filter((step) => filterProcessId === "all" || step.processId === filterProcessId),
@@ -592,7 +844,7 @@ export function ProcessSummary() {
       current.totalPlanned += workflow.metrics.totalPlanned;
       current.totalActual += workflow.metrics.totalActual;
       current.delayedCount += workflow.metrics.delayedCount;
-      current.averageProgress = current.totalPlanned > 0 ? Math.round((current.totalActual / current.totalPlanned) * 100) : 0;
+      current.averageProgress = current.totalPlanned > 0 ? Math.min(100, Math.round((current.totalActual / current.totalPlanned) * 100)) : 0;
       map.set(workflow.areaId, current);
     });
     return Array.from(map.values());
@@ -602,7 +854,7 @@ export function ProcessSummary() {
     const totalPlanned = sum(workflowRows.map((workflow) => workflow.metrics.totalPlanned));
     const totalActual = sum(workflowRows.map((workflow) => workflow.metrics.totalActual));
     const delayed = sum(workflowRows.map((workflow) => workflow.metrics.delayedCount));
-    const progress = totalPlanned > 0 ? Math.round((totalActual / totalPlanned) * 100) : 0;
+    const progress = totalPlanned > 0 ? Math.min(100, Math.round((totalActual / totalPlanned) * 100)) : 0;
     return [
       { label: "対象ワークフロー", value: workflowRows.length.toLocaleString("ja-JP"), suffix: "件", icon: Layers, color: "text-cyan-500" },
       { label: "対象工程", value: processRows.length.toLocaleString("ja-JP"), suffix: "件", icon: Package, color: "text-blue-500" },
@@ -615,23 +867,59 @@ export function ProcessSummary() {
 
   const handleWorkflowPlannedChange = (workflow: WorkflowView, value: number) => {
     const distributed = distributeWorkflowPlan(value, workflow.steps);
-    setPlanStore((prev) => ({
-      ...prev,
-      [selectedDate]: {
-        ...(prev[selectedDate] ?? {}),
-        ...distributed,
-      },
-    }));
+    setPlanStore((prev) => {
+      let nextStore = prev;
+      workflow.steps.forEach((step) => {
+        nextStore = updateStepPlanEntry(
+          nextStore,
+          selectedDate,
+          step.id,
+          { planned: distributed[step.id] ?? 0 },
+          {
+            planned: step.defaultPlanned,
+            startTime: step.startTime,
+            targetEndTime: step.targetEndTime,
+          },
+        );
+      });
+      return nextStore;
+    });
   };
 
   const handleProcessPlannedChange = (stepId: string, value: number) => {
-    setPlanStore((prev) => ({
-      ...prev,
-      [selectedDate]: {
-        ...(prev[selectedDate] ?? {}),
-        [stepId]: Math.max(0, value),
-      },
-    }));
+    const step = processRows.find((row) => row.id === stepId);
+    if (!step) return;
+    setPlanStore((prev) =>
+      updateStepPlanEntry(
+        prev,
+        selectedDate,
+        stepId,
+        { planned: Math.max(0, value) },
+        {
+          planned: step.defaultPlanned,
+          startTime: step.startTime,
+          targetEndTime: step.targetEndTime,
+        },
+      ),
+    );
+  };
+
+  const handleProcessTimeChange = (stepId: string, field: "startTime" | "targetEndTime", value: string) => {
+    const step = processRows.find((row) => row.id === stepId);
+    if (!step) return;
+    setPlanStore((prev) =>
+      updateStepPlanEntry(
+        prev,
+        selectedDate,
+        stepId,
+        { [field]: value } as Pick<typeof step, "startTime" | "targetEndTime">,
+        {
+          planned: step.defaultPlanned,
+          startTime: step.startTime,
+          targetEndTime: step.targetEndTime,
+        },
+      ),
+    );
   };
 
   const cardClass = `${c.bgCard} border ${c.border} rounded-3xl`;
@@ -842,12 +1130,12 @@ export function ProcessSummary() {
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 ${c.border}">
               <div>
                 <h2 className={`text-[15px] font-semibold ${c.textPrimary}`}>工程別進捗と予定数</h2>
-                <p className={`text-[12px] ${c.textSecondary}`}>工程単位で予定数を微調整し、全体の進捗を把握します</p>
+                <p className={`text-[12px] ${c.textSecondary}`}>工程単位で予定数・開始予定・終了予定を調整し、現場配置と同じ前提で進捗を把握します</p>
               </div>
               <div className={`text-[12px] ${c.textMuted}`}>{processRows.length} 工程表示</div>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-[1360px] w-full">
+              <table className="min-w-[1520px] w-full">
                 <thead>
                   <tr className={`border-b ${c.border}`}>
                     {[
@@ -855,6 +1143,8 @@ export function ProcessSummary() {
                       "工程",
                       "人員",
                       "予定数",
+                      "開始予定",
+                      "終了予定",
                       "実績",
                       "残数",
                       "進捗",
@@ -899,6 +1189,22 @@ export function ProcessSummary() {
                             className={`${inputClass} max-w-[140px]`}
                           />
                         </td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="time"
+                            value={step.startTime}
+                            onChange={(event) => handleProcessTimeChange(step.id, "startTime", event.target.value)}
+                            className={`${inputClass} max-w-[132px]`}
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="time"
+                            value={step.targetEndTime}
+                            onChange={(event) => handleProcessTimeChange(step.id, "targetEndTime", event.target.value)}
+                            className={`${inputClass} max-w-[132px]`}
+                          />
+                        </td>
                         <td className="px-4 py-3 text-[12px] font-semibold text-cyan-500 tabular-nums">{step.actual.toLocaleString("ja-JP")}</td>
                         <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{step.remaining.toLocaleString("ja-JP")}</td>
                         <td className="px-4 py-3 min-w-[170px]">
@@ -939,7 +1245,7 @@ export function ProcessSummary() {
                   })}
                   {processRows.length === 0 && (
                     <tr>
-                      <td colSpan={11} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致する工程がありません</td>
+                      <td colSpan={13} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致する工程がありません</td>
                     </tr>
                   )}
                 </tbody>

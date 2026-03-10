@@ -21,8 +21,9 @@ import {
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import { processColorClasses } from "./processStore";
-import { buildFieldDeploymentStorageKey } from "./fieldDeploymentStore";
-import { pushAssignmentChangeNotifications } from "./workerMobileStore";
+import { buildFieldDeploymentStorageKey, buildSiteScope } from "./fieldDeploymentStore";
+import { buildStepPlanDefaults, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
+import { buildReportedQuantityMap, buildWorkerSubmissionRecords, pushAssignmentChangeNotifications } from "./workerMobileStore";
 import type {
   AreaMaster,
   ProcessMaster,
@@ -32,8 +33,8 @@ import type {
   WorkflowDefinition,
 } from "./masterStore";
 
-const TIMELINE_START = 6 * 60;
-const TIMELINE_END = 20 * 60 + 30;
+const TIMELINE_START = 0;
+const TIMELINE_END = 24 * 60;
 const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
 const INTERVAL_OPTIONS = [15, 30, 60] as const;
 const PRODUCTION_EFFICIENCY = 0.82;
@@ -153,6 +154,14 @@ function formatTime(totalMinutes: number) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function formatPreciseTime(totalMinutes: number) {
+  const totalSeconds = Math.max(0, Math.round(totalMinutes * 60));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -198,7 +207,20 @@ function iconForProcess(processId: string, processName: string): LucideIcon {
   }
 }
 
-function buildPanels(workflows: WorkflowDefinition[], shippers: Shipper[], areas: AreaMaster[], processes: ProcessMaster[]): PanelView[] {
+function toDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function buildPanels(
+  workflows: WorkflowDefinition[],
+  shippers: Shipper[],
+  areas: AreaMaster[],
+  processes: ProcessMaster[],
+  dayPlans: Record<string, unknown>,
+): PanelView[] {
   const shipperMap = new Map(shippers.map((item) => [item.id, item]));
   const areaMap = new Map(areas.map((item) => [item.id, item]));
   const processMap = new Map(processes.map((item) => [item.id, item]));
@@ -218,9 +240,8 @@ function buildPanels(workflows: WorkflowDefinition[], shippers: Shipper[], areas
         const process = processMap.get(step.processId);
         const headcount = Math.max(step.standardHeadcount || process?.defaultHeadcount || 1, 1);
         const uph = step.uph || process?.defaultUph || 100;
-        const startMinutes = Math.min(TIMELINE_START + stepIndex * 90 + (workflowIndex % 2) * 15, TIMELINE_END - 90);
-        const targetEndMinutes = Math.min(startMinutes + 210 - stepIndex * 10, TIMELINE_END + 120);
-        const planned = Math.max(480, Math.round((headcount * uph * (1.7 + ((workflowIndex + stepIndex) % 3) * 0.35)) / 10) * 10);
+        const defaults = buildStepPlanDefaults(workflowIndex, stepIndex, headcount, uph);
+        const planValues = resolveStepPlanValues(dayPlans as Record<string, never>, `${workflow.id}:${step.id}`, defaults);
 
         return {
           id: `${workflow.id}:${step.id}`,
@@ -236,10 +257,10 @@ function buildPanels(workflows: WorkflowDefinition[], shippers: Shipper[], areas
           color: pickColor(workflowIndex + stepIndex),
           icon: iconForProcess(step.processId, process?.name ?? ""),
           headcount,
-          planned,
+          planned: planValues.planned,
           uph,
-          startTime: formatTime(startMinutes),
-          targetEndTime: formatTime(targetEndMinutes),
+          startTime: planValues.startTime,
+          targetEndTime: planValues.targetEndTime,
           requiredQualificationIds: step.requiredQualificationIds,
           requiredSkillIds: step.requiredSkillIds,
         };
@@ -259,6 +280,30 @@ function cloneSnapshot(snapshot: AssignmentSnapshot) {
 
 function countAssigned(snapshot: AssignmentSnapshot | undefined, stepId: string) {
   return (snapshot?.[stepId] ?? []).filter((workerId): workerId is string => Boolean(workerId)).length;
+}
+
+function countAssignedAtMinute(
+  stepId: string,
+  minute: number,
+  timeSlots: string[],
+  intervalMinutes: TimelineInterval,
+  snapshotsByTime: SnapshotsByTime,
+) {
+  const slotIndex = timeSlots.findIndex((timeLabel, index) => {
+    const slotStart = parseTime(timeLabel);
+    const slotEnd = index < timeSlots.length - 1
+      ? parseTime(timeSlots[index + 1])
+      : Math.min(24 * 60, slotStart + intervalMinutes);
+    return minute >= slotStart && minute < slotEnd;
+  });
+
+  if (slotIndex >= 0) {
+    return countAssigned(snapshotsByTime[timeSlots[slotIndex]], stepId);
+  }
+
+  const previousSlots = timeSlots.filter((timeLabel) => parseTime(timeLabel) <= minute);
+  const fallbackSlot = previousSlots[previousSlots.length - 1];
+  return fallbackSlot ? countAssigned(snapshotsByTime[fallbackSlot], stepId) : 0;
 }
 
 function findAssignedStepId(snapshot: AssignmentSnapshot, workerId: string) {
@@ -313,12 +358,23 @@ function buildBaseSnapshot(steps: StepTemplate[], workers: Worker[]) {
 
 function createSeededSnapshots(timeSlots: string[], steps: StepTemplate[], workers: Worker[], baseSnapshot: AssignmentSnapshot) {
   const snapshots: Record<string, AssignmentSnapshot> = {};
-  let previous = materializeSnapshot(baseSnapshot, steps);
+  const emptySnapshot = materializeSnapshot({}, steps);
+  const baseMaterializedSnapshot = materializeSnapshot(baseSnapshot, steps);
+  const earliestStartMinute = steps.length > 0 ? Math.min(...steps.map((step) => parseTime(step.startTime))) : 0;
+  const rawSeedStartIndex = timeSlots.findIndex((timeLabel) => parseTime(timeLabel) > earliestStartMinute);
+  const seedStartIndex = rawSeedStartIndex === -1 ? Math.max(timeSlots.length - 1, 0) : Math.max(rawSeedStartIndex - 1, 0);
+  let previous = emptySnapshot;
 
   timeSlots.forEach((timeLabel, index) => {
-    const next = cloneSnapshot(previous);
+    if (index < seedStartIndex) {
+      snapshots[timeLabel] = cloneSnapshot(emptySnapshot);
+      previous = snapshots[timeLabel];
+      return;
+    }
 
-    if (index > 0 && steps.length > 0) {
+    const next = cloneSnapshot(index === seedStartIndex ? baseMaterializedSnapshot : previous);
+
+    if (index > seedStartIndex && steps.length > 0) {
       if (index % 2 === 1 && steps.length > 1) {
         const sourceStep = steps[(index - 1) % steps.length];
         const targetStep = steps[index % steps.length];
@@ -363,74 +419,35 @@ function createSeededSnapshots(timeSlots: string[], steps: StepTemplate[], worke
   return snapshots;
 }
 
-function calcStepMetrics(step: StepView, referenceMinutes: number, timeSlots: string[], intervalMinutes: TimelineInterval, snapshotsByTime: SnapshotsByTime) {
-  const startMinutes = parseTime(step.startTime);
+function calcStepMetrics(
+  step: StepView,
+  referenceMinutes: number,
+  timeSlots: string[],
+  intervalMinutes: TimelineInterval,
+  snapshotsByTime: SnapshotsByTime,
+  actualReported = 0,
+) {
   const targetMinutes = parseTime(step.targetEndTime);
-  let actualRaw = 0;
-
-  timeSlots.forEach((timeLabel) => {
-    const slotStart = parseTime(timeLabel);
-    const slotEnd = Math.min(slotStart + intervalMinutes, 24 * 60);
-    if (slotEnd <= startMinutes || slotStart >= referenceMinutes) return;
-    const effectiveStart = Math.max(slotStart, startMinutes);
-    const effectiveEnd = Math.min(slotEnd, referenceMinutes);
-    if (effectiveEnd <= effectiveStart) return;
-    actualRaw += countAssigned(snapshotsByTime[timeLabel], step.id) * step.uph * PRODUCTION_EFFICIENCY * ((effectiveEnd - effectiveStart) / 60);
-  });
-
-  const actual = Math.min(step.planned, Math.round(actualRaw / 10) * 10);
+  const effectiveReferenceMinutes = Math.max(0, referenceMinutes);
+  const actual = Math.max(0, actualReported);
   const progress = step.planned > 0 ? Math.min(100, Math.round((actual / step.planned) * 100)) : 0;
-  let remainingRaw = Math.max(0, step.planned - actualRaw);
-  let etaMinutes: number | null = remainingRaw === 0 ? referenceMinutes : null;
-  const selectedIndex = Math.max(0, timeSlots.findIndex((timeLabel) => parseTime(timeLabel) === referenceMinutes));
-
-  if (remainingRaw > 0) {
-    for (let index = selectedIndex; index < timeSlots.length; index += 1) {
-      const slotStart = parseTime(timeSlots[index]);
-      const slotEnd = Math.min(slotStart + intervalMinutes, 24 * 60);
-      const effectiveStart = Math.max(slotStart, referenceMinutes);
-      const effectiveEnd = Math.max(effectiveStart, slotEnd);
-      const assignedCount = countAssigned(snapshotsByTime[timeSlots[index]], step.id);
-      if (assignedCount <= 0 || effectiveEnd <= effectiveStart) continue;
-
-      const hourlyCapacity = assignedCount * step.uph * PRODUCTION_EFFICIENCY;
-      const slotCapacity = hourlyCapacity * ((effectiveEnd - effectiveStart) / 60);
-      if (slotCapacity >= remainingRaw) {
-        etaMinutes = Math.ceil(effectiveStart + (remainingRaw / hourlyCapacity) * 60);
-        remainingRaw = 0;
-        break;
-      }
-
-      remainingRaw -= slotCapacity;
-    }
-  }
-
-  if (remainingRaw > 0 && timeSlots.length > 0) {
-    const lastTimeLabel = timeSlots[timeSlots.length - 1];
-    const tailStart = Math.max(referenceMinutes, parseTime(lastTimeLabel) + intervalMinutes);
-    const tailAssignedCount = countAssigned(snapshotsByTime[lastTimeLabel], step.id);
-    if (tailAssignedCount > 0 && tailStart < 24 * 60) {
-      const hourlyCapacity = tailAssignedCount * step.uph * PRODUCTION_EFFICIENCY;
-      const remainingMinutes = 24 * 60 - tailStart;
-      const tailCapacity = hourlyCapacity * (remainingMinutes / 60);
-      if (tailCapacity >= remainingRaw) {
-        etaMinutes = Math.ceil(tailStart + (remainingRaw / hourlyCapacity) * 60);
-        remainingRaw = 0;
-      }
-    }
-  }
-
-  const eta = remainingRaw === 0
+  const remaining = Math.max(0, step.planned - actual);
+  const totalUph = Math.max(0, step.assignedCount * step.uph);
+  const etaMinutes = remaining === 0
+    ? effectiveReferenceMinutes
+    : totalUph > 0
+      ? effectiveReferenceMinutes + (remaining / totalUph) * 60
+      : null;
+  const eta = remaining === 0
     ? "完了"
     : etaMinutes !== null
-      ? formatTime(Math.min(etaMinutes, 23 * 60 + 59))
-      : "--:--";
-  const remaining = Math.max(0, step.planned - actual);
+      ? formatPreciseTime(etaMinutes)
+      : "--:--:--";
   const recommended = remaining === 0
     ? step.assignedCount
-    : Math.max(1, Math.ceil((step.planned - actualRaw) / (step.uph * PRODUCTION_EFFICIENCY * Math.max((targetMinutes - referenceMinutes) / 60, 0.25))));
+    : Math.max(1, Math.ceil(remaining / (step.uph * Math.max((targetMinutes - effectiveReferenceMinutes) / 60, 0.25))));
   const shortage = Math.max(recommended - step.assignedCount, 0);
-  const overdue = eta !== "完了" && eta !== "--:--" && parseTime(eta) > targetMinutes;
+  const overdue = eta !== "完了" && eta !== "--:--:--" && parseTime(eta) > targetMinutes;
 
   return { actual, progress, eta, shortage, recommended, overdue };
 }
@@ -584,9 +601,36 @@ export function LiveCommand() {
   const qualificationMap = useMemo(() => new Map(qualifications.map((item) => [item.id, item])), [qualifications]);
   const skillMap = useMemo(() => new Map(skills.map((item) => [item.id, item])), [skills]);
   const workerMap = useMemo(() => new Map(MOCK_WORKERS.map((worker) => [worker.id, worker])), []);
+  const todayKey = useMemo(() => toDateInput(new Date()), []);
+  const planStore = useMemo(() => readProgressPlanStore(), []);
+  const dayPlans = useMemo(() => planStore[todayKey] ?? {}, [planStore, todayKey]);
+  const submissionRecords = useMemo(
+    () =>
+      buildWorkerSubmissionRecords({
+        dateKey: todayKey,
+        selectedSiteId,
+        sites,
+        workflows,
+        shippers,
+        areas,
+        processes,
+      }),
+    [todayKey, selectedSiteId, sites, workflows, shippers, areas, processes],
+  );
+  const reportedQuantityByStep = useMemo(
+    () => buildReportedQuantityMap(submissionRecords),
+    [submissionRecords],
+  );
   const timeSlots = useMemo(() => createTimeSlots(timelineInterval), [timelineInterval]);
-  const deploymentStorageKey = useMemo(() => buildFieldDeploymentStorageKey(selectedSiteId), [selectedSiteId]);
-  const adjustmentStorageKey = useMemo(() => buildAdjustmentStorageKey(selectedSiteId), [selectedSiteId]);
+  const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
+  const deploymentStorageKey = useMemo(
+    () => buildFieldDeploymentStorageKey(siteScope.storageScopeKey),
+    [siteScope.storageScopeKey],
+  );
+  const adjustmentStorageKey = useMemo(
+    () => buildAdjustmentStorageKey(siteScope.storageScopeKey),
+    [siteScope.storageScopeKey],
+  );
 
   useEffect(() => {
     if (timeSlots.includes(selectedTime)) return;
@@ -594,10 +638,10 @@ export function LiveCommand() {
     setSelectedTime(timeSlots.includes(currentSlot) ? currentSlot : (timeSlots[0] ?? currentSlot));
   }, [timeSlots, selectedTime, timelineInterval]);
 
-  const siteName = sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択";
+  const siteName = siteScope.siteName;
   const panels = useMemo(
-    () => buildPanels(workflows.filter((workflow) => workflow.siteId === selectedSiteId), shippers, areas, processes),
-    [workflows, selectedSiteId, shippers, areas, processes],
+    () => buildPanels(workflows.filter((workflow) => siteScope.siteIds.includes(workflow.siteId)), shippers, areas, processes, dayPlans),
+    [workflows, siteScope.siteIds, shippers, areas, processes, dayPlans],
   );
   const allSteps = useMemo(() => panels.flatMap((panel) => panel.steps), [panels]);
   const stepMap = useMemo(() => new Map(allSteps.map((step) => [step.id, step])), [allSteps]);
@@ -700,18 +744,78 @@ export function LiveCommand() {
     [panels, currentSnapshot],
   );
 
-  const shipperOptions = useMemo(
-    () => shippers.filter((shipper) => panelsWithSlots.some((panel) => panel.shipperId === shipper.id)),
-    [panelsWithSlots, shippers],
+  const shipperOptions = useMemo(() => {
+    const optionMap = new Map(
+      shippers
+        .filter((shipper) => panelsWithSlots.some((panel) => panel.shipperId === shipper.id))
+        .map((shipper) => [shipper.id, shipper] as const),
+    );
+    return Array.from(optionMap.values());
+  }, [panelsWithSlots, shippers]);
+
+  const panelsForAreaOptions = useMemo(
+    () => panelsWithSlots.filter((panel) => filterShipperId === "all" || panel.shipperId === filterShipperId),
+    [panelsWithSlots, filterShipperId],
   );
-  const areaOptions = useMemo(
-    () => areas.filter((area) => panelsWithSlots.some((panel) => panel.areaId === area.id)),
-    [panelsWithSlots, areas],
+
+  const areaOptions = useMemo(() => {
+    const duplicateNameCount = panelsForAreaOptions.reduce((map, panel) => {
+      map.set(panel.areaName, (map.get(panel.areaName) ?? 0) + 1);
+      return map;
+    }, new Map<string, number>());
+
+    const optionMap = new Map<string, { id: string; name: string; label: string }>();
+    panelsForAreaOptions.forEach((panel) => {
+      if (optionMap.has(panel.areaId)) return;
+      const hasDuplicateName = (duplicateNameCount.get(panel.areaName) ?? 0) > 1;
+      optionMap.set(panel.areaId, {
+        id: panel.areaId,
+        name: panel.areaName,
+        label: hasDuplicateName ? `${panel.areaName} / ${panel.shipperName}` : panel.areaName,
+      });
+    });
+
+    return Array.from(optionMap.values());
+  }, [panelsForAreaOptions]);
+
+  const panelsForProcessOptions = useMemo(
+    () =>
+      panelsWithSlots.filter((panel) => {
+        if (filterShipperId !== "all" && panel.shipperId !== filterShipperId) return false;
+        if (filterAreaId !== "all" && panel.areaId !== filterAreaId) return false;
+        return true;
+      }),
+    [panelsWithSlots, filterShipperId, filterAreaId],
   );
-  const processOptions = useMemo(
-    () => processes.filter((process) => panelsWithSlots.some((panel) => panel.steps.some((step) => step.processId === process.id))),
-    [panelsWithSlots, processes],
-  );
+
+  const processOptions = useMemo(() => {
+    const optionMap = new Map(
+      processes
+        .filter((process) =>
+          panelsForProcessOptions.some((panel) => panel.steps.some((step) => step.processId === process.id)),
+        )
+        .map((process) => [process.id, process] as const),
+    );
+    return Array.from(optionMap.values());
+  }, [panelsForProcessOptions, processes]);
+
+  useEffect(() => {
+    if (filterShipperId === "all") return;
+    if (shipperOptions.some((shipper) => shipper.id === filterShipperId)) return;
+    setFilterShipperId("all");
+  }, [filterShipperId, shipperOptions]);
+
+  useEffect(() => {
+    if (filterAreaId === "all") return;
+    if (areaOptions.some((area) => area.id === filterAreaId)) return;
+    setFilterAreaId("all");
+  }, [filterAreaId, areaOptions]);
+
+  useEffect(() => {
+    if (filterProcessId === "all") return;
+    if (processOptions.some((process) => process.id === filterProcessId)) return;
+    setFilterProcessId("all");
+  }, [filterProcessId, processOptions]);
 
   const filteredPanels = useMemo(() => {
     const keyword = filterKeyword.trim().toLowerCase();
@@ -736,23 +840,37 @@ export function LiveCommand() {
     [filteredPanels, selectedPanelId],
   );
 
-  const selectedMinutes = parseTime(selectedTime);
+  const systemReferenceMinutes = clamp(now.getHours() * 60 + now.getMinutes(), TIMELINE_START, TIMELINE_END);
   const metricsByStepId = useMemo(
     () => new Map(
       panelsWithSlots.flatMap((panel) => panel.steps.map((step) => [
         step.id,
-        calcStepMetrics(step, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime),
+        calcStepMetrics(
+          step,
+          systemReferenceMinutes,
+          timeSlots,
+          timelineInterval,
+          normalizedSnapshotsByTime,
+          reportedQuantityByStep.get(step.id) ?? 0,
+        ),
       ])),
     ),
-    [panelsWithSlots, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime],
+    [panelsWithSlots, systemReferenceMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime, reportedQuantityByStep],
   );
   const visibleSteps = useMemo(
     () => displayPanels.flatMap((panel) => panel.steps.map((step) => ({
       panel,
       step,
-      meta: metricsByStepId.get(step.id) ?? calcStepMetrics(step, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime),
+      meta: metricsByStepId.get(step.id) ?? calcStepMetrics(
+        step,
+        systemReferenceMinutes,
+        timeSlots,
+        timelineInterval,
+        normalizedSnapshotsByTime,
+        reportedQuantityByStep.get(step.id) ?? 0,
+      ),
     }))),
-    [displayPanels, metricsByStepId, normalizedSnapshotsByTime, selectedMinutes, timeSlots, timelineInterval],
+    [displayPanels, metricsByStepId, normalizedSnapshotsByTime, systemReferenceMinutes, timeSlots, timelineInterval, reportedQuantityByStep],
   );
   const adjustmentItems = useMemo(
     () => visibleSteps
@@ -791,7 +909,7 @@ export function LiveCommand() {
   const breakCount = breakWorkers.length;
   const absentCount = absentWorkers.length;
   const attendanceRate = Math.round((activeCount / MOCK_WORKERS.length) * 100);
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowMinutes = systemReferenceMinutes;
   const nowSlot = formatTime(floorTimeToSlot(nowMinutes, timelineInterval));
   const hasFilters = filterShipperId !== "all" || filterAreaId !== "all" || filterProcessId !== "all" || filterKeyword.trim().length > 0;
   const unsavedAdjustmentItems = useMemo(
@@ -908,10 +1026,10 @@ export function LiveCommand() {
     <div className={`flex h-full min-h-0 flex-col ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-50"}`}>
       <div className={`${c.bgCard} border-b ${c.border} px-5 py-4`}>
         <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-[190px] items-center gap-3">
             <Clock3 className={`h-5 w-5 ${c.textMuted}`} />
-            <div>
-              <div className={`text-[30px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+            <div className="w-[165px] shrink-0">
+              <div className={`w-full text-[30px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
                 {now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
               </div>
               <div className={`mt-1 text-[13px] ${c.textSecondary}`}>{now.toLocaleDateString("ja-JP")}</div>
@@ -996,7 +1114,7 @@ export function LiveCommand() {
           </select>
           <select value={filterAreaId} onChange={(event) => setFilterAreaId(event.target.value)} className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} rounded-xl border px-3 py-2 text-[12px] outline-none`}>
             <option value="all">エリア: すべて</option>
-            {areaOptions.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+            {areaOptions.map((area) => <option key={area.id} value={area.id}>{area.label}</option>)}
           </select>
           <select value={filterProcessId} onChange={(event) => setFilterProcessId(event.target.value)} className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} rounded-xl border px-3 py-2 text-[12px] outline-none`}>
             <option value="all">工程: すべて</option>
@@ -1139,7 +1257,6 @@ export function LiveCommand() {
                             <span className={`text-[18px] font-semibold ${c.textPrimary}`}>{panel.areaName}</span>
                             <span className={`rounded-full px-2 py-0.5 text-[10px] ${panelTone.bg} ${panelTone.text}`}>{panel.shipperName}</span>
                           </div>
-                          <div className={`text-[12px] ${c.textSecondary}`}>{panel.workflowName}</div>
                         </div>
                       </div>
                       <div className="flex items-center gap-4">
@@ -1151,7 +1268,7 @@ export function LiveCommand() {
                     <div className="grid gap-4 2xl:grid-cols-2">
                       {panel.steps.map((step) => {
                         const tone = processColorClasses[step.color] ?? processColorClasses.cyan;
-                        const meta = metricsByStepId.get(step.id) ?? calcStepMetrics(step, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime);
+                        const meta = metricsByStepId.get(step.id) ?? calcStepMetrics(step, systemReferenceMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime);
                         const requiredLabels = [
                           ...step.requiredSkillIds.map((id) => skillMap.get(id)?.name ?? ""),
                           ...step.requiredQualificationIds.map((id) => qualificationMap.get(id)?.name ?? ""),

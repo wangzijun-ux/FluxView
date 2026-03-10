@@ -1,12 +1,28 @@
-﻿import { Bell, ChevronDown, MapPin, Moon, RotateCcw, Sun, UserCircle2 } from "lucide-react";
+﻿import { Bell, ChevronDown, Moon, RotateCcw, Sun } from "lucide-react";
+import {
+  AppBar,
+  Avatar,
+  Badge,
+  Box,
+  Button,
+  FormControl,
+  IconButton,
+  MenuItem,
+  Select,
+  Stack,
+  Toolbar,
+  Typography,
+} from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import { useLocation, useNavigate } from "react-router";
 import { useMasterData } from "./MasterDataContext";
-import { useTheme, useThemeColors } from "./ThemeContext";
+import { useTheme } from "./ThemeContext";
 
 const pageLabels: Record<string, string> = {
   "/": "ダッシュボード",
   "/live-command": "現場配置",
   "/performance": "作業可視化",
+  "/submission-records": "送信実績",
   "/process-summary": "進捗管理",
   "/attendance": "勤怠管理",
   "/cost-analysis": "コスト分析",
@@ -22,6 +38,7 @@ const pageSubtitles: Record<string, string> = {
   "/": "当日の進捗とワークフロー状況を俯瞰します。",
   "/live-command": "時間帯ごとの人員配置を調整します。",
   "/performance": "現場配置の結果をワークフロー別・作業員別に可視化します。",
+  "/submission-records": "現場作業者が送信した実績ログを工程別に確認します。",
   "/process-summary": "全体把握と予定数管理を同じ画面で行います。",
   "/attendance": "勤務計画とシフト調整を行います。",
   "/cost-analysis": "雇用区分別の原価と予算差異を分析します。",
@@ -36,14 +53,11 @@ const pageSubtitles: Record<string, string> = {
 export function TopBar() {
   const location = useLocation();
   const navigate = useNavigate();
-  const c = useThemeColors();
   const { toggleTheme, isDark } = useTheme();
   const { sites, workflows, selectedSiteId, setSelectedSiteId } = useMasterData();
 
   const activeSite = sites.find((site) => site.id === selectedSiteId) ?? sites[0];
-  const workflowCount = activeSite
-    ? workflows.filter((workflow) => workflow.siteId === activeSite.id).length
-    : workflows.length;
+  const workflowCount = activeSite ? workflows.filter((workflow) => workflow.siteId === activeSite.id).length : workflows.length;
   const notificationCount = Math.max(1, workflowCount);
   const pageLabel = pageLabels[location.pathname] ?? "FluxView";
   const pageSubtitle = pageSubtitles[location.pathname] ?? `${activeSite?.name ?? "拠点未選択"} | ワークフロー ${workflowCount} 件`;
@@ -62,106 +76,139 @@ export function TopBar() {
   };
 
   return (
-    <header
-      className={`sticky top-0 z-40 shrink-0 border-b backdrop-blur-xl ${
-        isDark ? "border-[#232838] bg-[#0f1119]/92" : "border-slate-200/90 bg-white/92"
-      }`}
+    <AppBar
+      position="sticky"
+      color="transparent"
+      elevation={0}
+      sx={{
+        top: 0,
+        backdropFilter: "blur(14px)",
+        bgcolor: isDark ? alpha("#0f172a", 0.84) : alpha("#ffffff", 0.84),
+        borderBottom: 1,
+        borderColor: "divider",
+      }}
     >
-      <div className="flex h-[88px] items-center justify-between gap-4 px-5 md:px-6">
-        <div className="min-w-0">
-          <div className={`truncate text-base font-semibold ${c.textPrimary}`}>{pageLabel}</div>
-          <div className={`truncate text-xs ${c.textSecondary}`}>{pageSubtitle}</div>
-        </div>
+      <Toolbar
+        sx={{
+          minHeight: "88px !important",
+          px: { xs: 2, md: 3 },
+          gap: 2,
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <Box sx={{ minWidth: 0, pr: 2 }}>
+          <Typography variant="h6" noWrap>
+            {pageLabel}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" noWrap>
+            {pageSubtitle}
+          </Typography>
+        </Box>
 
-        <div className="flex items-center gap-2">
-          <div
-            className={`flex h-11 min-w-[260px] items-center gap-3 rounded-2xl border px-4 shadow-sm ${
-              isDark ? "border-[#2a3044] bg-[#171a24]" : "border-slate-200 bg-[#f6f7fb]"
-            }`}
-          >
-            <MapPin className={`h-4 w-4 shrink-0 ${isDark ? "text-cyan-300" : "text-cyan-600"}`} />
-            <div className="min-w-0 flex-1">
-              <div className={`text-[10px] uppercase tracking-[0.18em] ${c.textMuted}`}>Site</div>
-              <select
-                aria-label="site-selector"
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+          <Box sx={{ display: { xs: "none", md: "block" }, minWidth: 220 }}>
+            <FormControl size="small" fullWidth>
+              <Select
                 value={activeSite?.id ?? ""}
                 onChange={(event) => setSelectedSiteId(event.target.value)}
-                className={`w-full appearance-none bg-transparent pr-4 text-sm font-medium outline-none ${c.textPrimary}`}
+                IconComponent={ChevronDown as never}
+                sx={{
+                  minWidth: 220,
+                  borderRadius: 3,
+                  bgcolor: isDark ? alpha("#0f172a", 0.28) : alpha("#f8fafc", 0.92),
+                  fontSize: 14,
+                  fontWeight: 600,
+                  "& .MuiSelect-select": { py: 1.1, pr: 4 },
+                }}
               >
                 {sites.map((site) => (
-                  <option key={site.id} value={site.id}>
+                  <MenuItem key={site.id} value={site.id}>
                     {site.name}
-                  </option>
+                  </MenuItem>
                 ))}
-              </select>
-            </div>
-            <ChevronDown className={`h-4 w-4 shrink-0 ${c.textMuted}`} />
-          </div>
+              </Select>
+            </FormControl>
+          </Box>
 
-          <button
-            type="button"
-            aria-label="demo-reset"
+          <Button
             onClick={handleDemoReset}
-            className={`inline-flex h-11 items-center gap-2 rounded-2xl border px-4 text-sm font-medium transition-all ${
-              isDark
-                ? "border-rose-500/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/15"
-                : "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"
-            }`}
+            startIcon={<RotateCcw size={15} />}
+            variant="text"
+            color="inherit"
+            sx={{
+              minHeight: 40,
+              px: 1.25,
+              color: "text.secondary",
+              display: { xs: "none", xl: "inline-flex" },
+            }}
           >
-            <RotateCcw className="h-4 w-4" />
-            <span className="hidden xl:inline">データリセット</span>
-          </button>
+            データリセット
+          </Button>
 
-          <button
-            type="button"
-            aria-label="toggle-theme"
+          <IconButton
             onClick={toggleTheme}
-            className={`inline-flex h-11 w-11 items-center justify-center rounded-2xl border transition-all ${
-              isDark
-                ? "border-[#2a3044] bg-[#171a24] text-amber-300 hover:bg-[#1d2130]"
-                : "border-slate-200 bg-[#f6f7fb] text-slate-700 hover:bg-white"
-            }`}
+            sx={{
+              width: 40,
+              height: 40,
+              borderRadius: 3,
+              color: "text.secondary",
+              bgcolor: isDark ? alpha("#0f172a", 0.28) : alpha("#f8fafc", 0.92),
+              "&:hover": {
+                bgcolor: isDark ? alpha("#0f172a", 0.44) : alpha("#e2e8f0", 0.92),
+              },
+            }}
           >
-            {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
+            {isDark ? <Sun size={16} /> : <Moon size={16} />}
+          </IconButton>
 
-          <button
-            type="button"
-            aria-label="notifications"
+          <IconButton
             onClick={() => navigate("/notifications")}
-            className={`relative inline-flex h-11 w-11 items-center justify-center rounded-2xl border transition-all ${
-              isDark
-                ? "border-[#2a3044] bg-[#171a24] text-slate-200 hover:bg-[#1d2130]"
-                : "border-slate-200 bg-[#f6f7fb] text-slate-700 hover:bg-white"
-            }`}
+            sx={{
+              width: 40,
+              height: 40,
+              borderRadius: 3,
+              color: "text.secondary",
+              bgcolor: isDark ? alpha("#0f172a", 0.28) : alpha("#f8fafc", 0.92),
+              "&:hover": {
+                bgcolor: isDark ? alpha("#0f172a", 0.44) : alpha("#e2e8f0", 0.92),
+              },
+            }}
           >
-            <Bell className="h-4 w-4" />
-            <span className="absolute right-1.5 top-1.5 inline-flex min-w-[18px] items-center justify-center rounded-full bg-rose-500 px-1.5 text-[10px] font-bold text-white">
-              {notificationCount}
-            </span>
-          </button>
+            <Badge badgeContent={notificationCount} color="error" overlap="circular">
+              <Bell size={16} />
+            </Badge>
+          </IconButton>
 
-          <button
-            type="button"
-            aria-label="user-menu"
+          <Box
             onClick={() => navigate("/user-management")}
-            className={`inline-flex h-11 items-center gap-3 rounded-2xl border pl-2 pr-4 transition-all ${
-              isDark
-                ? "border-[#2a3044] bg-[#171a24] hover:bg-[#1d2130]"
-                : "border-slate-200 bg-[#f6f7fb] hover:bg-white"
-            }`}
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              minHeight: 40,
+              pl: 0.75,
+              pr: { xs: 0.75, md: 1.25 },
+              borderRadius: 3,
+              cursor: "pointer",
+              color: "text.primary",
+              "&:hover": {
+                bgcolor: isDark ? alpha("#0f172a", 0.32) : alpha("#e2e8f0", 0.56),
+              },
+            }}
           >
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-xs font-bold text-white">
-              AD
-            </span>
-            <span className="hidden text-left md:block">
-              <span className={`block text-sm font-semibold ${c.textPrimary}`}>Admin User</span>
-              <span className={`block text-[11px] ${c.textMuted}`}>Operations</span>
-            </span>
-            <UserCircle2 className={`hidden h-4 w-4 md:block ${c.textMuted}`} />
-          </button>
-        </div>
-      </div>
-    </header>
+            <Avatar sx={{ width: 32, height: 32, backgroundImage: "linear-gradient(135deg, #0891b2, #2563eb)" }}>AD</Avatar>
+            <Box sx={{ display: { xs: "none", md: "block" } }}>
+              <Typography variant="subtitle2" sx={{ lineHeight: 1.1, fontWeight: 700 }}>
+                Admin User
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                Operations
+              </Typography>
+            </Box>
+          </Box>
+        </Stack>
+      </Toolbar>
+    </AppBar>
   );
 }

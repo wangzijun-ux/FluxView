@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Clock3,
   Layers,
@@ -16,6 +16,7 @@ import {
   buildBaseDeploymentSnapshot,
   buildDeploymentWorkflows,
   buildFieldDeploymentStorageKey,
+  buildSiteScope,
   createSeededDeploymentSnapshots,
   createTimeSlots,
   materializeSnapshot,
@@ -119,6 +120,7 @@ function buildSegments(
     const endMinutes = index < sortedLabels.length - 1
       ? parseTimeLabel(sortedLabels[index + 1])
       : Math.min(MINUTES_IN_DAY, startMinutes + intervalMinutes);
+    if (endMinutes <= startMinutes) return;
     const snapshot = snapshotsByTime[timeLabel] ?? {};
 
     Object.entries(snapshot).forEach(([stepId, workerIds]) => {
@@ -223,20 +225,22 @@ function getWorkerRowHeight() {
 
 export function WorkPerformance() {
   const c = useThemeColors();
-  const { shippers, areas, processes, workflows, selectedSiteId } = useMasterData();
+  const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
   const [viewMode, setViewMode] = useState<ViewMode>("workflow");
   const [timeScale, setTimeScale] = useState<TimeScale>("30m");
   const [filterShipperId, setFilterShipperId] = useState("all");
   const [filterAreaId, setFilterAreaId] = useState("all");
   const [filterProcessId, setFilterProcessId] = useState("all");
   const [keyword, setKeyword] = useState("");
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  const storageKey = useMemo(() => buildFieldDeploymentStorageKey(selectedSiteId), [selectedSiteId]);
+  const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
+  const storageKey = useMemo(() => buildFieldDeploymentStorageKey(siteScope.storageScopeKey), [siteScope.storageScopeKey]);
   const workerMap = useMemo(() => new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker])), []);
 
   const workflowViews = useMemo(
-    () => buildDeploymentWorkflows(workflows.filter((workflow) => workflow.siteId === selectedSiteId), shippers, areas, processes),
-    [workflows, selectedSiteId, shippers, areas, processes],
+    () => buildDeploymentWorkflows(workflows.filter((workflow) => siteScope.siteIds.includes(workflow.siteId)), shippers, areas, processes),
+    [workflows, siteScope.siteIds, shippers, areas, processes],
   );
 
   const shipperOptions = useMemo(
@@ -288,7 +292,7 @@ export function WorkPerformance() {
   const storedSnapshots = useMemo(() => readStoredSnapshots(storageKey), [storageKey]);
   const snapshotLabels = useMemo(() => {
     const storedLabels = sortTimeLabels(Object.keys(storedSnapshots).filter((label) => /^\d{2}:\d{2}$/.test(label)));
-    return storedLabels.length > 0 ? storedLabels : defaultTimeLabels;
+    return sortTimeLabels(Array.from(new Set([...defaultTimeLabels, ...storedLabels])));
   }, [storedSnapshots, defaultTimeLabels]);
 
   const seededSnapshots = useMemo(() => {
@@ -372,6 +376,18 @@ export function WorkPerformance() {
   }, [segments, filteredWorkflows, allSteps]);
 
   const hasRows = viewMode === "workflow" ? workflowGroups.length > 0 : workerLanes.length > 0;
+
+  useEffect(() => {
+    const node = scrollRef.current;
+    if (!node || !hasRows) return;
+
+    const now = new Date();
+    const nowMinutes = Math.min(MINUTES_IN_DAY, now.getHours() * 60 + now.getMinutes());
+    const centerOffset = node.clientWidth / 2;
+    const timelineOffset = LABEL_COLUMN_WIDTH + minuteToPixels(nowMinutes, timelineWidth) - centerOffset;
+    const maxScrollLeft = Math.max(0, node.scrollWidth - node.clientWidth);
+    node.scrollLeft = Math.min(Math.max(0, timelineOffset), maxScrollLeft);
+  }, [timelineWidth, timeScale, hasRows]);
 
   const renderTimelineHeader = () => (
     <div
@@ -557,7 +573,7 @@ export function WorkPerformance() {
           </div>
         ) : (
           <div className={`${c.bgCard} ${c.border} h-full rounded-3xl border overflow-hidden`}>
-            <div className="h-full overflow-auto">
+            <div ref={scrollRef} className="h-full overflow-auto">
               <div style={{ width: `${tableWidth}px`, minWidth: `${tableWidth}px` }}>
                 {renderTimelineHeader()}
 

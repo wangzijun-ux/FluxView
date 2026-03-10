@@ -11,6 +11,7 @@ import { SettingsPage } from "./components/SettingsPage";
 import { UserManagement } from "./components/UserManagement";
 import { WorkerView } from "./components/WorkerView";
 import { LiveCommand } from "./components/LiveCommand";
+import { SubmissionRecords } from "./components/SubmissionRecords";
 import { ProcessSummary } from "./components/ProcessSummary";
 import { AttendanceManagement } from "./components/AttendanceManagement";
 import { Login } from "./components/Login";
@@ -28,6 +29,7 @@ export const router = createBrowserRouter([
       { path: "master-management", Component: MasterManagement },
       { path: "workflow-management", Component: WorkflowManagement },
       { path: "live-command", Component: LiveCommand },
+      { path: "submission-records", Component: SubmissionRecords },
       { path: "process-summary", Component: ProcessSummary },
       { path: "attendance", Component: AttendanceManagement },
       { path: "performance", Component: WorkPerformance },

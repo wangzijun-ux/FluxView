@@ -1,75 +1,41 @@
 ﻿import { useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, Filter, Plus, Route, Save, Search, Trash2, X } from "lucide-react";
-import { useThemeColors } from "./ThemeContext";
+import {
+  ArrowDown,
+  ArrowUp,
+  Filter,
+  Plus,
+  Route,
+  Save,
+  Search,
+  Trash2,
+} from "lucide-react";
+import {
+  alpha,
+  Autocomplete,
+  Box,
+  Button,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  IconButton,
+  InputAdornment,
+  MenuItem,
+  Paper,
+  Stack,
+  TextField,
+  Typography,
+  useTheme,
+} from "@mui/material";
 import { useMasterData } from "./MasterDataContext";
-import type { ProcessMaster, WorkflowDefinition, WorkflowStepSetting } from "./masterStore";
+import type { AreaMaster, ProcessMaster, WorkflowDefinition, WorkflowStepSetting } from "./masterStore";
 
 const makeId = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 const byUpdatedAtDesc = (a: WorkflowDefinition, b: WorkflowDefinition) =>
   new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-
-function MultiSelectChips({
-  options,
-  selectedIds,
-  onChange,
-  placeholder,
-}: {
-  options: Array<{ id: string; name: string }>;
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
-  placeholder: string;
-}) {
-  const c = useThemeColors();
-  const [open, setOpen] = useState(false);
-  const selected = options.filter((option) => selectedIds.includes(option.id));
-
-  const toggle = (id: string) => {
-    if (selectedIds.includes(id)) {
-      onChange(selectedIds.filter((x) => x !== id));
-      return;
-    }
-    onChange([...selectedIds, id]);
-  };
-
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        className={`w-full h-[40px] px-3 rounded-lg border ${c.borderCard} ${c.bgSurface} ${c.textSecondary} text-left text-[12px]`}
-      >
-        {selected.length === 0 ? placeholder : `${selected.length}件選択`}
-      </button>
-      {open && (
-        <div className={`absolute left-0 top-[44px] z-20 w-[300px] rounded-lg border ${c.border} ${c.bgCard} p-2 shadow-xl`}>
-          <div className="max-h-48 overflow-y-auto space-y-1">
-            {options.map((option) => {
-              const active = selectedIds.includes(option.id);
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  onClick={() => toggle(option.id)}
-                  className={`w-full text-left px-2 py-1.5 rounded-md text-[12px] ${
-                    active ? "bg-cyan-500/15 text-cyan-300" : `${c.textSecondary} ${c.bgCardHover}`
-                  }`}
-                >
-                  {option.name}
-                </button>
-              );
-            })}
-          </div>
-          <div className={`mt-2 pt-2 border-t ${c.borderCard} flex items-center justify-between`}>
-            <div className={`text-[11px] ${c.textMuted}`}>{selected.length}件選択中</div>
-            <button type="button" onClick={() => onChange([])} className="p-1 rounded text-rose-400 hover:bg-rose-500/10">
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+const VIRTUAL_AREA_PREFIX = "virtual-area:";
 
 function buildStepFromProcess(process: ProcessMaster): WorkflowStepSetting {
   return {
@@ -82,15 +48,88 @@ function buildStepFromProcess(process: ProcessMaster): WorkflowStepSetting {
   };
 }
 
+function formatUpdatedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("ja-JP", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function TagSelector({
+  label,
+  placeholder,
+  options,
+  selectedIds,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  options: Array<{ id: string; name: string }>;
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const theme = useTheme();
+  const selectedOptions = options.filter((option) => selectedIds.includes(option.id));
+  const selectorBorderColor =
+    theme.palette.mode === "dark" ? "rgba(42, 42, 62, 1)" : "rgba(229, 231, 235, 1)";
+  const selectorFieldSx = {
+    "& .MuiInputLabel-root": {
+      fontSize: 13,
+    },
+    "& .MuiOutlinedInput-root": {
+      minHeight: 40,
+      alignItems: "flex-start",
+      borderRadius: "10px",
+      fontSize: 13,
+      bgcolor:
+        theme.palette.mode === "dark"
+          ? "rgba(26, 26, 46, 0.84)"
+          : alpha(theme.palette.background.paper, 0.96),
+      "& fieldset": {
+        borderColor: selectorBorderColor,
+      },
+      "&:hover fieldset": {
+        borderColor:
+          theme.palette.mode === "dark" ? "rgba(56, 189, 248, 0.36)" : "rgba(37, 99, 235, 0.28)",
+      },
+      "&.Mui-focused fieldset": {
+        borderColor:
+          theme.palette.mode === "dark" ? "rgba(56, 189, 248, 0.58)" : "rgba(37, 99, 235, 0.54)",
+      },
+    },
+  } as const;
+
+  return (
+    <Autocomplete
+      multiple
+      size="small"
+      options={options}
+      value={selectedOptions}
+      disableCloseOnSelect
+      limitTags={2}
+      isOptionEqualToValue={(option, value) => option.id === value.id}
+      getOptionLabel={(option) => option.name}
+      onChange={(_, values) => onChange(values.map((value) => value.id))}
+      renderInput={(params) => <TextField {...params} label={label} placeholder={placeholder} sx={selectorFieldSx} />}
+      renderTags={(value, getTagProps) =>
+        value.map((option, index) => (
+          <Chip {...getTagProps({ index })} key={option.id} label={option.name} size="small" />
+        ))
+      }
+    />
+  );
+}
+
 export function WorkflowManagement() {
-  const c = useThemeColors();
-  const { shippers, sites, areas, qualifications, skills, processes, workflows, setWorkflows } = useMasterData();
+  const theme = useTheme();
+  const { shippers, sites, areas, setAreas, qualifications, skills, processes, workflows, setWorkflows } =
+    useMasterData();
 
   const [selectedWorkflowId, setSelectedWorkflowId] = useState("");
-  const [newName, setNewName] = useState("");
-  const [newShipperId, setNewShipperId] = useState("");
-  const [newSiteId, setNewSiteId] = useState("");
-  const [newAreaId, setNewAreaId] = useState("");
 
   const [filterShipperId, setFilterShipperId] = useState("all");
   const [filterSiteId, setFilterSiteId] = useState("all");
@@ -98,237 +137,1037 @@ export function WorkflowManagement() {
   const [filterProcessId, setFilterProcessId] = useState("all");
   const [filterKeyword, setFilterKeyword] = useState("");
 
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newShipperId, setNewShipperId] = useState("");
+  const [newSiteId, setNewSiteId] = useState("");
+  const [newAreaId, setNewAreaId] = useState("");
+
+  const [addStepDialogOpen, setAddStepDialogOpen] = useState(false);
+  const [newStepProcessId, setNewStepProcessId] = useState("");
+
   useEffect(() => {
     if (!newShipperId && shippers.length > 0) setNewShipperId(shippers[0].id);
   }, [newShipperId, shippers]);
 
   useEffect(() => {
-    const availableSites = sites.filter((s) => s.shipperId === newShipperId);
-    if (availableSites.length > 0) {
-      if (!availableSites.some((s) => s.id === newSiteId)) setNewSiteId(availableSites[0].id);
+    const availableSites = sites.filter((site) => site.shipperId === newShipperId);
+    if (availableSites.length === 0) {
+      setNewSiteId("");
       return;
     }
-    setNewSiteId("");
+    if (!availableSites.some((site) => site.id === newSiteId)) {
+      setNewSiteId(availableSites[0].id);
+    }
   }, [newShipperId, newSiteId, sites]);
 
   useEffect(() => {
-    const availableAreas = areas.filter((a) => a.siteId === newSiteId);
-    if (availableAreas.length > 0) {
-      if (!availableAreas.some((a) => a.id === newAreaId)) setNewAreaId(availableAreas[0].id);
-      return;
+    if (!newStepProcessId && processes.length > 0) {
+      setNewStepProcessId(processes[0].id);
     }
-    setNewAreaId("");
-  }, [newSiteId, newAreaId, areas]);
+  }, [newStepProcessId, processes]);
 
-  const shipperMap = useMemo(() => new Map(shippers.map((x) => [x.id, x])), [shippers]);
-  const siteMap = useMemo(() => new Map(sites.map((x) => [x.id, x])), [sites]);
-  const areaMap = useMemo(() => new Map(areas.map((x) => [x.id, x])), [areas]);
-  const processMap = useMemo(() => new Map(processes.map((x) => [x.id, x])), [processes]);
+  const shipperMap = useMemo(() => new Map(shippers.map((item) => [item.id, item])), [shippers]);
+  const siteMap = useMemo(() => new Map(sites.map((item) => [item.id, item])), [sites]);
+  const areaMap = useMemo(() => new Map(areas.map((item) => [item.id, item])), [areas]);
+  const processMap = useMemo(() => new Map(processes.map((item) => [item.id, item])), [processes]);
+  const createAreaOptions = useMemo(() => {
+    const selectedSite = sites.find((site) => site.id === newSiteId);
+    if (!selectedSite) return [] as Array<{ id: string; name: string; description: string }>;
 
-  const filteredSites = sites.filter((s) => filterShipperId === "all" || s.shipperId === filterShipperId);
-  const filteredAreas = areas.filter((a) => filterSiteId === "all" || a.siteId === filterSiteId);
+    const sameNameSiteIds = sites
+      .filter((site) => site.name === selectedSite.name)
+      .map((site) => site.id);
 
-  const filteredWorkflows = workflows
-    .filter((wf) => {
-      if (filterShipperId !== "all" && wf.shipperId !== filterShipperId) return false;
-      if (filterSiteId !== "all" && wf.siteId !== filterSiteId) return false;
-      if (filterAreaId !== "all" && wf.areaId !== filterAreaId) return false;
-      if (filterProcessId !== "all" && !wf.steps.some((s) => s.processId === filterProcessId)) return false;
-      if (!filterKeyword.trim()) return true;
-      const bag = `${wf.name} ${shipperMap.get(wf.shipperId)?.name ?? ""} ${siteMap.get(wf.siteId)?.name ?? ""} ${areaMap.get(wf.areaId)?.name ?? ""}`.toLowerCase();
-      return bag.includes(filterKeyword.toLowerCase());
-    })
-    .sort(byUpdatedAtDesc);
+    const optionMap = new Map<string, { id: string; name: string; description: string }>();
+    areas
+      .filter((area) => sameNameSiteIds.includes(area.siteId))
+      .forEach((area) => {
+        if (optionMap.has(area.name)) return;
+        const sameSiteArea = areas.find(
+          (candidate) => candidate.siteId === selectedSite.id && candidate.name === area.name,
+        );
+
+        optionMap.set(area.name, {
+          id: sameSiteArea?.id ?? `${VIRTUAL_AREA_PREFIX}${area.name}`,
+          name: area.name,
+          description: sameSiteArea?.description ?? area.description,
+        });
+      });
+
+    return Array.from(optionMap.values()).sort((a, b) =>
+      a.name.localeCompare(b.name, "ja-JP", { numeric: true, sensitivity: "base" }),
+    );
+  }, [areas, newSiteId, sites]);
 
   useEffect(() => {
-    if (filteredWorkflows.length > 0 && !filteredWorkflows.some((x) => x.id === selectedWorkflowId)) {
+    if (createAreaOptions.length === 0) {
+      setNewAreaId("");
+      return;
+    }
+    if (!createAreaOptions.some((area) => area.id === newAreaId)) {
+      setNewAreaId(createAreaOptions[0].id);
+    }
+  }, [createAreaOptions, newAreaId]);
+
+  const filteredSites = useMemo(
+    () => sites.filter((site) => filterShipperId === "all" || site.shipperId === filterShipperId),
+    [sites, filterShipperId],
+  );
+  const filteredAreas = useMemo(
+    () => areas.filter((area) => filterSiteId === "all" || area.siteId === filterSiteId),
+    [areas, filterSiteId],
+  );
+
+  useEffect(() => {
+    if (filterSiteId !== "all" && !filteredSites.some((site) => site.id === filterSiteId)) {
+      setFilterSiteId("all");
+    }
+  }, [filterSiteId, filteredSites]);
+
+  useEffect(() => {
+    if (filterAreaId !== "all" && !filteredAreas.some((area) => area.id === filterAreaId)) {
+      setFilterAreaId("all");
+    }
+  }, [filterAreaId, filteredAreas]);
+  const filteredWorkflows = useMemo(
+    () =>
+      workflows
+        .filter((workflow) => {
+          if (filterShipperId !== "all" && workflow.shipperId !== filterShipperId) return false;
+          if (filterSiteId !== "all" && workflow.siteId !== filterSiteId) return false;
+          if (filterAreaId !== "all" && workflow.areaId !== filterAreaId) return false;
+          if (filterProcessId !== "all" && !workflow.steps.some((step) => step.processId === filterProcessId)) {
+            return false;
+          }
+          if (!filterKeyword.trim()) return true;
+
+          const keyword = filterKeyword.trim().toLowerCase();
+          const bag =
+            `${workflow.name} ${shipperMap.get(workflow.shipperId)?.name ?? ""} ${
+              siteMap.get(workflow.siteId)?.name ?? ""
+            } ${areaMap.get(workflow.areaId)?.name ?? ""}`.toLowerCase();
+          return bag.includes(keyword);
+        })
+        .sort(byUpdatedAtDesc),
+    [
+      workflows,
+      filterShipperId,
+      filterSiteId,
+      filterAreaId,
+      filterProcessId,
+      filterKeyword,
+      shipperMap,
+      siteMap,
+      areaMap,
+    ],
+  );
+
+  useEffect(() => {
+    if (filteredWorkflows.length > 0 && !filteredWorkflows.some((workflow) => workflow.id === selectedWorkflowId)) {
       setSelectedWorkflowId(filteredWorkflows[0].id);
     }
-    if (filteredWorkflows.length === 0) setSelectedWorkflowId("");
+    if (filteredWorkflows.length === 0) {
+      setSelectedWorkflowId("");
+    }
   }, [filteredWorkflows, selectedWorkflowId]);
 
-  const selectedWorkflow = workflows.find((x) => x.id === selectedWorkflowId);
+  const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
+  const selectedWorkflowSites = selectedWorkflow
+    ? sites.filter((site) => site.shipperId === selectedWorkflow.shipperId)
+    : [];
+  const selectedWorkflowAreas = selectedWorkflow
+    ? areas.filter((area) => area.siteId === selectedWorkflow.siteId)
+    : [];
 
-  const updateWorkflow = (workflowId: string, mutate: (wf: WorkflowDefinition) => WorkflowDefinition) => {
-    setWorkflows((prev) => prev.map((wf) => (wf.id === workflowId ? { ...mutate(wf), updatedAt: new Date().toISOString() } : wf)));
+  const updateWorkflow = (workflowId: string, mutate: (workflow: WorkflowDefinition) => WorkflowDefinition) => {
+    setWorkflows((prev) =>
+      prev.map((workflow) =>
+        workflow.id === workflowId ? { ...mutate(workflow), updatedAt: new Date().toISOString() } : workflow,
+      ),
+    );
+  };
+
+  const updateWorkflowMeta = (
+    workflowId: string,
+    field: "name" | "shipperId" | "siteId" | "areaId",
+    value: string,
+  ) => {
+    updateWorkflow(workflowId, (workflow) => {
+      if (field === "name") {
+        return { ...workflow, name: value };
+      }
+
+      if (field === "shipperId") {
+        const nextSites = sites.filter((site) => site.shipperId === value);
+        const nextSiteId = nextSites.find((site) => site.id === workflow.siteId)?.id ?? nextSites[0]?.id ?? "";
+        const nextAreas = areas.filter((area) => area.siteId === nextSiteId);
+        const nextAreaId = nextAreas.find((area) => area.id === workflow.areaId)?.id ?? nextAreas[0]?.id ?? "";
+        return { ...workflow, shipperId: value, siteId: nextSiteId, areaId: nextAreaId };
+      }
+
+      if (field === "siteId") {
+        const nextAreas = areas.filter((area) => area.siteId === value);
+        const nextAreaId = nextAreas.find((area) => area.id === workflow.areaId)?.id ?? nextAreas[0]?.id ?? "";
+        return { ...workflow, siteId: value, areaId: nextAreaId };
+      }
+
+      return { ...workflow, areaId: value };
+    });
   };
 
   const createWorkflow = () => {
     if (!newShipperId || !newSiteId || !newAreaId) return;
-    const autoName = `${shipperMap.get(newShipperId)?.name ?? ""}_${siteMap.get(newSiteId)?.name ?? ""}_${areaMap.get(newAreaId)?.name ?? ""}`;
+
+    let nextAreaId = newAreaId;
+    if (newAreaId.startsWith(VIRTUAL_AREA_PREFIX)) {
+      const nextAreaName = newAreaId.replace(VIRTUAL_AREA_PREFIX, "");
+      const template = createAreaOptions.find((option) => option.id === newAreaId);
+      const createdArea: AreaMaster = {
+        id: makeId("area"),
+        siteId: newSiteId,
+        name: nextAreaName,
+        description: template?.description ?? `${nextAreaName}作業`,
+      };
+      setAreas((prev) => [...prev, createdArea]);
+      nextAreaId = createdArea.id;
+    }
+
+    const selectedAreaName =
+      createAreaOptions.find((option) => option.id === newAreaId)?.name ?? areaMap.get(nextAreaId)?.name ?? "";
+    const autoName = `${shipperMap.get(newShipperId)?.name ?? ""}_${siteMap.get(newSiteId)?.name ?? ""}_${
+      selectedAreaName
+    }`;
     const firstStepProcess = processes[0];
     const workflow: WorkflowDefinition = {
       id: makeId("workflow"),
       name: newName.trim() || autoName,
       shipperId: newShipperId,
       siteId: newSiteId,
-      areaId: newAreaId,
+      areaId: nextAreaId,
       steps: firstStepProcess ? [buildStepFromProcess(firstStepProcess)] : [],
       updatedAt: new Date().toISOString(),
     };
+
     setWorkflows((prev) => [workflow, ...prev]);
     setSelectedWorkflowId(workflow.id);
+    setCreateDialogOpen(false);
     setNewName("");
   };
 
   const deleteWorkflow = (workflowId: string) => {
-    setWorkflows((prev) => prev.filter((wf) => wf.id !== workflowId));
+    setWorkflows((prev) => prev.filter((workflow) => workflow.id !== workflowId));
   };
 
-  const addStep = (workflowId: string) => {
-    const defaultProcess = processes[0];
-    if (!defaultProcess) return;
-    updateWorkflow(workflowId, (wf) => ({ ...wf, steps: [...wf.steps, buildStepFromProcess(defaultProcess)] }));
+  const addStep = () => {
+    if (!selectedWorkflow || !newStepProcessId) return;
+    const process = processMap.get(newStepProcessId);
+    if (!process) return;
+
+    updateWorkflow(selectedWorkflow.id, (workflow) => ({
+      ...workflow,
+      steps: [...workflow.steps, buildStepFromProcess(process)],
+    }));
+    setAddStepDialogOpen(false);
   };
 
-  const updateStep = (workflowId: string, stepId: string, mutate: (step: WorkflowStepSetting) => WorkflowStepSetting) => {
-    updateWorkflow(workflowId, (wf) => ({ ...wf, steps: wf.steps.map((s) => (s.id === stepId ? mutate(s) : s)) }));
+  const updateStep = (stepId: string, mutate: (step: WorkflowStepSetting) => WorkflowStepSetting) => {
+    if (!selectedWorkflow) return;
+    updateWorkflow(selectedWorkflow.id, (workflow) => ({
+      ...workflow,
+      steps: workflow.steps.map((step) => (step.id === stepId ? mutate(step) : step)),
+    }));
   };
 
-  const removeStep = (workflowId: string, stepId: string) => {
-    updateWorkflow(workflowId, (wf) => ({ ...wf, steps: wf.steps.filter((s) => s.id !== stepId) }));
+  const removeStep = (stepId: string) => {
+    if (!selectedWorkflow) return;
+    updateWorkflow(selectedWorkflow.id, (workflow) => ({
+      ...workflow,
+      steps: workflow.steps.filter((step) => step.id !== stepId),
+    }));
   };
 
-  const moveStep = (workflowId: string, stepId: string, dir: "up" | "down") => {
-    updateWorkflow(workflowId, (wf) => {
-      const next = [...wf.steps];
-      const index = next.findIndex((s) => s.id === stepId);
-      if (index < 0) return wf;
-      const target = dir === "up" ? index - 1 : index + 1;
-      if (target < 0 || target >= next.length) return wf;
-      [next[index], next[target]] = [next[target], next[index]];
-      return { ...wf, steps: next };
+  const moveStep = (stepId: string, direction: "up" | "down") => {
+    if (!selectedWorkflow) return;
+    updateWorkflow(selectedWorkflow.id, (workflow) => {
+      const nextSteps = [...workflow.steps];
+      const index = nextSteps.findIndex((step) => step.id === stepId);
+      if (index < 0) return workflow;
+      const target = direction === "up" ? index - 1 : index + 1;
+      if (target < 0 || target >= nextSteps.length) return workflow;
+      [nextSteps[index], nextSteps[target]] = [nextSteps[target], nextSteps[index]];
+      return { ...workflow, steps: nextSteps };
     });
   };
 
-  const inputClass = `${c.bgSurface} border ${c.borderCard} rounded-lg px-3 py-2.5 text-[13px] ${c.textPrimary} placeholder:${c.textDimmed} focus:border-cyan-500/50 outline-none`;
-  const cardClass = `${c.bgCard} border ${c.border} rounded-xl p-4`;
-  const actionButtonClass = "rounded-lg bg-cyan-600 text-white text-[13px] font-semibold px-4 py-2 hover:bg-cyan-500 transition-all";
+  const borderColor = theme.palette.mode === "dark" ? "rgba(42, 42, 62, 1)" : "rgba(229, 231, 235, 1)";
+  const headerBackground = alpha(
+    theme.palette.background.default,
+    theme.palette.mode === "dark" ? 0.32 : 0.72,
+  );
+  const fieldBackground =
+    theme.palette.mode === "dark"
+      ? "rgba(26, 26, 46, 0.84)"
+      : alpha(theme.palette.background.paper, 0.96);
+  const panelSx = {
+    borderRadius: "16px",
+    bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.92 : 0.98),
+    border: `1px solid ${borderColor}`,
+    boxShadow: "none",
+  } as const;
+  const childCardSx = {
+    borderRadius: "14px",
+    border: `1px solid ${borderColor}`,
+    boxShadow: "none",
+  } as const;
+  const titleBarSx = {
+    px: 2.25,
+    py: 1.75,
+    borderBottom: `1px solid ${borderColor}`,
+    bgcolor: headerBackground,
+  } as const;
+  const dialogTitleSx = {
+    ...titleBarSx,
+    px: 2.5,
+    py: 1.75,
+  } as const;
+  const dialogContentSx = {
+    px: 2.5,
+    pt: 2.25,
+    pb: 2.5,
+    display: "grid",
+    gap: 1.5,
+  } as const;
+  const dialogActionsSx = {
+    px: 2.5,
+    py: 1.5,
+    borderTop: `1px solid ${borderColor}`,
+    bgcolor: alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.18 : 0.4),
+  } as const;
+  const dialogFieldGroupSx = {
+    display: "grid",
+    gap: 0.75,
+  } as const;
+  const fieldSx = {
+    "& .MuiInputLabel-root": {
+      fontSize: 13,
+    },
+    "& .MuiOutlinedInput-root": {
+      minHeight: 40,
+      borderRadius: "10px",
+      fontSize: 13,
+      bgcolor: fieldBackground,
+      "& fieldset": {
+        borderColor,
+      },
+      "&:hover fieldset": {
+        borderColor:
+          theme.palette.mode === "dark" ? "rgba(56, 189, 248, 0.36)" : "rgba(37, 99, 235, 0.28)",
+      },
+      "&.Mui-focused fieldset": {
+        borderColor:
+          theme.palette.mode === "dark" ? "rgba(56, 189, 248, 0.58)" : "rgba(37, 99, 235, 0.54)",
+      },
+    },
+  } as const;
+  const buttonBaseSx = {
+    minHeight: 40,
+    px: 2,
+    borderRadius: "10px",
+    fontSize: 13,
+    fontWeight: 700,
+    lineHeight: 1,
+    whiteSpace: "nowrap",
+    boxShadow: "none",
+  } as const;
+  const primaryButtonSx = {
+    ...buttonBaseSx,
+    "&:hover": {
+      boxShadow: "none",
+    },
+  } as const;
+  const outlinedButtonSx = {
+    ...buttonBaseSx,
+    borderColor,
+    color: theme.palette.text.primary,
+    bgcolor: alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.12 : 0.5),
+    "&:hover": {
+      borderColor: theme.palette.primary.main,
+      bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.1 : 0.05),
+    },
+  } as const;
+  const dangerButtonSx = {
+    ...buttonBaseSx,
+    borderColor: alpha(theme.palette.error.main, 0.38),
+    color: theme.palette.error.main,
+    bgcolor: alpha(theme.palette.error.main, theme.palette.mode === "dark" ? 0.08 : 0.03),
+    "&:hover": {
+      borderColor: alpha(theme.palette.error.main, 0.62),
+      bgcolor: alpha(theme.palette.error.main, theme.palette.mode === "dark" ? 0.14 : 0.06),
+    },
+  } as const;
+  const iconButtonSx = {
+    width: 36,
+    height: 36,
+    borderRadius: "10px",
+    border: `1px solid ${borderColor}`,
+    bgcolor: alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.12 : 0.56),
+    color: theme.palette.text.secondary,
+    "&:hover": {
+      borderColor: theme.palette.primary.main,
+      bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.1 : 0.05),
+      color: theme.palette.text.primary,
+    },
+    "&.Mui-disabled": {
+      borderColor,
+    },
+  } as const;
+  const dangerIconButtonSx = {
+    ...iconButtonSx,
+    borderColor: alpha(theme.palette.error.main, 0.34),
+    color: alpha(theme.palette.error.main, 0.92),
+    "&:hover": {
+      borderColor: alpha(theme.palette.error.main, 0.6),
+      bgcolor: alpha(theme.palette.error.main, theme.palette.mode === "dark" ? 0.14 : 0.06),
+      color: theme.palette.error.main,
+    },
+  } as const;
 
   return (
-    <div className="p-6 h-full flex flex-col gap-4">
-      <div className={`${cardClass} space-y-3`}>
-        <div className="flex items-center gap-2 text-[13px] font-semibold"><Filter className="w-4 h-4" />フィルター</div>
-        <div className="grid md:grid-cols-5 gap-3">
-          <select value={filterShipperId} onChange={(e) => setFilterShipperId(e.target.value)} className={inputClass}><option value="all">荷主: すべて</option>{shippers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
-          <select value={filterSiteId} onChange={(e) => setFilterSiteId(e.target.value)} className={inputClass}><option value="all">拠点: すべて</option>{filteredSites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
-          <select value={filterAreaId} onChange={(e) => setFilterAreaId(e.target.value)} className={inputClass}><option value="all">エリア: すべて</option>{filteredAreas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-          <select value={filterProcessId} onChange={(e) => setFilterProcessId(e.target.value)} className={inputClass}><option value="all">工程: すべて</option>{processes.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-          <div className={`flex items-center gap-2 h-[40px] px-3 rounded-lg border ${c.borderCard} ${c.bgSurface}`}><Search className={`w-4 h-4 ${c.textMuted}`} /><input value={filterKeyword} onChange={(e) => setFilterKeyword(e.target.value)} placeholder="キーワード" className={`w-full bg-transparent text-[13px] ${c.textPrimary} outline-none`} /></div>
-        </div>
-      </div>
+    <Box sx={{ display: "grid", gap: 2, p: { xs: 2, md: 2.5 }, height: "100%", minHeight: 0 }}>
+      <Paper sx={panelSx}>
+        <Stack
+          direction={{ xs: "column", lg: "row" }}
+          justifyContent="space-between"
+          spacing={2}
+          sx={titleBarSx}
+        >
+          <Box>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Filter size={16} />
+              <Typography variant="subtitle1" fontWeight={700}>
+                絞り込み
+              </Typography>
+            </Stack>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              一覧を絞り込んで対象ワークフローを選択します。
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1}>
+            <Chip label={`${filteredWorkflows.length} 件表示`} color="primary" variant="outlined" />
+            <Button
+              variant="contained"
+              startIcon={<Plus size={16} />}
+              onClick={() => setCreateDialogOpen(true)}
+              sx={primaryButtonSx}
+            >
+              新規作成
+            </Button>
+          </Stack>
+        </Stack>
 
-      <div className={`${cardClass} space-y-3`}>
-        <div className="text-[13px] font-semibold">新規ワークフロー</div>
-        <div className="grid md:grid-cols-5 gap-3">
-          <select value={newShipperId} onChange={(e) => setNewShipperId(e.target.value)} className={inputClass}><option value="">荷主を選択</option>{shippers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
-          <select value={newSiteId} onChange={(e) => setNewSiteId(e.target.value)} className={inputClass}><option value="">拠点を選択</option>{sites.filter((s) => s.shipperId === newShipperId).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
-          <select value={newAreaId} onChange={(e) => setNewAreaId(e.target.value)} className={inputClass}><option value="">エリアを選択</option>{areas.filter((a) => a.siteId === newSiteId).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-          <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="名前(任意)" className={inputClass} />
-          <button onClick={createWorkflow} className={actionButtonClass}><Plus className="w-4 h-4 inline mr-1" />作成</button>
-        </div>
-      </div>
+        <Box
+          sx={{
+            p: { xs: 2, md: 2.25 },
+            display: "grid",
+            gap: 1.25,
+            gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))", xl: "repeat(5, minmax(0, 1fr))" },
+          }}
+        >
+          <TextField
+            select
+            size="small"
+            label="荷主"
+            value={filterShipperId}
+            onChange={(event) => setFilterShipperId(event.target.value)}
+            sx={fieldSx}
+          >
+            <MenuItem value="all">すべて</MenuItem>
+            {shippers.map((shipper) => (
+              <MenuItem key={shipper.id} value={shipper.id}>
+                {shipper.name}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            select
+            size="small"
+            label="拠点"
+            value={filterSiteId}
+            onChange={(event) => setFilterSiteId(event.target.value)}
+            sx={fieldSx}
+          >
+            <MenuItem value="all">すべて</MenuItem>
+            {filteredSites.map((site) => (
+              <MenuItem key={site.id} value={site.id}>
+                {site.name}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            select
+            size="small"
+            label="エリア"
+            value={filterAreaId}
+            onChange={(event) => setFilterAreaId(event.target.value)}
+            sx={fieldSx}
+          >
+            <MenuItem value="all">すべて</MenuItem>
+            {filteredAreas.map((area) => (
+              <MenuItem key={area.id} value={area.id}>
+                {area.name}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            select
+            size="small"
+            label="工程"
+            value={filterProcessId}
+            onChange={(event) => setFilterProcessId(event.target.value)}
+            sx={fieldSx}
+          >
+            <MenuItem value="all">すべて</MenuItem>
+            {processes.map((process) => (
+              <MenuItem key={process.id} value={process.id}>
+                {process.name}
+              </MenuItem>
+            ))}
+          </TextField>
+          <TextField
+            size="small"
+            label="キーワード"
+            value={filterKeyword}
+            onChange={(event) => setFilterKeyword(event.target.value)}
+            placeholder="ワークフロー名で検索"
+            sx={fieldSx}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <Search size={16} />
+                </InputAdornment>
+              ),
+            }}
+          />
+        </Box>
+      </Paper>
+      <Box
+        sx={{
+          display: "grid",
+          gap: 2,
+          minHeight: 0,
+          flex: 1,
+          gridTemplateColumns: { xs: "1fr", xl: "340px minmax(0, 1fr)" },
+        }}
+      >
+        <Paper sx={{ ...panelSx, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <Box sx={titleBarSx}>
+            <Typography variant="subtitle1" fontWeight={700}>
+              ワークフロー一覧
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              更新順 / クリックで右側に詳細表示
+            </Typography>
+          </Box>
+          <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", p: 1.25 }}>
+            <Stack spacing={1}>
+              {filteredWorkflows.map((workflow) => {
+                const active = workflow.id === selectedWorkflowId;
+                return (
+                  <Box
+                    key={workflow.id}
+                    onClick={() => setSelectedWorkflowId(workflow.id)}
+                    sx={{
+                      p: 1.25,
+                      ...childCardSx,
+                      borderColor: active ? theme.palette.primary.main : borderColor,
+                      bgcolor: active ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.14 : 0.08) : "transparent",
+                      cursor: "pointer",
+                      transition: "background-color 160ms ease, border-color 160ms ease",
+                      "&:hover": {
+                        bgcolor: active
+                          ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.11)
+                          : alpha(theme.palette.primary.main, 0.04),
+                      },
+                    }}
+                  >
+                    <Stack direction="row" justifyContent="space-between" spacing={1.5}>
+                      <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="subtitle2" noWrap>
+                          {workflow.name}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap>
+                          {shipperMap.get(workflow.shipperId)?.name ?? "-"}
+                        </Typography>
+                      </Box>
+                      <Chip
+                        label={`${workflow.steps.length}工程`}
+                        size="small"
+                        color={active ? "primary" : "default"}
+                        variant={active ? "filled" : "outlined"}
+                      />
+                    </Stack>
+                    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
+                      <Chip label={siteMap.get(workflow.siteId)?.name ?? "-"} size="small" variant="outlined" />
+                      <Chip label={areaMap.get(workflow.areaId)?.name ?? "-"} size="small" variant="outlined" />
+                    </Stack>
+                    <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+                      更新 {formatUpdatedAt(workflow.updatedAt)}
+                    </Typography>
+                  </Box>
+                );
+              })}
+              {filteredWorkflows.length === 0 && (
+                <Box
+                  sx={{
+                    py: 8,
+                    textAlign: "center",
+                    ...childCardSx,
+                  }}
+                >
+                  <Typography variant="body2" color="text.secondary">
+                    条件に一致するワークフローがありません
+                  </Typography>
+                </Box>
+              )}
+            </Stack>
+          </Box>
+        </Paper>
 
-      <div className="grid lg:grid-cols-[380px_1fr] gap-4 min-h-0">
-        <div className={`${cardClass} min-h-[440px] overflow-hidden`}>
-          <div className="text-[13px] font-semibold mb-3">ワークフロー一覧 ({filteredWorkflows.length})</div>
-          <div className="overflow-auto max-h-[600px]">
-            <table className="w-full min-w-[340px]">
-              <thead>
-                <tr className={`border-b ${c.border}`}>
-                  <th className={`py-2 text-left text-[12px] ${c.textMuted}`}>名称</th>
-                  <th className={`py-2 text-right text-[12px] ${c.textMuted}`}>工程</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredWorkflows.map((wf) => {
-                  const active = wf.id === selectedWorkflowId;
-                  return (
-                    <tr key={wf.id} onClick={() => setSelectedWorkflowId(wf.id)} className={`cursor-pointer border-b ${c.borderCard} ${active ? "bg-cyan-500/10" : ""}`}>
-                      <td className="py-2 pr-2">
-                        <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{wf.name}</div>
-                        <div className={`text-[11px] ${c.textMuted}`}>{shipperMap.get(wf.shipperId)?.name ?? "-"}</div>
-                      </td>
-                      <td className={`py-2 text-right text-[12px] ${c.textSecondary}`}>{wf.steps.length}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <Paper sx={{ ...panelSx, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {!selectedWorkflow ? (
+            <Box sx={{ flex: 1, display: "grid", placeItems: "center", px: 3 }}>
+              <Box sx={{ textAlign: "center", maxWidth: 420 }}>
+                <Route size={28} />
+                <Typography variant="h6" sx={{ mt: 1.5 }}>
+                  ワークフローを選択してください
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  左の一覧から対象を選ぶと、基本情報と工程順序をまとめて編集できます。
+                </Typography>
+              </Box>
+            </Box>
+          ) : (
+            <>
+              <Box sx={titleBarSx}>
+                <Stack direction={{ xs: "column", lg: "row" }} justifyContent="space-between" spacing={1.75}>
+                  <Box>
+                    <Typography variant="h6">{selectedWorkflow.name}</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                      {shipperMap.get(selectedWorkflow.shipperId)?.name ?? "-"} / {siteMap.get(selectedWorkflow.siteId)?.name ?? "-"} / {areaMap.get(selectedWorkflow.areaId)?.name ?? "-"}
+                    </Typography>
+                  </Box>
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      variant="outlined"
+                      startIcon={<Plus size={16} />}
+                      onClick={() => setAddStepDialogOpen(true)}
+                      sx={outlinedButtonSx}
+                    >
+                      工程追加
+                    </Button>
+                    <Button
+                      color="error"
+                      variant="outlined"
+                      startIcon={<Trash2 size={16} />}
+                      onClick={() => deleteWorkflow(selectedWorkflow.id)}
+                      sx={dangerButtonSx}
+                    >
+                      削除
+                    </Button>
+                  </Stack>
+                </Stack>
+              </Box>
 
-        <div className={`${cardClass} min-h-[440px]`}>
-          {!selectedWorkflow && <div className={`h-full flex items-center justify-center ${c.textSecondary}`}>ワークフローを選択してください</div>}
-
-          {selectedWorkflow && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className={`${c.textPrimary} font-bold text-lg`}>{selectedWorkflow.name}</div>
-                  <div className={`text-[12px] ${c.textSecondary} mt-1`}>{shipperMap.get(selectedWorkflow.shipperId)?.name ?? "-"} / {siteMap.get(selectedWorkflow.siteId)?.name ?? "-"} / {areaMap.get(selectedWorkflow.areaId)?.name ?? "-"}</div>
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => addStep(selectedWorkflow.id)} className="px-3 py-2 rounded-lg bg-cyan-600 text-white text-[13px] hover:bg-cyan-500 transition-all"><Plus className="w-4 h-4 inline mr-1" />工程追加</button>
-                  <button onClick={() => deleteWorkflow(selectedWorkflow.id)} className="px-3 py-2 rounded-lg border border-rose-500 text-rose-500 text-[13px] hover:bg-rose-500/10 transition-all"><Trash2 className="w-4 h-4 inline mr-1" />削除</button>
-                </div>
-              </div>
-
-              <div className="overflow-auto">
-                <table className="w-full min-w-[980px]">
-                  <thead>
-                    <tr className={`border-b ${c.border}`}>
-                      <th className={`px-2 py-2 text-left text-[12px] ${c.textMuted}`}>#</th>
-                      <th className={`px-2 py-2 text-left text-[12px] ${c.textMuted}`}>工程</th>
-                      <th className={`px-2 py-2 text-left text-[12px] ${c.textMuted}`}>人数</th>
-                      <th className={`px-2 py-2 text-left text-[12px] ${c.textMuted}`}>UPH</th>
-                      <th className={`px-2 py-2 text-left text-[12px] ${c.textMuted}`}>資格</th>
-                      <th className={`px-2 py-2 text-left text-[12px] ${c.textMuted}`}>スキル</th>
-                      <th className={`px-2 py-2 text-right text-[12px] ${c.textMuted}`}>操作</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedWorkflow.steps.map((step, index) => (
-                      <tr key={step.id} className={`border-b ${c.borderCard}`}>
-                        <td className={`px-2 py-2 text-[12px] ${c.textSecondary}`}>{index + 1}</td>
-                        <td className="px-2 py-2">
-                          <select value={step.processId} onChange={(e) => {
-                            const process = processMap.get(e.target.value);
-                            updateStep(selectedWorkflow.id, step.id, (src) => ({
-                              ...src,
-                              processId: e.target.value,
-                              requiredQualificationIds: process?.defaultQualificationIds ?? src.requiredQualificationIds,
-                              requiredSkillIds: process?.defaultSkillIds ?? src.requiredSkillIds,
-                              standardHeadcount: process?.defaultHeadcount ?? src.standardHeadcount,
-                              uph: process?.defaultUph ?? src.uph,
-                            }));
-                          }} className={`${inputClass} w-[180px]`}>
-                            {processes.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          </select>
-                        </td>
-                        <td className="px-2 py-2"><input type="number" value={step.standardHeadcount} onChange={(e) => updateStep(selectedWorkflow.id, step.id, (src) => ({ ...src, standardHeadcount: Number(e.target.value) || 1 }))} className={`${inputClass} w-[100px]`} /></td>
-                        <td className="px-2 py-2"><input type="number" value={step.uph} onChange={(e) => updateStep(selectedWorkflow.id, step.id, (src) => ({ ...src, uph: Number(e.target.value) || 0 }))} className={`${inputClass} w-[100px]`} /></td>
-                        <td className="px-2 py-2"><MultiSelectChips options={qualifications} selectedIds={step.requiredQualificationIds} onChange={(values) => updateStep(selectedWorkflow.id, step.id, (src) => ({ ...src, requiredQualificationIds: values }))} placeholder="資格を選択" /></td>
-                        <td className="px-2 py-2"><MultiSelectChips options={skills} selectedIds={step.requiredSkillIds} onChange={(values) => updateStep(selectedWorkflow.id, step.id, (src) => ({ ...src, requiredSkillIds: values }))} placeholder="スキルを選択" /></td>
-                        <td className="px-2 py-2 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => moveStep(selectedWorkflow.id, step.id, "up")} className={`p-2 rounded-lg border ${c.border}`} disabled={index === 0}><ArrowUp className="w-4 h-4" /></button>
-                            <button onClick={() => moveStep(selectedWorkflow.id, step.id, "down")} className={`p-2 rounded-lg border ${c.border}`} disabled={index === selectedWorkflow.steps.length - 1}><ArrowDown className="w-4 h-4" /></button>
-                            <button onClick={() => removeStep(selectedWorkflow.id, step.id)} className="p-2 rounded-lg border border-rose-500 text-rose-500"><Trash2 className="w-4 h-4" /></button>
-                          </div>
-                        </td>
-                      </tr>
+              <Box sx={{ px: 2.5, py: 2.25 }}>
+                <Box
+                  sx={{
+                    display: "grid",
+                    gap: 1.25,
+                    gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))", xl: "repeat(4, minmax(0, 1fr))" },
+                  }}
+                >
+                  <TextField
+                    size="small"
+                    label="ワークフロー名"
+                    value={selectedWorkflow.name}
+                    onChange={(event) => updateWorkflowMeta(selectedWorkflow.id, "name", event.target.value)}
+                    sx={fieldSx}
+                  />
+                  <TextField
+                    select
+                    size="small"
+                    label="荷主"
+                    value={selectedWorkflow.shipperId}
+                    onChange={(event) => updateWorkflowMeta(selectedWorkflow.id, "shipperId", event.target.value)}
+                    sx={fieldSx}
+                  >
+                    {shippers.map((shipper) => (
+                      <MenuItem key={shipper.id} value={shipper.id}>
+                        {shipper.name}
+                      </MenuItem>
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                  </TextField>
+                  <TextField
+                    select
+                    size="small"
+                    label="拠点"
+                    value={selectedWorkflow.siteId}
+                    onChange={(event) => updateWorkflowMeta(selectedWorkflow.id, "siteId", event.target.value)}
+                    sx={fieldSx}
+                  >
+                    {selectedWorkflowSites.map((site) => (
+                      <MenuItem key={site.id} value={site.id}>
+                        {site.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    select
+                    size="small"
+                    label="エリア"
+                    value={selectedWorkflow.areaId}
+                    onChange={(event) => updateWorkflowMeta(selectedWorkflow.id, "areaId", event.target.value)}
+                    sx={fieldSx}
+                  >
+                    {selectedWorkflowAreas.map((area) => (
+                      <MenuItem key={area.id} value={area.id}>
+                        {area.name}
+                      </MenuItem>
+                    ))}
+                  </TextField>
+                </Box>
 
-              <div className={`flex items-center text-[12px] ${c.textMuted}`}><Save className="w-3.5 h-3.5 mr-1" />変更は自動保存</div>
-              {selectedWorkflow.steps.length === 0 && <div className={`text-[13px] ${c.textSecondary} py-6 text-center`}>工程が未登録です</div>}
-            </div>
+                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.75 }}>
+                  <Chip label={`${selectedWorkflow.steps.length} 工程`} color="primary" variant="outlined" />
+                  <Chip
+                    label={`標準人数 ${selectedWorkflow.steps.reduce((sum, step) => sum + step.standardHeadcount, 0)} 名`}
+                    variant="outlined"
+                  />
+                  <Chip
+                    label={`合計UPH ${selectedWorkflow.steps.reduce((sum, step) => sum + step.uph, 0).toLocaleString("ja-JP")}`}
+                    variant="outlined"
+                  />
+                  <Chip label={`最終更新 ${formatUpdatedAt(selectedWorkflow.updatedAt)}`} variant="outlined" />
+                </Stack>
+              </Box>
+
+              <Divider />
+
+              <Box sx={{ px: 2.5, py: 1.75 }}>
+                <Typography variant="subtitle1" fontWeight={700}>
+                  工程フロー
+                </Typography>
+                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.25 }}>
+                  {selectedWorkflow.steps.map((step, index) => (
+                    <Chip key={step.id} label={`${index + 1}. ${processMap.get(step.processId)?.name ?? "未設定工程"}`} />
+                  ))}
+                  {selectedWorkflow.steps.length === 0 && <Chip label="工程未登録" variant="outlined" />}
+                </Stack>
+              </Box>
+
+              <Divider />
+
+              <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", p: 2.5 }}>
+                <Stack spacing={1.25}>
+                  {selectedWorkflow.steps.map((step, index) => {
+                    const process = processMap.get(step.processId);
+                    return (
+                      <Paper
+                        key={step.id}
+                        variant="outlined"
+                        sx={{
+                          ...childCardSx,
+                          p: 1.75,
+                          bgcolor: alpha(theme.palette.background.default, theme.palette.mode === "dark" ? 0.22 : 0.5),
+                        }}
+                      >
+                        <Stack direction={{ xs: "column", xl: "row" }} justifyContent="space-between" spacing={2}>
+                          <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                            <Chip label={`STEP ${index + 1}`} color="primary" size="small" />
+                            <Box sx={{ minWidth: 0 }}>
+                              <Typography variant="subtitle2">{process?.name ?? "未設定工程"}</Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                {process?.description ?? "工程説明なし"}
+                              </Typography>
+                            </Box>
+                          </Stack>
+                          <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="flex-end">
+                            <IconButton size="small" onClick={() => moveStep(step.id, "up")} disabled={index === 0} sx={iconButtonSx}>
+                              <ArrowUp size={16} />
+                            </IconButton>
+                            <IconButton
+                              size="small"
+                              onClick={() => moveStep(step.id, "down")}
+                              disabled={index === selectedWorkflow.steps.length - 1}
+                              sx={iconButtonSx}
+                            >
+                              <ArrowDown size={16} />
+                            </IconButton>
+                            <IconButton size="small" color="error" onClick={() => removeStep(step.id)} sx={dangerIconButtonSx}>
+                              <Trash2 size={16} />
+                            </IconButton>
+                          </Stack>
+                        </Stack>
+
+                        <Box
+                          sx={{
+                            mt: 2,
+                            display: "grid",
+                            gap: 1.25,
+                            gridTemplateColumns: { xs: "1fr", md: "minmax(0, 2fr) repeat(2, minmax(0, 1fr))" },
+                          }}
+                        >
+                          <TextField
+                            select
+                            size="small"
+                            label="工程"
+                            value={step.processId}
+                            onChange={(event) => {
+                              const nextProcess = processMap.get(event.target.value);
+                              updateStep(step.id, (source) => ({
+                                ...source,
+                                processId: event.target.value,
+                                requiredQualificationIds: nextProcess?.defaultQualificationIds ?? source.requiredQualificationIds,
+                                requiredSkillIds: nextProcess?.defaultSkillIds ?? source.requiredSkillIds,
+                                standardHeadcount: nextProcess?.defaultHeadcount ?? source.standardHeadcount,
+                                uph: nextProcess?.defaultUph ?? source.uph,
+                              }));
+                            }}
+                            sx={fieldSx}
+                          >
+                            {processes.map((item) => (
+                              <MenuItem key={item.id} value={item.id}>
+                                {item.name}
+                              </MenuItem>
+                            ))}
+                          </TextField>
+                          <TextField
+                            type="number"
+                            size="small"
+                            label="標準人数"
+                            value={step.standardHeadcount}
+                            onChange={(event) =>
+                              updateStep(step.id, (source) => ({
+                                ...source,
+                                standardHeadcount: Number(event.target.value) || 1,
+                              }))
+                            }
+                            sx={fieldSx}
+                          />
+                          <TextField
+                            type="number"
+                            size="small"
+                            label="標準UPH"
+                            value={step.uph}
+                            onChange={(event) =>
+                              updateStep(step.id, (source) => ({
+                                ...source,
+                                uph: Number(event.target.value) || 0,
+                              }))
+                            }
+                            sx={fieldSx}
+                          />
+                        </Box>
+
+                        <Box
+                          sx={{
+                            mt: 1.5,
+                            display: "grid",
+                            gap: 1.25,
+                            gridTemplateColumns: { xs: "1fr", xl: "repeat(2, minmax(0, 1fr))" },
+                          }}
+                        >
+                          <TagSelector
+                            label="所要資格"
+                            placeholder="資格を選択"
+                            options={qualifications}
+                            selectedIds={step.requiredQualificationIds}
+                            onChange={(values) =>
+                              updateStep(step.id, (source) => ({ ...source, requiredQualificationIds: values }))
+                            }
+                          />
+                          <TagSelector
+                            label="所要スキル"
+                            placeholder="スキルを選択"
+                            options={skills}
+                            selectedIds={step.requiredSkillIds}
+                            onChange={(values) =>
+                              updateStep(step.id, (source) => ({ ...source, requiredSkillIds: values }))
+                            }
+                          />
+                        </Box>
+                      </Paper>
+                    );
+                  })}
+
+                  {selectedWorkflow.steps.length === 0 && (
+                    <Box
+                      sx={{
+                        py: 8,
+                        textAlign: "center",
+                        ...childCardSx,
+                      }}
+                    >
+                      <Typography variant="body2" color="text.secondary">
+                        工程が未登録です。「工程追加」から登録してください。
+                      </Typography>
+                    </Box>
+                  )}
+                </Stack>
+              </Box>
+
+              <Divider />
+
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 2.5, py: 1.5, color: "text.secondary" }}>
+                <Save size={14} />
+                <Typography variant="caption">変更は自動保存されます。</Typography>
+              </Stack>
+            </>
           )}
-        </div>
-      </div>
-    </div>
+        </Paper>
+      </Box>
+
+      <Dialog
+        open={createDialogOpen}
+        onClose={() => setCreateDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{ sx: { ...panelSx } }}
+      >
+        <DialogTitle sx={dialogTitleSx}>
+          <Typography variant="subtitle1" fontWeight={700}>
+            ワークフローを新規作成
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            荷主・拠点・エリアを選択して初期ワークフローを作成します。
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={dialogContentSx}>
+          <Box sx={dialogFieldGroupSx}>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              荷主
+            </Typography>
+            <TextField
+              select
+              size="small"
+              value={newShipperId}
+              onChange={(event) => setNewShipperId(event.target.value)}
+              sx={fieldSx}
+            >
+              {shippers.map((shipper) => (
+                <MenuItem key={shipper.id} value={shipper.id}>
+                  {shipper.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+          <Box sx={dialogFieldGroupSx}>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              拠点
+            </Typography>
+            <TextField
+              select
+              size="small"
+              value={newSiteId}
+              onChange={(event) => setNewSiteId(event.target.value)}
+              sx={fieldSx}
+            >
+              {sites
+                .filter((site) => site.shipperId === newShipperId)
+                .map((site) => (
+                  <MenuItem key={site.id} value={site.id}>
+                    {site.name}
+                  </MenuItem>
+                ))}
+            </TextField>
+          </Box>
+          <Box sx={dialogFieldGroupSx}>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              エリア
+            </Typography>
+            <TextField
+              select
+              size="small"
+              value={newAreaId}
+              onChange={(event) => setNewAreaId(event.target.value)}
+              sx={fieldSx}
+            >
+              {createAreaOptions.map((area) => (
+                <MenuItem key={area.id} value={area.id}>
+                  {area.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+          <Box sx={dialogFieldGroupSx}>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              ワークフロー名
+            </Typography>
+            <TextField
+              size="small"
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="未入力時は荷主_拠点_エリアで自動命名"
+              sx={fieldSx}
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions sx={dialogActionsSx}>
+          <Button onClick={() => setCreateDialogOpen(false)} sx={outlinedButtonSx}>
+            キャンセル
+          </Button>
+          <Button variant="contained" onClick={createWorkflow} sx={primaryButtonSx}>
+            作成
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={addStepDialogOpen}
+        onClose={() => setAddStepDialogOpen(false)}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{ sx: { ...panelSx } }}
+      >
+        <DialogTitle sx={dialogTitleSx}>
+          <Typography variant="subtitle1" fontWeight={700}>
+            工程を追加
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            追加する工程を選択すると、標準設定を引き継いで登録します。
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={{ ...dialogContentSx, pb: 2.25 }}>
+          <Box sx={dialogFieldGroupSx}>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              工程
+            </Typography>
+            <TextField
+              select
+              size="small"
+              fullWidth
+              value={newStepProcessId}
+              onChange={(event) => setNewStepProcessId(event.target.value)}
+              sx={fieldSx}
+            >
+              {processes.map((process) => (
+                <MenuItem key={process.id} value={process.id}>
+                  {process.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={dialogActionsSx}>
+          <Button onClick={() => setAddStepDialogOpen(false)} sx={outlinedButtonSx}>
+            キャンセル
+          </Button>
+          <Button variant="contained" onClick={addStep} sx={primaryButtonSx}>
+            追加
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Box>
   );
 }
