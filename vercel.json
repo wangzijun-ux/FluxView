@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "cd \"UI Design from PRD\" && npm install",
+  "buildCommand": "cd \"UI Design from PRD\" && npm run build",
+  "outputDirectory": "UI Design from PRD/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
