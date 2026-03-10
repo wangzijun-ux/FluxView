@@ -1,149 +1,202 @@
-import { useState } from "react";
-import {
-  TrendingUp,
-  TrendingDown,
-  MoreHorizontal,
-} from "lucide-react";
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  RadarChart,
-  PolarGrid,
-  PolarAngleAxis,
-  PolarRadiusAxis,
-  Radar,
-  Legend,
-} from "recharts";
+import { useMemo } from "react";
+import { Activity, CalendarClock, Gauge, Truck, Users } from "lucide-react";
+import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 
-const companies = [
-  { id: "D001", name: "サンワスタッフ", planned: 45, actual: 43, avgUph: 138, rating: 4.2, cost: "¥1,250/h", trend: "up", color: "#22d3ee" },
-  { id: "D002", name: "ロジテック人材", planned: 38, actual: 35, avgUph: 125, rating: 3.8, cost: "¥1,180/h", trend: "down", color: "#a78bfa" },
-  { id: "D003", name: "フルキャスト", planned: 52, actual: 52, avgUph: 145, rating: 4.5, cost: "¥1,350/h", trend: "up", color: "#34d399" },
-  { id: "D004", name: "テンプスタッフ", planned: 30, actual: 28, avgUph: 132, rating: 4.0, cost: "¥1,300/h", trend: "stable", color: "#fb923c" },
-];
+const USER_STORAGE_KEY = "fluxview-users-v1";
 
-const weeklyData = [
-  { day: "月", サンワ: 42, ロジテック: 35, フルキャスト: 50, テンプ: 30 },
-  { day: "火", サンワ: 43, ロジテック: 36, フルキャスト: 52, テンプ: 28 },
-  { day: "水", サンワ: 43, ロジテック: 35, フルキャスト: 52, テンプ: 28 },
-  { day: "木", サンワ: 45, ロジテック: 38, フルキャスト: 52, テンプ: 30 },
-  { day: "金", サンワ: 44, ロジテック: 37, フルキャスト: 51, テンプ: 29 },
-];
+type DispatchUserSnapshot = {
+  id: string;
+  name: string;
+  employmentType: "正社員" | "パートナー" | "派遣";
+  dispatchCompanyId?: string;
+  status: "active" | "inactive" | "locked";
+  performance?: {
+    uph?: number;
+    attendanceRate?: number;
+  };
+};
 
-const performanceData = [
-  { skill: "出勤率", サンワ: 95, ロジテック: 92, フルキャスト: 100, テンプ: 93 },
-  { skill: "UPH", サンワ: 85, ロジテック: 78, フルキャスト: 90, テンプ: 82 },
-  { skill: "品質", サンワ: 88, ロジテック: 82, フルキャスト: 92, テンプ: 85 },
-  { skill: "定着率", サンワ: 80, ロジテック: 70, フルキャスト: 88, テンプ: 75 },
-  { skill: "柔軟性", サンワ: 90, ロジテック: 85, フルキャスト: 82, テンプ: 88 },
-];
+function readDispatchUsers(): DispatchUserSnapshot[] {
+  try {
+    const raw = localStorage.getItem(USER_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as DispatchUserSnapshot[]) : [];
+  } catch {
+    return [];
+  }
+}
 
+function formatHours(value: number) {
+  return `${value.toFixed(1)}h`;
+}
 
+function formatYen(value: number) {
+  return `¥${value.toLocaleString()}/h`;
+}
+
+function compactWorkflowName(name: string) {
+  const chunks = name.split("_");
+  return chunks[chunks.length - 1] ?? name;
+}
 
 export function DispatchManagement() {
-  const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
   const c = useThemeColors();
+  const { dispatchCompanies, workflows, processes, selectedSiteId, sites } = useMasterData();
 
-  const gridStroke = c.isDark ? "#1e1e2e" : "#e5e7eb";
-  const axisStroke = c.isDark ? "#4a4a5e" : "#9ca3af";
-  const tickFill = c.isDark ? "#6b6b7e" : "#6b7280";
-  const tooltipBg = c.isDark ? "#1a1a2e" : "#ffffff";
-  const tooltipBorder = c.isDark ? "#2a2a3e" : "#e5e7eb";
-  const tooltipColor = c.isDark ? "#e0e0e0" : "#1f2937";
+  const persistedUsers = useMemo(() => readDispatchUsers(), []);
+  const processMap = useMemo(() => new Map(processes.map((item) => [item.id, item.name])), [processes]);
+  const activeSite = sites.find((site) => site.id === selectedSiteId) ?? null;
+  const siteWorkflows = useMemo(
+    () => workflows.filter((workflow) => workflow.siteId === selectedSiteId),
+    [selectedSiteId, workflows],
+  );
+
+  const companyRows = useMemo(() => {
+    const workflowFactor = Math.max(siteWorkflows.length, 1);
+
+    return dispatchCompanies.map((company, index) => {
+      const assignedUsers = persistedUsers.filter(
+        (user) => user.employmentType === "派遣" && user.dispatchCompanyId === company.id,
+      );
+      const averageAttendance =
+        assignedUsers.length > 0
+          ? assignedUsers.reduce((sum, user) => sum + (user.performance?.attendanceRate ?? 90), 0) / assignedUsers.length
+          : 88 + ((workflowFactor + index) % 6) * 2;
+      const plannedHours = workflowFactor * 18 + 12 + index * 3 + assignedUsers.length * 5;
+      const actualHours = Number((plannedHours * Math.min(1.06, averageAttendance / 100)).toFixed(1));
+      const utilization = plannedHours === 0 ? 0 : Math.round((actualHours / plannedHours) * 100);
+      const averageUph =
+        assignedUsers.length > 0
+          ? Math.round(assignedUsers.reduce((sum, user) => sum + (user.performance?.uph ?? 110), 0) / assignedUsers.length)
+          : 108 + workflowFactor * 4 + index * 3;
+      const previewWorkflows =
+        siteWorkflows.length === 0
+          ? ["ワークフロー未設定"]
+          : siteWorkflows
+              .slice(index % siteWorkflows.length, (index % siteWorkflows.length) + Math.min(2, siteWorkflows.length))
+              .map((workflow) => {
+                const stepNames = workflow.steps
+                  .slice(0, 2)
+                  .map((step) => processMap.get(step.processId) ?? "工程未設定")
+                  .join(" / ");
+                return `${compactWorkflowName(workflow.name)}${stepNames ? ` | ${stepNames}` : ""}`;
+              });
+
+      return {
+        ...company,
+        plannedHours,
+        actualHours,
+        utilization,
+        averageUph,
+        assignedCount: assignedUsers.length,
+        estimatedCost: Math.round(actualHours * company.unitPrice),
+        workflowPreview: previewWorkflows,
+      };
+    });
+  }, [dispatchCompanies, persistedUsers, processMap, siteWorkflows]);
+
+  const summary = useMemo(() => {
+    const plannedHours = companyRows.reduce((sum, row) => sum + row.plannedHours, 0);
+    const actualHours = companyRows.reduce((sum, row) => sum + row.actualHours, 0);
+    const averageUtilization = companyRows.length > 0 ? Math.round(companyRows.reduce((sum, row) => sum + row.utilization, 0) / companyRows.length) : 0;
+    const activeCompanies = companyRows.filter((row) => row.status === "active").length;
+
+    return { plannedHours, actualHours, averageUtilization, activeCompanies };
+  }, [companyRows]);
+
+  const cardClass = `${c.bgCard} border ${c.border} rounded-xl`;
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className={c.textPrimary}>派遣会社・稼働率管理</h1>
-          <p className={`${c.textSecondary} text-[14px] mt-1`}>派遣会社別の人員管理と生産性分析</p>
-        </div>
-      </div>
-
-      {/* Company Cards */}
-      <div className="grid grid-cols-4 gap-4">
-        {companies.map((company) => (
-          <div key={company.id} onClick={() => setSelectedCompany(company.id)}
-            className={`rounded-xl border p-5 cursor-pointer transition-all hover:scale-[1.01] ${
-              selectedCompany === company.id ? "border-cyan-500/40 bg-cyan-500/5" : `${c.border} ${c.bgCard}`
-            }`}>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: company.color }} />
-                <span className={`${c.textPrimary} text-[14px]`}>{company.name}</span>
-              </div>
-              <button className={c.textDimmed}><MoreHorizontal className="w-4 h-4" /></button>
+    <div className="p-6 h-full flex flex-col gap-4">
+      <div className="grid gap-3 md:grid-cols-4">
+        {[
+          { icon: Truck, label: "稼働中会社数", value: `${summary.activeCompanies}社`, sub: `登録 ${dispatchCompanies.length} 社`, color: "text-cyan-400", bg: "bg-cyan-500/10" },
+          { icon: CalendarClock, label: "予定時間", value: formatHours(summary.plannedHours), sub: activeSite?.name ?? "拠点未選択", color: "text-violet-400", bg: "bg-violet-500/10" },
+          { icon: Activity, label: "実労働時間", value: formatHours(summary.actualHours), sub: `派遣作業者 ${companyRows.reduce((sum, row) => sum + row.assignedCount, 0)} 名`, color: "text-emerald-400", bg: "bg-emerald-500/10" },
+          { icon: Gauge, label: "平均稼働率", value: `${summary.averageUtilization}%`, sub: `対象WF ${siteWorkflows.length} 件`, color: "text-amber-400", bg: "bg-amber-500/10" },
+        ].map((item) => (
+          <div key={item.label} className={`${cardClass} p-4 flex items-center gap-3`}>
+            <div className={`w-10 h-10 rounded-xl ${item.bg} flex items-center justify-center`}>
+              <item.icon className={`w-5 h-5 ${item.color}`} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className={`text-[11px] ${c.textMuted}`}>予定 / 実績</div>
-                <div className={`${c.textPrimary} text-[18px]`}>{company.actual}<span className={`${c.textMuted} text-[13px]`}>/{company.planned}</span></div>
-              </div>
-              <div>
-                <div className={`text-[11px] ${c.textMuted}`}>平均UPH</div>
-                <div className="flex items-center gap-1">
-                  <span className="text-cyan-400 text-[18px]">{company.avgUph}</span>
-                  {company.trend === "up" ? <TrendingUp className="w-3.5 h-3.5 text-emerald-400" /> : company.trend === "down" ? <TrendingDown className="w-3.5 h-3.5 text-red-400" /> : null}
-                </div>
-              </div>
-            </div>
-            <div className="mt-3 flex items-center justify-between">
-              <span className={`text-[12px] ${c.textMuted}`}>{company.cost}</span>
-              <div className="flex items-center gap-0.5">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <div key={star} className={`w-1.5 h-1.5 rounded-full ${star <= Math.floor(company.rating) ? "bg-amber-400" : c.isDark ? "bg-gray-700" : "bg-gray-300"}`} />
-                ))}
-                <span className={`text-[11px] ${c.textMuted} ml-1`}>{company.rating}</span>
-              </div>
-            </div>
-            <div className="mt-3">
-              <div className={`w-full h-1.5 rounded-full ${c.bgSurface} overflow-hidden`}>
-                <div className="h-full rounded-full" style={{ width: `${(company.actual / company.planned) * 100}%`, backgroundColor: company.color }} />
-              </div>
+            <div>
+              <div className={`text-[11px] ${c.textMuted}`}>{item.label}</div>
+              <div className={`text-[20px] ${c.textPrimary} tabular-nums`}>{item.value}</div>
+              <div className={`text-[11px] ${c.textSecondary}`}>{item.sub}</div>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Charts */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className={`${c.bgCard} rounded-xl border ${c.border} p-5`}>
-          <h3 className={`${c.textPrimary} mb-4`}>週間出勤実績</h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={weeklyData}>
-              <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-              <XAxis dataKey="day" stroke={axisStroke} tick={{ fontSize: 12, fill: tickFill }} />
-              <YAxis stroke={axisStroke} tick={{ fontSize: 12, fill: tickFill }} />
-              <Tooltip contentStyle={{ backgroundColor: tooltipBg, border: `1px solid ${tooltipBorder}`, borderRadius: "8px", color: tooltipColor, fontSize: "13px" }} />
-              <Bar dataKey="サンワ" fill="#22d3ee" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="ロジテック" fill="#a78bfa" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="フルキャスト" fill="#34d399" radius={[2, 2, 0, 0]} />
-              <Bar dataKey="テンプ" fill="#fb923c" radius={[2, 2, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className={`${c.bgCard} rounded-xl border ${c.border} p-5`}>
-          <h3 className={`${c.textPrimary} mb-4`}>パフォーマンス比較</h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <RadarChart cx="50%" cy="50%" outerRadius="70%" data={performanceData}>
-              <PolarGrid stroke={gridStroke} />
-              <PolarAngleAxis dataKey="skill" tick={{ fontSize: 11, fill: tickFill }} />
-              <PolarRadiusAxis angle={90} tick={{ fontSize: 10, fill: axisStroke }} domain={[0, 100]} />
-              <Radar name="サンワ" dataKey="サンワ" stroke="#22d3ee" fill="#22d3ee" fillOpacity={0.15} />
-              <Radar name="フルキャスト" dataKey="フルキャスト" stroke="#34d399" fill="#34d399" fillOpacity={0.15} />
-              <Legend wrapperStyle={{ fontSize: "12px", color: tickFill }} />
-            </RadarChart>
-          </ResponsiveContainer>
+      <div className={`${cardClass} p-4 flex flex-wrap items-center justify-between gap-3`}>
+        <div>
+          <div className={`text-[14px] ${c.textPrimary}`}>派遣会社別の稼働状況</div>
+          <div className={`text-[12px] ${c.textSecondary}`}>
+            {activeSite ? `${activeSite.name} のワークフローを基準に表示しています。` : "拠点選択に連動して表示します。"}
+          </div>
         </div>
       </div>
 
+      <div className={`${cardClass} overflow-hidden flex-1`}>
+        <div className="overflow-auto h-full">
+          <table className="w-full min-w-[1180px]">
+            <thead className={`sticky top-0 z-10 ${c.bgCard}`}>
+              <tr className={`border-b ${c.border}`}>
+                {["派遣会社", "対象ワークフロー", "予定時間", "実労働時間", "稼働率", "UPH", "単価", "実績コスト"].map((header) => (
+                  <th key={header} className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>{header}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {companyRows.map((row) => (
+                <tr key={row.id} className={`border-b ${c.borderCard} ${c.bgCardHover}`}>
+                  <td className="px-4 py-3 align-top">
+                    <div className="flex items-start gap-3">
+                      <div className={`mt-0.5 w-2.5 h-2.5 rounded-full ${row.status === "active" ? "bg-emerald-400" : "bg-gray-400"}`} />
+                      <div>
+                        <div className={`text-[13px] ${c.textPrimary}`}>{row.name}</div>
+                        <div className={`text-[11px] ${c.textSecondary}`}>{row.contactName} | {row.phone}</div>
+                        <div className={`text-[11px] ${c.textMuted}`}>配置人数 {row.assignedCount} 名</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 align-top">
+                    <div className="flex flex-wrap gap-1.5">
+                      {row.workflowPreview.map((label) => (
+                        <span key={label} className={`inline-flex max-w-[320px] truncate rounded-full border px-2 py-1 text-[11px] ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}>
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>{formatHours(row.plannedHours)}</td>
+                  <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>{formatHours(row.actualHours)}</td>
+                  <td className="px-4 py-3 min-w-[180px]">
+                    <div className="flex items-center gap-3">
+                      <div className={`h-2 flex-1 rounded-full ${c.bgSurface} overflow-hidden`}>
+                        <div className={`h-full rounded-full ${row.utilization >= 95 ? "bg-emerald-400" : row.utilization >= 85 ? "bg-cyan-400" : "bg-amber-400"}`} style={{ width: `${Math.min(row.utilization, 100)}%` }} />
+                      </div>
+                      <span className={`w-10 text-right text-[12px] ${c.textPrimary} tabular-nums`}>{row.utilization}%</span>
+                    </div>
+                  </td>
+                  <td className={`px-4 py-3 text-[13px] text-cyan-400 tabular-nums`}>{row.averageUph}</td>
+                  <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>{formatYen(row.unitPrice)}</td>
+                  <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>¥{row.estimatedCost.toLocaleString()}</td>
+                </tr>
+              ))}
+              {companyRows.length === 0 && (
+                <tr>
+                  <td colSpan={8} className={`px-4 py-10 text-center text-[13px] ${c.textMuted}`}>
+                    マスタ管理で派遣会社を登録すると、ここに会社別の稼働状況を表示します。
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

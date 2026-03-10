@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import {
   Nfc,
   Globe,
@@ -72,11 +72,6 @@ export function SettingsPage() {
 
   return (
     <div className="p-6 h-full flex flex-col">
-      <div className="mb-6">
-        <h1 className={c.textPrimary}>設定</h1>
-        <p className={`${c.textSecondary} text-[14px] mt-1`}>システム設定、デバイス管理、外部連携</p>
-      </div>
-
       <div className="flex-1 flex gap-6 min-h-0">
         {/* Settings Nav */}
         <div className="w-[240px] space-y-2 shrink-0">
@@ -145,3 +140,5 @@ export function SettingsPage() {
     </div>
   );
 }
+
+

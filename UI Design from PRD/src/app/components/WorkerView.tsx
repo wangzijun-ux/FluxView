@@ -1,342 +1,699 @@
-import { useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import {
   ArrowLeft,
   Bell,
   CheckCircle2,
+  ChevronRight,
+  Clock3,
+  Delete,
+  Megaphone,
+  Minus,
   Pause,
   Play,
-  Square,
-  Package,
-  Clock,
-  User,
-  Globe,
-  AlertTriangle,
-  Megaphone,
-  Shield,
+  Plus,
+  ShieldAlert,
+  X,
 } from "lucide-react";
-import { useNavigate } from "react-router";
+import { useMasterData } from "./MasterDataContext";
+import { useThemeColors } from "./ThemeContext";
+import { DEPLOYMENT_WORKERS } from "./fieldDeploymentStore";
+import { processColorClasses } from "./processStore";
+import {
+  buildWorkerDayTasks,
+  buildWorkerSiteDeploymentData,
+  getDefaultWorkerSession,
+  getTodayKey,
+  getVisibleWorkerNotifications,
+  pickFallbackWorkerId,
+  readWorkerProgress,
+  saveWorkerProgress,
+  saveWorkerSession,
+  type WorkerTaskProgressEntry,
+} from "./workerMobileStore";
 
-type TaskStatus = "idle" | "working" | "paused" | "completed";
-type Language = "ja" | "en" | "zh" | "vi";
+function formatTimeRange(startTime: string, endTime: string) {
+  return `${startTime} - ${endTime}`;
+}
 
-const translations: Record<Language, Record<string, string>> = {
-  ja: {
-    greeting: "こんにちは",
-    currentTask: "現在のタスク",
-    start: "開始",
-    pause: "中断",
-    complete: "完了",
-    quantity: "数量",
-    notifications: "お知らせ",
-    uph: "UPH",
-    todayProgress: "本日の実績",
-    items: "件",
-    backToAdmin: "管理画面へ戻る",
-    zone: "配置エリア",
-    time: "経過時間",
-    nfcHint: "NFCバッジでログイン中",
-  },
-  en: {
-    greeting: "Hello",
-    currentTask: "Current Task",
-    start: "START",
-    pause: "PAUSE",
-    complete: "DONE",
-    quantity: "Quantity",
-    notifications: "Notifications",
-    uph: "UPH",
-    todayProgress: "Today's Progress",
-    items: "items",
-    backToAdmin: "Back to Admin",
-    zone: "Zone",
-    time: "Elapsed",
-    nfcHint: "Logged in via NFC badge",
-  },
-  zh: {
-    greeting: "你好",
-    currentTask: "当前任务",
-    start: "开始",
-    pause: "暂停",
-    complete: "完成",
-    quantity: "数量",
-    notifications: "通知",
-    uph: "UPH",
-    todayProgress: "今日进度",
-    items: "件",
-    backToAdmin: "返回管理",
-    zone: "区域",
-    time: "经过时间",
-    nfcHint: "NFC工牌已登录",
-  },
-  vi: {
-    greeting: "Xin chào",
-    currentTask: "Nhiệm vụ",
-    start: "BẮT ĐẦU",
-    pause: "TẠM DỪNG",
-    complete: "HOÀN THÀNH",
-    quantity: "Số lượng",
-    notifications: "Thông báo",
-    uph: "UPH",
-    todayProgress: "Tiến độ hôm nay",
-    items: "mục",
-    backToAdmin: "Quay lại",
-    zone: "Khu vực",
-    time: "Thời gian",
-    nfcHint: "Đã đăng nhập NFC",
-  },
-};
+function formatDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours > 0) return `${hours}時間${restMinutes}分`;
+  return `${restMinutes}分`;
+}
 
-const workerNotifications = [
-  { type: "move", message: "検品完了後、E棟の梱包ラインへ移動してください", time: "14:32" },
-  { type: "safety", message: "A棟3番レーン: フォークリフト点検中、迂回路を使用", time: "13:15" },
-  { type: "announce", message: "明日の出勤時間が5:30に変更されました", time: "12:00" },
-];
+function formatNotificationTime(value: string) {
+  const date = new Date(value);
+  return date.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatCount(value: number) {
+  return `${value.toLocaleString("ja-JP")} 個`;
+}
+
+function getTaskStatusClass(status: WorkerTaskProgressEntry["status"]) {
+  switch (status) {
+    case "working":
+      return "bg-emerald-500/15 text-emerald-500";
+    case "paused":
+      return "bg-amber-500/15 text-amber-500";
+    case "completed":
+      return "bg-slate-500/15 text-slate-500";
+    default:
+      return "bg-blue-500/15 text-blue-500";
+  }
+}
 
 export function WorkerView() {
   const navigate = useNavigate();
-  const [taskStatus, setTaskStatus] = useState<TaskStatus>("idle");
-  const [quantity, setQuantity] = useState(0);
-  const [lang, setLang] = useState<Language>("ja");
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [searchParams] = useSearchParams();
+  const c = useThemeColors();
+  const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
+  const [now, setNow] = useState(new Date());
+  const [workerId, setWorkerId] = useState("");
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [dismissedAnnouncementId, setDismissedAnnouncementId] = useState("");
+  const [taskProgress, setTaskProgress] = useState<Record<string, WorkerTaskProgressEntry>>({});
+  const [progressKey, setProgressKey] = useState("");
+  const [currentScreen, setCurrentScreen] = useState<"list" | "input">("list");
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
-  const t = translations[lang];
+  useEffect(() => {
+    const timerId = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timerId);
+  }, []);
 
-  const handleStart = () => setTaskStatus("working");
-  const handlePause = () => setTaskStatus("paused");
-  const handleComplete = () => {
-    setTaskStatus("completed");
-    setTimeout(() => setTaskStatus("idle"), 2000);
+  const workerMap = useMemo(() => new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker])), []);
+  const siteName = sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択";
+  const siteData = useMemo(
+    () => buildWorkerSiteDeploymentData(selectedSiteId, workflows, shippers, areas, processes),
+    [selectedSiteId, workflows, shippers, areas, processes],
+  );
+  const fallbackWorkerId = useMemo(() => pickFallbackWorkerId(siteData), [siteData]);
+  const requestedWorkerId = searchParams.get("workerId");
+
+  useEffect(() => {
+    const session = getDefaultWorkerSession(selectedSiteId, fallbackWorkerId);
+    const candidate = requestedWorkerId && workerMap.has(requestedWorkerId)
+      ? requestedWorkerId
+      : workerMap.has(session.workerId)
+        ? session.workerId
+        : fallbackWorkerId;
+    setWorkerId(candidate);
+    saveWorkerSession({ workerId: candidate, siteId: selectedSiteId });
+  }, [selectedSiteId, fallbackWorkerId, requestedWorkerId, workerMap]);
+
+  const currentWorker = workerMap.get(workerId) ?? workerMap.get(fallbackWorkerId);
+  const todayKey = getTodayKey(now);
+
+  const tasks = useMemo(
+    () => (currentWorker ? buildWorkerDayTasks(siteData, currentWorker.id) : []),
+    [siteData, currentWorker],
+  );
+
+  useEffect(() => {
+    if (!currentWorker) return;
+    const stored = readWorkerProgress(todayKey, currentWorker.id);
+    const normalized = Object.fromEntries(
+      tasks.map((task) => [task.id, stored[task.id] ?? { status: "pending" as const }]),
+    );
+    setTaskProgress(normalized);
+    setProgressKey(`${todayKey}:${currentWorker.id}`);
+  }, [todayKey, currentWorker, tasks]);
+
+  useEffect(() => {
+    if (!currentWorker || progressKey !== `${todayKey}:${currentWorker.id}`) return;
+    saveWorkerProgress(todayKey, currentWorker.id, taskProgress);
+  }, [taskProgress, todayKey, currentWorker, progressKey]);
+
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    if (tasks.some((task) => task.id === selectedTaskId)) return;
+    setSelectedTaskId(null);
+  }, [selectedTaskId, tasks]);
+
+  const notifications = useMemo(
+    () =>
+      currentWorker
+        ? getVisibleWorkerNotifications({
+            siteId: selectedSiteId,
+            workerId: currentWorker.id,
+            siteName,
+            now,
+          })
+        : [],
+    [selectedSiteId, currentWorker, siteName, now],
+  );
+
+  const primaryAnnouncement = notifications.find((notification) => notification.type === "announce") ?? null;
+  const latestChangeNotification = notifications.find((notification) => notification.type !== "announce") ?? null;
+  const showAnnouncement = Boolean(primaryAnnouncement && primaryAnnouncement.id !== dismissedAnnouncementId);
+
+  const activeTaskId = (() => {
+    const inProgress = tasks.find((task) => {
+      const status = taskProgress[task.id]?.status ?? "pending";
+      return status === "working" || status === "paused";
+    });
+    if (inProgress) return inProgress.id;
+    return tasks.find((task) => (taskProgress[task.id]?.status ?? "pending") !== "completed")?.id ?? null;
+  })();
+
+  const completedCount = tasks.filter((task) => (taskProgress[task.id]?.status ?? "pending") === "completed").length;
+  const completedMinutes = tasks.reduce((sum, task) => {
+    if ((taskProgress[task.id]?.status ?? "pending") !== "completed") return sum;
+    return sum + task.durationMinutes;
+  }, 0);
+
+  const updateTaskStatus = (taskId: string, status: WorkerTaskProgressEntry["status"]) => {
+    setTaskProgress((prev) => ({
+      ...prev,
+      [taskId]: {
+        ...prev[taskId],
+        status,
+        startedAt: status === "working" && !prev[taskId]?.startedAt ? new Date().toISOString() : prev[taskId]?.startedAt,
+        completedAt: status === "completed" ? new Date().toISOString() : prev[taskId]?.completedAt,
+      },
+    }));
   };
 
+  const updateTaskQuantity = (taskId: string, nextQuantity: number) => {
+    setTaskProgress((prev) => ({
+      ...prev,
+      [taskId]: {
+        ...prev[taskId],
+        status: prev[taskId]?.status ?? "working",
+        reportedQuantity: Math.max(0, nextQuantity),
+        lastReportedAt: new Date().toISOString(),
+      },
+    }));
+  };
+
+  const changeTaskQuantity = (taskId: string, delta: number) => {
+    const currentQuantity = taskProgress[taskId]?.reportedQuantity ?? 0;
+    updateTaskQuantity(taskId, currentQuantity + delta);
+  };
+
+  const appendTaskQuantityDigit = (taskId: string, digit: string) => {
+    const currentQuantity = String(taskProgress[taskId]?.reportedQuantity ?? 0);
+    const normalized = currentQuantity === "0" ? digit : `${currentQuantity}${digit}`;
+    updateTaskQuantity(taskId, Number(normalized));
+  };
+
+  const backspaceTaskQuantity = (taskId: string) => {
+    const currentQuantity = String(taskProgress[taskId]?.reportedQuantity ?? 0);
+    const nextValue = currentQuantity.length <= 1 ? 0 : Number(currentQuantity.slice(0, -1));
+    updateTaskQuantity(taskId, nextValue);
+  };
+
+  const activeInputTask = tasks.find((task) => {
+    const status = taskProgress[task.id]?.status ?? "pending";
+    return status === "working" || status === "paused";
+  }) ?? null;
+
+  const selectedInputTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
+  const displayInputTask = selectedInputTask ?? activeInputTask;
+
+  useEffect(() => {
+    if (currentScreen !== "input") return;
+    if (displayInputTask) return;
+    setCurrentScreen("list");
+    setSelectedTaskId(null);
+  }, [currentScreen, displayInputTask]);
+
+  const activeInputStatus = displayInputTask ? (taskProgress[displayInputTask.id]?.status ?? "pending") : "pending";
+  const activeInputQuantity = displayInputTask ? (taskProgress[displayInputTask.id]?.reportedQuantity ?? 0) : 0;
+  const activeInputUpdatedAt = displayInputTask ? taskProgress[displayInputTask.id]?.lastReportedAt : undefined;
+  const quickQuantityButtons = [1, 5, 10, 50];
+  const keypadButtons = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0", "backspace"] as const;
+
   return (
-    <div className="h-screen bg-white flex flex-col">
-      {/* Top Bar */}
-      <div className="bg-gray-50 border-b border-gray-200 px-5 py-3 flex items-center justify-between">
-        <button
-          onClick={() => navigate("/")}
-          className="flex items-center gap-2 text-gray-500 text-[14px]"
-        >
-          <ArrowLeft className="w-5 h-5" />
-          {t.backToAdmin}
-        </button>
-        <div className="flex items-center gap-3">
-          {/* Language Selector */}
-          <div className="flex items-center gap-1 bg-white rounded-lg border border-gray-200 px-2 py-1">
-            <Globe className="w-4 h-4 text-gray-400" />
-            <select
-              value={lang}
-              onChange={(e) => setLang(e.target.value as Language)}
-              className="text-[14px] text-gray-700 bg-transparent outline-none cursor-pointer"
+    <div className={`min-h-screen ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-100"}`}>
+      <div className={`mx-auto flex min-h-screen w-full max-w-md flex-col ${c.bgCard}`}>
+        <header className={`sticky top-0 z-20 border-b px-5 py-4 ${c.bgCard} ${c.border}`}>
+          <div className="flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => navigate("/")}
+              className={`inline-flex h-10 w-10 items-center justify-center rounded-full border ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
             >
-              <option value="ja">日本語</option>
-              <option value="en">English</option>
-              <option value="zh">中文</option>
-              <option value="vi">Tiếng Việt</option>
-            </select>
-          </div>
-          <button
-            onClick={() => setShowNotifications(!showNotifications)}
-            className="relative p-2 rounded-lg bg-white border border-gray-200"
-          >
-            <Bell className="w-5 h-5 text-gray-700" />
-            <div className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] flex items-center justify-center">
-              3
+              <ArrowLeft className="h-5 w-5" />
+            </button>
+
+            <div className="min-w-0 flex-1 text-center">
+              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentWorker?.name ?? "作業員"}</div>
+              <div className={`truncate text-[12px] ${c.textSecondary}`}>{siteName}</div>
             </div>
-          </button>
-        </div>
-      </div>
 
-      {/* NFC Status */}
-      <div className="bg-blue-50 border-b border-blue-100 px-5 py-2 flex items-center gap-2">
-        <div className="w-2 h-2 rounded-full bg-emerald-500" />
-        <User className="w-4 h-4 text-blue-600" />
-        <span className="text-[14px] text-blue-800">田中 太郎</span>
-        <span className="text-[12px] text-blue-500 ml-2">{t.nfcHint}</span>
-      </div>
+            <button
+              type="button"
+              onClick={() => setNotificationOpen(true)}
+              className={`relative inline-flex h-10 w-10 items-center justify-center rounded-full border ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
+            >
+              <Bell className="h-5 w-5" />
+              {notifications.length > 0 ? (
+                <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold text-white">
+                  {Math.min(notifications.length, 9)}
+                </span>
+              ) : null}
+            </button>
+          </div>
+        </header>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Main Content */}
-        <div className="flex-1 p-6 flex flex-col items-center justify-center">
-          {/* Current Task */}
-          <div className="w-full max-w-[480px]">
-            {/* Task Info */}
-            <div className="text-center mb-8">
-              <p className="text-gray-500 text-[16px]">{t.currentTask}</p>
-              <h1 className="text-gray-900 text-[32px] mt-2">B棟 検品ライン</h1>
-              <div className="flex items-center justify-center gap-6 mt-4">
-                <div className="text-center">
-                  <div className="text-[14px] text-gray-400">{t.zone}</div>
-                  <div className="text-[20px] text-gray-900">B-3</div>
-                </div>
-                <div className="w-px h-8 bg-gray-200" />
-                <div className="text-center">
-                  <div className="text-[14px] text-gray-400">{t.time}</div>
-                  <div className="text-[20px] text-gray-900">
-                    {taskStatus === "working" ? "02:15:30" : "--:--:--"}
-                  </div>
-                </div>
-                <div className="w-px h-8 bg-gray-200" />
-                <div className="text-center">
-                  <div className="text-[14px] text-gray-400">{t.uph}</div>
-                  <div className="text-[20px] text-blue-600">142</div>
-                </div>
+        <main className="flex-1 overflow-y-auto px-5 py-5">
+          <div className={`rounded-3xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className={`text-[12px] ${c.textMuted}`}>本日の工程サマリー</div>
+                <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>今日の担当工程を順番に進めます</div>
+              </div>
+              <div className={`rounded-full px-3 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
+                {now.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", weekday: "short" })}
               </div>
             </div>
 
-            {/* 3-Color Button UI - Signal Light Design */}
-            <div className="space-y-4 mb-8">
-              {taskStatus === "idle" && (
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
+                <div className={`text-[11px] ${c.textMuted}`}>総工程数</div>
+                <div className={`mt-2 text-[22px] font-semibold ${c.textPrimary}`}>{tasks.length}</div>
+              </div>
+              <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
+                <div className={`text-[11px] ${c.textMuted}`}>完了</div>
+                <div className="mt-2 text-[22px] font-semibold text-emerald-500">{completedCount}</div>
+              </div>
+              <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
+                <div className={`text-[11px] ${c.textMuted}`}>完了時間</div>
+                <div className={`mt-2 text-[18px] font-semibold ${c.textPrimary}`}>{formatDuration(completedMinutes)}</div>
+              </div>
+            </div>
+          </div>
+
+          {!showAnnouncement && latestChangeNotification ? (
+            <section className="mt-4">
+              <div className={`rounded-3xl border px-4 py-4 ${c.bgCard} ${c.borderCard}`}>
+                <div className="flex items-start gap-3">
+                  <div className="rounded-2xl bg-amber-500/10 p-2 text-amber-500">
+                    <ShieldAlert className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{latestChangeNotification.title}</div>
+                    <div className={`mt-1 text-[13px] leading-6 ${c.textSecondary}`}>{latestChangeNotification.message}</div>
+                    <div className={`mt-2 text-[11px] ${c.textMuted}`}>
+                      通知時刻 {formatNotificationTime(latestChangeNotification.deliverAt)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
+          {currentScreen === "input" && displayInputTask ? (
+            <section className="mt-5">
+              <div className="mb-3 flex items-center justify-between">
                 <button
-                  onClick={handleStart}
-                  className="w-full py-6 rounded-2xl bg-emerald-500 text-white text-[24px] active:scale-[0.98] transition-transform shadow-lg shadow-emerald-500/30"
+                  type="button"
+                  onClick={() => setCurrentScreen("list")}
+                  className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-[13px] font-medium ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}
                 >
-                  ▶ {t.start}
+                  <ArrowLeft className="h-4 w-4" />
+                  工程一覧へ戻る
                 </button>
-              )}
-
-              {taskStatus === "working" && (
-                <div className="space-y-3">
-                  <button
-                    onClick={handlePause}
-                    className="w-full py-6 rounded-2xl bg-amber-500 text-white text-[24px] active:scale-[0.98] transition-transform shadow-lg shadow-amber-500/30"
-                  >
-                    ⏸ {t.pause}
-                  </button>
-                  <button
-                    onClick={handleComplete}
-                    className="w-full py-6 rounded-2xl bg-red-500 text-white text-[24px] active:scale-[0.98] transition-transform shadow-lg shadow-red-500/30"
-                  >
-                    ⏹ {t.complete}
-                  </button>
-                </div>
-              )}
-
-              {taskStatus === "paused" && (
-                <div className="space-y-3">
-                  <button
-                    onClick={handleStart}
-                    className="w-full py-6 rounded-2xl bg-emerald-500 text-white text-[24px] active:scale-[0.98] transition-transform shadow-lg shadow-emerald-500/30"
-                  >
-                    ▶ {t.start}
-                  </button>
-                  <button
-                    onClick={handleComplete}
-                    className="w-full py-6 rounded-2xl bg-red-500 text-white text-[24px] active:scale-[0.98] transition-transform shadow-lg shadow-red-500/30"
-                  >
-                    ⏹ {t.complete}
-                  </button>
-                </div>
-              )}
-
-              {taskStatus === "completed" && (
-                <div className="w-full py-6 rounded-2xl bg-emerald-100 text-emerald-700 text-[24px] text-center flex items-center justify-center gap-3">
-                  <CheckCircle2 className="w-8 h-8" />
-                  ✓ {t.complete}
-                </div>
-              )}
-            </div>
-
-            {/* Quantity Selector */}
-            {taskStatus === "working" && (
-              <div className="bg-gray-50 rounded-2xl p-6 border border-gray-200">
-                <p className="text-gray-500 text-[16px] text-center mb-4">
-                  {t.quantity}
-                </p>
-                <div className="flex items-center justify-center gap-6">
-                  <button
-                    onClick={() => setQuantity(Math.max(0, quantity - 10))}
-                    className="w-16 h-16 rounded-xl bg-white border-2 border-gray-300 text-gray-700 text-[24px] active:scale-95 transition-transform"
-                  >
-                    -10
-                  </button>
-                  <button
-                    onClick={() => setQuantity(Math.max(0, quantity - 1))}
-                    className="w-16 h-16 rounded-xl bg-white border-2 border-gray-300 text-gray-700 text-[24px] active:scale-95 transition-transform"
-                  >
-                    -1
-                  </button>
-                  <div className="w-24 text-center">
-                    <span className="text-[40px] text-gray-900">{quantity}</span>
+              </div>
+              <div className={`overflow-hidden rounded-[28px] border ${c.borderCard} ${c.bgCard} shadow-xl`}>
+                <div className={`border-b px-4 py-4 ${c.isDark ? "bg-cyan-500/10" : "bg-cyan-50"} ${c.borderCard}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className={`text-[12px] font-semibold ${c.isDark ? "text-cyan-300" : "text-cyan-700"}`}>作業数入力</div>
+                      <div className={`mt-1 text-[20px] font-semibold ${c.textPrimary}`}>{displayInputTask.processName}</div>
+                      <div className={`mt-1 text-[12px] ${c.textSecondary}`}>{displayInputTask.areaName} / {displayInputTask.shipperName}</div>
+                    </div>
+                    <div className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
+                      activeInputStatus === "working"
+                        ? "bg-emerald-500/15 text-emerald-500"
+                        : "bg-amber-500/15 text-amber-500"
+                    }`}>
+                      {activeInputStatus === "working" ? "作業中" : "中断中"}
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setQuantity(quantity + 1)}
-                    className="w-16 h-16 rounded-xl bg-white border-2 border-gray-300 text-gray-700 text-[24px] active:scale-95 transition-transform"
-                  >
-                    +1
-                  </button>
-                  <button
-                    onClick={() => setQuantity(quantity + 10)}
-                    className="w-16 h-16 rounded-xl bg-white border-2 border-gray-300 text-gray-700 text-[24px] active:scale-95 transition-transform"
-                  >
-                    +10
-                  </button>
+                  <div className={`mt-3 flex items-center gap-2 text-[12px] ${c.textSecondary}`}>
+                    <Clock3 className="h-4 w-4" />
+                    <span>{formatTimeRange(displayInputTask.startTime, displayInputTask.endTime)}</span>
+                    <span className={c.textMuted}>/ {formatDuration(displayInputTask.durationMinutes)}</span>
+                  </div>
                 </div>
-              </div>
-            )}
 
-            {/* Today's Progress */}
-            <div className="mt-6 bg-gray-50 rounded-2xl p-5 border border-gray-200">
-              <p className="text-gray-500 text-[14px] mb-3">{t.todayProgress}</p>
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <div className="text-[28px] text-gray-900">286</div>
-                  <div className="text-[13px] text-gray-400">{t.items}</div>
-                </div>
-                <div>
-                  <div className="text-[28px] text-blue-600">142</div>
-                  <div className="text-[13px] text-gray-400">{t.uph}</div>
-                </div>
-                <div>
-                  <div className="text-[28px] text-gray-900">5h 23m</div>
-                  <div className="text-[13px] text-gray-400">{t.time}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+                <div className="px-4 py-5">
+                  <div className={`rounded-[24px] border px-4 py-4 text-center ${c.bgSurface} ${c.borderCard}`}>
+                    <div className={`text-[12px] ${c.textMuted}`}>現在の入力数</div>
+                    <div className={`mt-3 text-[46px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                      {activeInputQuantity.toLocaleString("ja-JP")}
+                    </div>
+                    <div className={`mt-2 text-[13px] ${c.textSecondary}`}>個</div>
+                    <div className={`mt-3 text-[11px] ${c.textMuted}`}>
+                      {activeInputUpdatedAt ? `最終入力 ${formatNotificationTime(activeInputUpdatedAt)}` : "まだ入力はありません"}
+                    </div>
+                  </div>
 
-        {/* Notification Panel */}
-        {showNotifications && (
-          <div className="w-[360px] bg-gray-50 border-l border-gray-200 p-5 overflow-y-auto">
-            <h2 className="text-gray-900 text-[20px] mb-4">{t.notifications}</h2>
-            <div className="space-y-3">
-              {workerNotifications.map((notif, idx) => (
-                <div
-                  key={idx}
-                  className="bg-white rounded-xl p-4 border border-gray-200"
-                >
-                  <div className="flex items-start gap-3">
-                    <div
-                      className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
-                        notif.type === "move"
-                          ? "bg-blue-100"
-                          : notif.type === "safety"
-                          ? "bg-amber-100"
-                          : "bg-violet-100"
+                  <div className="mt-4 grid grid-cols-4 gap-2">
+                    {quickQuantityButtons.map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        disabled={activeInputStatus !== "working"}
+                        onClick={() => changeTaskQuantity(displayInputTask.id, value)}
+                        className={`min-h-[52px] rounded-2xl border text-[16px] font-semibold transition ${
+                          activeInputStatus === "working"
+                            ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
+                            : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
+                        }`}
+                      >
+                        +{value}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={activeInputStatus !== "working"}
+                      onClick={() => changeTaskQuantity(displayInputTask.id, -1)}
+                      className={`inline-flex min-h-[52px] w-[56px] items-center justify-center rounded-2xl border transition ${
+                        activeInputStatus === "working"
+                          ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
+                          : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
                       }`}
                     >
-                      {notif.type === "move" ? (
-                        <ArrowLeft className="w-5 h-5 text-blue-600" />
-                      ) : notif.type === "safety" ? (
-                        <Shield className="w-5 h-5 text-amber-600" />
-                      ) : (
-                        <Megaphone className="w-5 h-5 text-violet-600" />
-                      )}
-                    </div>
-                    <div>
-                      <p className="text-gray-900 text-[16px]">{notif.message}</p>
-                      <p className="text-gray-400 text-[13px] mt-1 flex items-center gap-1">
-                        <Clock className="w-3 h-3" />
-                        {notif.time}
-                      </p>
-                    </div>
+                      <Minus className="h-5 w-5" />
+                    </button>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      value={activeInputQuantity}
+                      disabled={activeInputStatus !== "working"}
+                      onChange={(event) => updateTaskQuantity(displayInputTask.id, Number(event.target.value || 0))}
+                      className={`min-h-[52px] flex-1 rounded-2xl border px-4 text-center text-[24px] font-semibold tabular-nums outline-none ${
+                        activeInputStatus === "working"
+                          ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
+                          : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      disabled={activeInputStatus !== "working"}
+                      onClick={() => changeTaskQuantity(displayInputTask.id, 1)}
+                      className={`inline-flex min-h-[52px] w-[56px] items-center justify-center rounded-2xl border transition ${
+                        activeInputStatus === "working"
+                          ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
+                          : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
+                      }`}
+                    >
+                      <Plus className="h-5 w-5" />
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-3 gap-2">
+                    {keypadButtons.map((buttonKey) => (
+                      <button
+                        key={buttonKey}
+                        type="button"
+                        disabled={activeInputStatus !== "working"}
+                        onClick={() => {
+                          if (buttonKey === "backspace") {
+                            backspaceTaskQuantity(displayInputTask.id);
+                            return;
+                          }
+                          appendTaskQuantityDigit(displayInputTask.id, buttonKey);
+                        }}
+                        className={`min-h-[58px] rounded-2xl border text-[22px] font-semibold transition ${
+                          activeInputStatus === "working"
+                            ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
+                            : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
+                        }`}
+                      >
+                        {buttonKey === "backspace" ? <Delete className="mx-auto h-5 w-5" /> : buttonKey}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    {activeInputStatus === "working" ? (
+                      <button
+                        type="button"
+                        onClick={() => updateTaskStatus(displayInputTask.id, "paused")}
+                        className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 text-[14px] font-semibold text-white"
+                      >
+                        <Pause className="h-4 w-4" />
+                        作業を中断
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => updateTaskStatus(displayInputTask.id, "working")}
+                        className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 text-[14px] font-semibold text-white"
+                      >
+                        <Play className="h-4 w-4" />
+                        作業を再開
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateTaskStatus(displayInputTask.id, "completed");
+                        setSelectedTaskId(null);
+                        setCurrentScreen("list");
+                      }}
+                      className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 text-[14px] font-semibold text-white"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      入力して完了
+                    </button>
                   </div>
                 </div>
-              ))}
+              </div>
+            </section>
+          ) : null}
+
+          {currentScreen === "list" ? (
+            <section className="mt-5">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className={`text-[18px] font-semibold ${c.textPrimary}`}>本日の工程一覧</h2>
+                  <div className={`text-[12px] ${c.textMuted}`}>管理者が設定した順序で表示します</div>
+                </div>
+                {activeInputTask ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedTaskId(activeInputTask.id);
+                      setCurrentScreen("input");
+                    }}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white"
+                  >
+                    作業数入力へ
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                ) : null}
+              </div>
+
+              {tasks.length === 0 ? (
+                <div className={`rounded-3xl border px-4 py-8 text-center ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[15px] font-semibold ${c.textPrimary}`}>本日の工程はありません</div>
+                  <div className={`mt-2 text-[13px] ${c.textSecondary}`}>管理者の配置設定後に工程が表示されます。</div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {tasks.map((task) => {
+                    const tone = processColorClasses[task.color] ?? processColorClasses.cyan;
+                    const status = taskProgress[task.id]?.status ?? "pending";
+                    const isActive = activeTaskId === task.id;
+
+                    return (
+                      <article
+                        key={task.id}
+                        className={`rounded-3xl border px-4 py-4 ${status === "completed" ? "opacity-80" : ""} ${c.bgCard} ${c.borderCard}`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border text-[13px] font-semibold ${tone.bg} ${tone.border} ${tone.text}`}>
+                            {task.order}
+                          </div>
+
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className={`text-[16px] font-semibold ${c.textPrimary}`}>{task.processName}</div>
+                                <div className={`mt-1 text-[12px] ${c.textSecondary}`}>{task.areaName}</div>
+                              </div>
+                              <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${getTaskStatusClass(status)}`}>
+                                {status === "completed" ? "完了" : status === "working" ? "作業中" : status === "paused" ? "中断中" : "未着手"}
+                              </div>
+                            </div>
+
+                            <div className={`mt-3 flex items-center gap-2 text-[12px] ${c.textSecondary}`}>
+                              <Clock3 className="h-4 w-4" />
+                              <span>{formatTimeRange(task.startTime, task.endTime)}</span>
+                              <span className={c.textMuted}>/ {formatDuration(task.durationMinutes)}</span>
+                            </div>
+
+                            <div className={`mt-1 text-[12px] ${c.textMuted}`}>{task.shipperName}</div>
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>
+                                入力数 {formatCount(taskProgress[task.id]?.reportedQuantity ?? 0)}
+                              </div>
+                              {taskProgress[task.id]?.lastReportedAt ? (
+                                <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textMuted}`}>
+                                  更新 {formatNotificationTime(taskProgress[task.id]?.lastReportedAt ?? "")}
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {status === "completed" ? (
+                                <div className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500/10 px-3 py-2 text-[12px] font-medium text-emerald-500">
+                                  <CheckCircle2 className="h-4 w-4" />
+                                  {formatCount(taskProgress[task.id]?.reportedQuantity ?? 0)} を入力して完了
+                                </div>
+                              ) : status === "working" || status === "paused" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedTaskId(task.id);
+                                    setCurrentScreen("input");
+                                  }}
+                                  className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-[13px] font-semibold text-white"
+                                >
+                                  作業数入力を開く
+                                  <ChevronRight className="h-4 w-4" />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled={!isActive}
+                                  onClick={() => {
+                                    updateTaskStatus(task.id, "working");
+                                    setSelectedTaskId(task.id);
+                                    setCurrentScreen("input");
+                                  }}
+                                  className={`inline-flex items-center gap-2 rounded-2xl px-4 py-3 text-[13px] font-semibold ${
+                                    isActive
+                                      ? "bg-blue-600 text-white"
+                                      : `${c.bgSurface} ${c.textMuted}`
+                                  }`}
+                                >
+                                  <Play className="h-4 w-4" />
+                                  {isActive ? "この作業を開始" : "前工程の完了待ち"}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          ) : null}
+        </main>
+      </div>
+
+      {showAnnouncement && primaryAnnouncement ? (
+        <div className="fixed inset-0 z-40 bg-black/40 px-5 py-8">
+          <div className="mx-auto flex h-full w-full max-w-md items-center">
+            <div className={`w-full rounded-[28px] border px-5 py-5 shadow-2xl ${c.bgCard} ${c.borderCard}`}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="rounded-2xl bg-violet-500/10 p-3 text-violet-500">
+                  <Megaphone className="h-6 w-6" />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDismissedAnnouncementId(primaryAnnouncement.id)}
+                  className={`inline-flex h-9 w-9 items-center justify-center rounded-full border ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-5">
+                <div className={`text-[13px] font-semibold text-violet-500`}>{primaryAnnouncement.title}</div>
+                <div className={`mt-3 text-[20px] font-semibold leading-8 ${c.textPrimary}`}>作業開始前に最新のお知らせを確認してください</div>
+                <div className={`mt-3 text-[14px] leading-7 ${c.textSecondary}`}>{primaryAnnouncement.message}</div>
+                <div className={`mt-4 text-[12px] ${c.textMuted}`}>通知時刻 {formatNotificationTime(primaryAnnouncement.deliverAt)}</div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDismissedAnnouncementId(primaryAnnouncement.id)}
+                className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-[14px] font-semibold text-white"
+              >
+                確認して閉じる
+                <ChevronRight className="h-4 w-4" />
+              </button>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      ) : null}
+
+      {notificationOpen ? (
+        <div className="fixed inset-0 z-50 bg-black/40">
+          <div className={`absolute inset-x-0 bottom-0 mx-auto w-full max-w-md rounded-t-[32px] border px-5 pb-8 pt-5 ${c.bgCard} ${c.borderCard}`}>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <div className={`text-[18px] font-semibold ${c.textPrimary}`}>通知</div>
+                <div className={`mt-1 text-[12px] ${c.textSecondary}`}>全体連絡と配置変更通知を表示します</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNotificationOpen(false)}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded-full border ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] space-y-3 overflow-y-auto">
+              {notifications.length === 0 ? (
+                <div className={`rounded-3xl border px-4 py-8 text-center ${c.bgSurface} ${c.borderCard}`}>
+                  <div className={`text-[14px] font-semibold ${c.textPrimary}`}>通知はありません</div>
+                  <div className={`mt-2 text-[12px] ${c.textSecondary}`}>新しい通知が届くとここに表示されます。</div>
+                </div>
+              ) : (
+                notifications.map((notification) => (
+                  <article key={notification.id} className={`rounded-3xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`rounded-2xl p-2 ${
+                          notification.type === "announce"
+                            ? "bg-violet-500/10 text-violet-500"
+                            : notification.type === "reminder"
+                              ? "bg-amber-500/10 text-amber-500"
+                              : "bg-blue-500/10 text-blue-500"
+                        }`}
+                      >
+                        {notification.type === "announce" ? (
+                          <Megaphone className="h-5 w-5" />
+                        ) : notification.type === "reminder" ? (
+                          <ShieldAlert className="h-5 w-5" />
+                        ) : (
+                          <Bell className="h-5 w-5" />
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{notification.title}</div>
+                        <div className={`mt-1 text-[13px] leading-6 ${c.textSecondary}`}>{notification.message}</div>
+                        <div className={`mt-2 text-[11px] ${c.textMuted}`}>{formatNotificationTime(notification.deliverAt)}</div>
+                      </div>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
+

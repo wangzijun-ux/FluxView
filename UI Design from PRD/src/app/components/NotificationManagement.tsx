@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import {
   Send,
   Plus,
@@ -25,10 +25,10 @@ interface Notification {
 }
 
 const notifications: Notification[] = [
-  { id: "N001", title: "B棟からE棟への移動指示", message: "梱包ラインの人員不足のため、検品完了後にE棟へ移動してください。", type: "move", target: "田中太郎、佐藤花子 他3名", status: "sent", sentAt: "14:32", readRate: 80 },
+  { id: "N001", title: "B棟への移動指示", message: "格納エリアの人員不足のため、検品完了後にB棟へ移動してください。", type: "move", target: "田中太郎、佐藤花子 他3名", status: "sent", sentAt: "14:32", readRate: 80 },
   { id: "N002", title: "安全注意: 3番フォークリフト点検中", message: "A棟3番レーンのフォークリフトが定期点検中です。迂回路を使用してください。", type: "safety", target: "A棟全作業員", status: "sent", sentAt: "13:15", readRate: 95 },
   { id: "N003", title: "【全体連絡】明日の出勤時間変更", message: "3月5日は大口出荷対応のため、出勤時間が5:30に変更となります。", type: "announce", target: "全作業員", status: "scheduled", scheduledAt: "17:00" },
-  { id: "N004", title: "緊急: C棟仕分けエリア進捗遅延", message: "仕分けエリアの進捗が計画比30%遅延。追加人員の配置が必要です。", type: "alert", target: "現場管理者", status: "sent", sentAt: "14:05", readRate: 100 },
+  { id: "N004", title: "緊急: 格納エリア進捗遅延", message: "格納エリアの進捗が計画比30%遅延。追加人員の配置が必要です。", type: "alert", target: "現場管理者", status: "sent", sentAt: "14:05", readRate: 100 },
   { id: "N005", title: "休憩時間のお知らせ", message: "15:00-15:15の休憩時間になります。作業を一時中断してください。", type: "announce", target: "全作業員", status: "draft" },
 ];
 
@@ -49,11 +49,7 @@ export function NotificationManagement() {
 
   return (
     <div className="p-6 h-full flex flex-col">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className={c.textPrimary}>通知・配信管理</h1>
-          <p className={`${c.textSecondary} text-[14px] mt-1`}>移動指示、お知らせ、安全注意事項の一括配信</p>
-        </div>
+      <div className="flex items-center justify-end mb-6">
         <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-600 text-white text-[13px] hover:bg-cyan-500 transition-all">
           <Plus className="w-4 h-4" />新規通知作成
         </button>
@@ -182,3 +178,5 @@ export function NotificationManagement() {
     </div>
   );
 }
+
+

@@ -1,6 +1,9 @@
 import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "./Sidebar";
 import { ThemeProvider, useThemeColors } from "./ThemeContext";
+import { AssignmentProvider } from "./AssignmentContext";
+import { MasterDataProvider } from "./MasterDataContext";
+import { TopBar } from "./TopBar";
 
 function LayoutInner() {
   const location = useLocation();
@@ -12,11 +15,17 @@ function LayoutInner() {
   }
 
   return (
-    <div className={`h-screen flex ${c.bg} ${c.text}`}>
+    <div className={`h-screen flex overflow-hidden ${c.bg} ${c.text}`}>
       <Sidebar />
-      <main className="flex-1 overflow-y-auto">
-        <Outlet />
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar />
+        <main className="flex-1 overflow-y-auto">
+          <Outlet />
+        </main>
+        <footer className={`shrink-0 border-t px-5 py-2 text-center text-[11px] ${c.border} ${c.bgCard} ${c.textMuted}`}>
+          powered by Dialog.Inc. Ⓒ 2026 All Rights Reserved.
+        </footer>
+      </div>
     </div>
   );
 }
@@ -24,7 +33,11 @@ function LayoutInner() {
 export function Layout() {
   return (
     <ThemeProvider>
-      <LayoutInner />
+      <MasterDataProvider>
+        <AssignmentProvider>
+          <LayoutInner />
+        </AssignmentProvider>
+      </MasterDataProvider>
     </ThemeProvider>
   );
 }

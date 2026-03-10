@@ -1,1274 +1,1438 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+﻿import { useEffect, useMemo, useState, type DragEvent } from "react";
 import {
-  Clock,
-  Search,
   AlertTriangle,
-  Save,
-  X,
-  TrendingUp,
-  Target,
-  Timer,
-  Calculator,
-  ChevronDown,
-  ChevronUp,
-  Zap,
-  CheckCircle2,
-  ArrowRight,
-  Bell,
-  BellRing,
-  ListChecks,
-  Plus,
-  Trash2,
-  Send,
-  Check,
+  Box,
   ChevronLeft,
   ChevronRight,
-  Users,
-  PlusCircle,
-  SkipForward,
-  MapPin,
+  ClipboardCheck,
+  Clock3,
+  Filter,
   Layers,
+  MapPin,
+  Package,
+  RotateCcw,
+  Save,
+  Search,
+  Truck,
+  Users,
+  Warehouse,
+  type LucideIcon,
 } from "lucide-react";
+import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
-import {
-  defaultProcessSteps,
-  defaultProductionData,
-  defaultSlotAssignments,
-  defaultAreas,
-  processColorClasses,
-  getProcessStepsForArea,
-  type ProcessStep,
-  type ZoneProduction,
-  type Area,
-} from "./processStore";
+import { processColorClasses } from "./processStore";
+import { buildFieldDeploymentStorageKey } from "./fieldDeploymentStore";
+import { pushAssignmentChangeNotifications } from "./workerMobileStore";
+import type {
+  AreaMaster,
+  ProcessMaster,
+  QualificationMaster,
+  Shipper,
+  SkillMaster,
+  WorkflowDefinition,
+} from "./masterStore";
 
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
+const TIMELINE_START = 6 * 60;
+const TIMELINE_END = 20 * 60 + 30;
+const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
+const INTERVAL_OPTIONS = [15, 30, 60] as const;
+const PRODUCTION_EFFICIENCY = 0.82;
+const ADJUSTMENT_STORAGE_PREFIX = "fluxview-field-deployment-adjustments-v1";
+
+type TimelineInterval = (typeof INTERVAL_OPTIONS)[number];
+type WorkerStatus = "active" | "break" | "absent";
+type AssignmentSnapshot = Record<string, Array<string | null>>;
+type SnapshotsByTime = Record<string, AssignmentSnapshot>;
+type ThemeColors = ReturnType<typeof useThemeColors>;
 
 interface Worker {
   id: string;
   name: string;
   initials: string;
   color: string;
-  skills: { label: string; icon: string }[];
-  status: "active" | "break" | "absent";
+  qualificationIds: string[];
+  skillIds: string[];
+  status: WorkerStatus;
+  note?: string;
 }
 
-interface ZoneSlot { workerId: string | null; }
-
-interface Zone {
-  processId: string;
+interface StepTemplate {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  shipperId: string;
+  shipperName: string;
   areaId: string;
-  name: string;
+  areaName: string;
+  processId: string;
+  processName: string;
   description: string;
   color: string;
-  icon: ProcessStep["icon"];
-  capacity: number;
-  baseUph: number;
-  requiredSkills: string[];
-  slots: ZoneSlot[];
-  production: ZoneProduction;
+  icon: LucideIcon;
+  headcount: number;
+  planned: number;
+  uph: number;
+  startTime: string;
+  targetEndTime: string;
+  requiredQualificationIds: string[];
+  requiredSkillIds: string[];
 }
 
-interface StaffChange {
+interface StepView extends StepTemplate {
+  slots: Array<string | null>;
+  assignedCount: number;
+}
+
+interface PanelView {
+  id: string;
+  shipperId: string;
+  shipperName: string;
+  areaId: string;
+  areaName: string;
+  workflowName: string;
+  color: string;
+  steps: StepTemplate[];
+}
+
+interface DragState {
+  workerId: string;
+  fromStepId: string | null;
+  fromSlotIndex: number | null;
+}
+
+interface AdjustmentItem {
+  id: string;
+  panelId: string;
+  areaName: string;
+  processName: string;
+  shortage: number;
+  recommended: number;
+  progress: number;
+  eta: string;
+  overdue: boolean;
+}
+
+interface AssignmentChangeItem {
+  id: string;
+  panelId: string | "all";
   workerId: string;
   workerName: string;
-  fromZone: string | null;   // null = プール
-  toZone: string | null;     // null = プール
+  effectiveTime: string;
+  previousAssignment: string;
+  nextAssignment: string;
 }
 
-interface AdjustmentEntry {
-  id: string;
-  scheduledTime: string;   // "HH:MM"
-  createdAt: string;
-  changes: StaffChange[];
-  status: "pending" | "notified" | "applied";
-  memo: string;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Mock Workers                                                       */
-/* ------------------------------------------------------------------ */
-
-const INITIAL_WORKERS: Worker[] = [
-  { id: "w1", name: "田中 太郎", initials: "田", color: "bg-blue-500", skills: [{ label: "L", icon: "✅" }, { label: "FL", icon: "🔑" }], status: "active" },
-  { id: "w2", name: "渡辺 謙", initials: "渡", color: "bg-emerald-500", skills: [{ label: "検品", icon: "🔍" }], status: "active" },
-  { id: "w3", name: "佐藤 花子", initials: "佐", color: "bg-violet-500", skills: [{ label: "検品", icon: "🔍" }, { label: "品質", icon: "○" }], status: "active" },
-  { id: "w4", name: "高橋 優子", initials: "高", color: "bg-amber-500", skills: [{ label: "加工", icon: "✂" }, { label: "ラベル", icon: "🏷" }], status: "active" },
-  { id: "w5", name: "伊藤 健", initials: "伊", color: "bg-rose-400", skills: [{ label: "梱包", icon: "📦" }], status: "active" },
-  { id: "w6", name: "鈴木 一郎", initials: "鈴", color: "bg-orange-500", skills: [{ label: "FL", icon: "🔑" }, { label: "出荷", icon: "🚛" }], status: "active" },
-  { id: "w7", name: "小林 さくら", initials: "小", color: "bg-pink-400", skills: [{ label: "New", icon: "🌱" }], status: "active" },
-  { id: "w8", name: "中村 敏", initials: "中", color: "bg-gray-400", skills: [{ label: "FL", icon: "🔑" }], status: "absent" },
-  { id: "w9", name: "山田 裕子", initials: "山", color: "bg-teal-500", skills: [{ label: "仕分", icon: "📋" }], status: "active" },
-  { id: "w10", name: "松本 翔", initials: "松", color: "bg-indigo-500", skills: [{ label: "仕分", icon: "📋" }, { label: "FL", icon: "🔑" }], status: "active" },
+const MOCK_WORKERS: Worker[] = [
+  { id: "worker-1", name: "小林 さくら", initials: "小", color: "bg-pink-500", qualificationIds: ["qual-10"], skillIds: ["skill-5", "skill-4"], status: "active", note: "新人" },
+  { id: "worker-2", name: "山田 裕子", initials: "山", color: "bg-teal-500", qualificationIds: ["qual-1"], skillIds: ["skill-3", "skill-4"], status: "active", note: "フォーク担当" },
+  { id: "worker-3", name: "松本 翔", initials: "松", color: "bg-violet-500", qualificationIds: ["qual-1"], skillIds: ["skill-3", "skill-7"], status: "active", note: "保管担当" },
+  { id: "worker-4", name: "田中 美咲", initials: "田", color: "bg-cyan-500", qualificationIds: ["qual-4"], skillIds: ["skill-6", "skill-5"], status: "active", note: "梱包担当" },
+  { id: "worker-5", name: "伊藤 恒一", initials: "伊", color: "bg-orange-500", qualificationIds: ["qual-8"], skillIds: ["skill-3", "skill-7"], status: "active", note: "出荷担当" },
+  { id: "worker-6", name: "渡辺 彩", initials: "渡", color: "bg-emerald-500", qualificationIds: ["qual-7"], skillIds: ["skill-7", "skill-5"], status: "active", note: "仕分け担当" },
+  { id: "worker-7", name: "鈴木 大輔", initials: "鈴", color: "bg-blue-500", qualificationIds: ["qual-2"], skillIds: ["skill-1", "skill-2"], status: "active", note: "ピッキング担当" },
+  { id: "worker-8", name: "高橋 七海", initials: "高", color: "bg-rose-500", qualificationIds: ["qual-3"], skillIds: ["skill-7", "skill-8"], status: "active", note: "棚卸担当" },
+  { id: "worker-9", name: "中島 亮", initials: "中", color: "bg-indigo-500", qualificationIds: ["qual-5"], skillIds: ["skill-5", "skill-6"], status: "active", note: "出荷検品担当" },
+  { id: "worker-10", name: "井上 葵", initials: "井", color: "bg-fuchsia-500", qualificationIds: ["qual-6"], skillIds: ["skill-9", "skill-10"], status: "active", note: "特殊作業" },
+  { id: "worker-11", name: "加藤 翼", initials: "加", color: "bg-lime-500", qualificationIds: ["qual-1"], skillIds: ["skill-3", "skill-1"], status: "active", note: "応援要員" },
+  { id: "worker-12", name: "吉田 真央", initials: "吉", color: "bg-sky-500", qualificationIds: ["qual-10"], skillIds: ["skill-4", "skill-5"], status: "active", note: "検品主担当" },
+  { id: "worker-13", name: "岡田 玲奈", initials: "岡", color: "bg-amber-500", qualificationIds: ["qual-2"], skillIds: ["skill-1", "skill-6"], status: "active", note: "多能工" },
+  { id: "worker-14", name: "森 健太", initials: "森", color: "bg-purple-500", qualificationIds: ["qual-7"], skillIds: ["skill-7", "skill-8"], status: "active", note: "ライン応援" },
+  { id: "worker-15", name: "斎藤 未来", initials: "斎", color: "bg-slate-400", qualificationIds: ["qual-4"], skillIds: ["skill-6"], status: "break", note: "休憩中" },
+  { id: "worker-16", name: "中村 敏", initials: "中", color: "bg-gray-400", qualificationIds: ["qual-1"], skillIds: ["skill-3"], status: "absent", note: "離席" },
 ];
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-function buildInitialZones(): Zone[] {
-  const zones: Zone[] = [];
-  for (const area of defaultAreas) {
-    const areaSteps = getProcessStepsForArea(area);
-    for (const step of areaSteps) {
-      const prod = defaultProductionData[step.id] ?? { planned: 0, actual: 0, currentUph: step.baseUph, startTime: "06:00", targetEndTime: "18:00" };
-      const slotAssign = defaultSlotAssignments[step.id] ?? Array(step.defaultCapacity).fill(null);
-      zones.push({
-        processId: step.id, areaId: area.id, name: step.name, description: step.zoneDescription,
-        color: step.color, icon: step.icon, capacity: step.defaultCapacity,
-        baseUph: step.baseUph, requiredSkills: step.requiredSkills,
-        slots: slotAssign.filter((wId) => wId !== null).map((wId) => ({ workerId: wId })),
-        production: { ...prod },
-      });
-    }
-  }
-  return zones;
+function parseTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  return (hours || 0) * 60 + (minutes || 0);
 }
 
-function cloneZones(zones: Zone[]): Zone[] {
-  return zones.map((z) => ({ ...z, slots: z.slots.map((s) => ({ ...s })), production: { ...z.production } }));
+function formatTime(totalMinutes: number) {
+  const normalized = Math.max(0, totalMinutes);
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-function parseTime(t: string): number { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); }
-function formatTime(mins: number): string {
-  const h = Math.floor(mins / 60); const m = mins % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
+function floorTimeToSlot(totalMinutes: number, interval: TimelineInterval) {
+  const clamped = clamp(totalMinutes, TIMELINE_START, TIMELINE_END);
+  const offset = clamped - TIMELINE_START;
+  return TIMELINE_START + Math.floor(offset / interval) * interval;
+}
 
-
-/** Generate time slots from 00:00 to 24:00 with variable interval */
-function generateTimeSlots(intervalMin: number = 30): string[] {
+function createTimeSlots(interval: TimelineInterval) {
   const slots: string[] = [];
-  for (let m = 0; m < 24 * 60; m += intervalMin) {
-    slots.push(formatTime(m));
+  for (let minute = TIMELINE_START; minute <= TIMELINE_END; minute += interval) {
+    slots.push(formatTime(minute));
   }
   return slots;
 }
 
-function calcZoneMetrics(zone: Zone, nowMin: number) {
-  const { production: p } = zone;
-  const filled = zone.slots.filter((s) => s.workerId).length;
-  const remaining = Math.max(0, p.planned - p.actual);
-  const progress = p.planned > 0 ? Math.round((p.actual / p.planned) * 100) : 0;
-  let estimatedEnd = "--:--";
-  let isOverdue = false;
-  if (filled > 0 && p.currentUph > 0 && remaining > 0) {
-    const totalUph = p.currentUph * filled;
-    const minutesToComplete = Math.ceil((remaining / totalUph) * 60);
-    const endMinutes = nowMin + minutesToComplete;
-    estimatedEnd = formatTime(Math.min(endMinutes, 23 * 60 + 59));
-    isOverdue = endMinutes > parseTime(p.targetEndTime);
-  } else if (remaining === 0) { estimatedEnd = "完了"; }
-  const targetEnd = parseTime(p.targetEndTime);
-  const availableHours = Math.max(0.25, (targetEnd - nowMin) / 60);
-  let recommendedWorkers = 0;
-  if (remaining > 0 && p.currentUph > 0) { recommendedWorkers = Math.ceil(remaining / (p.currentUph * availableHours)); }
-  return { remaining, progress, estimatedEnd, isOverdue, recommendedWorkers, filled, totalUph: filled > 0 ? p.currentUph * filled : 0 };
+function buildAdjustmentStorageKey(siteId: string) {
+  return `${ADJUSTMENT_STORAGE_PREFIX}:${siteId || "default"}`;
 }
 
-/** Diff two zone snapshots → list of StaffChange */
-function diffSnapshots(before: Zone[], after: Zone[], workers: Worker[]): StaffChange[] {
-  const changes: StaffChange[] = [];
-  const mapBefore = new Map<string, string | null>();
-  const mapAfter = new Map<string, string | null>();
-  for (const z of before) for (const s of z.slots) if (s.workerId) mapBefore.set(s.workerId, z.processId);
-  for (const z of after) for (const s of z.slots) if (s.workerId) mapAfter.set(s.workerId, z.processId);
-  const allIds = new Set([...mapBefore.keys(), ...mapAfter.keys()]);
-  for (const wId of allIds) {
-    const from = mapBefore.get(wId) ?? null;
-    const to = mapAfter.get(wId) ?? null;
-    if (from !== to) {
-      const w = workers.find((w) => w.id === wId);
-      const fromName = from ? before.find((z) => z.processId === from)?.name ?? null : null;
-      const toName = to ? after.find((z) => z.processId === to)?.name ?? null : null;
-      changes.push({ workerId: wId, workerName: w?.name ?? wId, fromZone: fromName, toZone: toName });
+function pickColor(index: number) {
+  return COLORS[index % COLORS.length];
+}
+
+function iconForProcess(processId: string, processName: string): LucideIcon {
+  switch (processId) {
+    case "proc-1":
+      return Warehouse;
+    case "proc-2":
+    case "proc-8":
+      return ClipboardCheck;
+    case "proc-3":
+    case "proc-4":
+      return Box;
+    case "proc-7":
+      return Package;
+    case "proc-9":
+      return Truck;
+    default:
+      return processName.includes("検") ? ClipboardCheck : Layers;
+  }
+}
+
+function buildPanels(workflows: WorkflowDefinition[], shippers: Shipper[], areas: AreaMaster[], processes: ProcessMaster[]): PanelView[] {
+  const shipperMap = new Map(shippers.map((item) => [item.id, item]));
+  const areaMap = new Map(areas.map((item) => [item.id, item]));
+  const processMap = new Map(processes.map((item) => [item.id, item]));
+
+  return workflows
+    .slice()
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+    .map((workflow, workflowIndex) => ({
+      id: workflow.id,
+      shipperId: workflow.shipperId,
+      shipperName: shipperMap.get(workflow.shipperId)?.name ?? "未設定荷主",
+      areaId: workflow.areaId,
+      areaName: areaMap.get(workflow.areaId)?.name ?? workflow.name,
+      workflowName: workflow.name,
+      color: pickColor(workflowIndex),
+      steps: workflow.steps.map((step, stepIndex) => {
+        const process = processMap.get(step.processId);
+        const headcount = Math.max(step.standardHeadcount || process?.defaultHeadcount || 1, 1);
+        const uph = step.uph || process?.defaultUph || 100;
+        const startMinutes = Math.min(TIMELINE_START + stepIndex * 90 + (workflowIndex % 2) * 15, TIMELINE_END - 90);
+        const targetEndMinutes = Math.min(startMinutes + 210 - stepIndex * 10, TIMELINE_END + 120);
+        const planned = Math.max(480, Math.round((headcount * uph * (1.7 + ((workflowIndex + stepIndex) % 3) * 0.35)) / 10) * 10);
+
+        return {
+          id: `${workflow.id}:${step.id}`,
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          shipperId: workflow.shipperId,
+          shipperName: shipperMap.get(workflow.shipperId)?.name ?? "未設定荷主",
+          areaId: workflow.areaId,
+          areaName: areaMap.get(workflow.areaId)?.name ?? workflow.name,
+          processId: step.processId,
+          processName: process?.name ?? `工程${stepIndex + 1}`,
+          description: process?.description ?? "標準工程",
+          color: pickColor(workflowIndex + stepIndex),
+          icon: iconForProcess(step.processId, process?.name ?? ""),
+          headcount,
+          planned,
+          uph,
+          startTime: formatTime(startMinutes),
+          targetEndTime: formatTime(targetEndMinutes),
+          requiredQualificationIds: step.requiredQualificationIds,
+          requiredSkillIds: step.requiredSkillIds,
+        };
+      }),
+    }));
+}
+
+function scoreWorker(worker: Worker, step: StepTemplate) {
+  const qualificationScore = step.requiredQualificationIds.filter((id) => worker.qualificationIds.includes(id)).length * 3;
+  const skillScore = step.requiredSkillIds.filter((id) => worker.skillIds.includes(id)).length * 2;
+  return qualificationScore + skillScore;
+}
+
+function cloneSnapshot(snapshot: AssignmentSnapshot) {
+  return Object.fromEntries(Object.entries(snapshot).map(([stepId, slots]) => [stepId, [...slots]]));
+}
+
+function countAssigned(snapshot: AssignmentSnapshot | undefined, stepId: string) {
+  return (snapshot?.[stepId] ?? []).filter((workerId): workerId is string => Boolean(workerId)).length;
+}
+
+function findAssignedStepId(snapshot: AssignmentSnapshot, workerId: string) {
+  return Object.entries(snapshot).find(([, slots]) => slots.includes(workerId))?.[0] ?? null;
+}
+
+function formatAssignmentLabel(stepId: string | null, stepMap: Map<string, StepTemplate>) {
+  if (!stepId) return "未配置";
+  const step = stepMap.get(stepId);
+  return step ? `${step.areaName} / ${step.processName}` : "未配置";
+}
+
+function materializeSnapshot(snapshot: AssignmentSnapshot, steps: StepTemplate[]): AssignmentSnapshot {
+  return Object.fromEntries(
+    steps.map((step) => {
+      const source = snapshot[step.id] ?? [];
+      const slots = source.filter((workerId, index): workerId is string => Boolean(workerId) && source.indexOf(workerId) === index);
+      return [step.id, slots];
+    }),
+  );
+}
+
+function findLastAssignedIndex(slots: Array<string | null>) {
+  return slots.filter((workerId): workerId is string => Boolean(workerId)).length - 1;
+}
+
+function firstFreeWorkerId(snapshot: AssignmentSnapshot, workers: Worker[]) {
+  const assigned = new Set(Object.values(snapshot).flat().filter((value): value is string => Boolean(value)));
+  return workers.find((worker) => worker.status === "active" && !assigned.has(worker.id))?.id ?? null;
+}
+
+function buildBaseSnapshot(steps: StepTemplate[], workers: Worker[]) {
+  const activeWorkers = workers.filter((worker) => worker.status === "active");
+  const remaining = new Set(activeWorkers.map((worker) => worker.id));
+  const snapshot: AssignmentSnapshot = {};
+
+  steps.forEach((step, index) => {
+    const targetAssigned = Math.max(1, Math.min(step.headcount, step.headcount - (index % 3 === 2 ? 2 : 1)));
+    const selected = activeWorkers
+      .filter((worker) => remaining.has(worker.id))
+      .map((worker) => ({ worker, score: scoreWorker(worker, step) }))
+      .sort((left, right) => right.score - left.score || left.worker.id.localeCompare(right.worker.id, "ja"))
+      .slice(0, targetAssigned)
+      .map((entry) => entry.worker.id);
+
+    selected.forEach((workerId) => remaining.delete(workerId));
+    snapshot[step.id] = selected;
+  });
+
+  return snapshot;
+}
+
+function createSeededSnapshots(timeSlots: string[], steps: StepTemplate[], workers: Worker[], baseSnapshot: AssignmentSnapshot) {
+  const snapshots: Record<string, AssignmentSnapshot> = {};
+  let previous = materializeSnapshot(baseSnapshot, steps);
+
+  timeSlots.forEach((timeLabel, index) => {
+    const next = cloneSnapshot(previous);
+
+    if (index > 0 && steps.length > 0) {
+      if (index % 2 === 1 && steps.length > 1) {
+        const sourceStep = steps[(index - 1) % steps.length];
+        const targetStep = steps[index % steps.length];
+        const sourceSlots = [...(next[sourceStep.id] ?? [])].filter((workerId): workerId is string => Boolean(workerId));
+        const targetSlots = [...(next[targetStep.id] ?? [])].filter((workerId): workerId is string => Boolean(workerId));
+        const sourceIndex = findLastAssignedIndex(sourceSlots);
+
+        if (sourceIndex >= 0) {
+          const movedWorkerId = sourceSlots[sourceIndex];
+          sourceSlots.splice(sourceIndex, 1);
+          targetSlots.push(movedWorkerId);
+          next[sourceStep.id] = sourceSlots;
+          next[targetStep.id] = targetSlots;
+        }
+      }
+
+      if (index % 3 === 0) {
+        const targetStep = steps[(index + 1) % steps.length];
+        const targetSlots = [...(next[targetStep.id] ?? [])].filter((workerId): workerId is string => Boolean(workerId));
+        const freeWorkerId = firstFreeWorkerId(next, workers);
+        if (freeWorkerId) {
+          targetSlots.push(freeWorkerId);
+          next[targetStep.id] = targetSlots;
+        }
+      }
+
+      if (index % 5 === 0) {
+        const sourceStep = steps[(index + 2) % steps.length];
+        const sourceSlots = [...(next[sourceStep.id] ?? [])].filter((workerId): workerId is string => Boolean(workerId));
+        const sourceIndex = findLastAssignedIndex(sourceSlots);
+        if (sourceIndex >= 0) {
+          sourceSlots.splice(sourceIndex, 1);
+          next[sourceStep.id] = sourceSlots;
+        }
+      }
+    }
+
+    snapshots[timeLabel] = materializeSnapshot(next, steps);
+    previous = snapshots[timeLabel];
+  });
+
+  return snapshots;
+}
+
+function calcStepMetrics(step: StepView, referenceMinutes: number, timeSlots: string[], intervalMinutes: TimelineInterval, snapshotsByTime: SnapshotsByTime) {
+  const startMinutes = parseTime(step.startTime);
+  const targetMinutes = parseTime(step.targetEndTime);
+  let actualRaw = 0;
+
+  timeSlots.forEach((timeLabel) => {
+    const slotStart = parseTime(timeLabel);
+    const slotEnd = Math.min(slotStart + intervalMinutes, 24 * 60);
+    if (slotEnd <= startMinutes || slotStart >= referenceMinutes) return;
+    const effectiveStart = Math.max(slotStart, startMinutes);
+    const effectiveEnd = Math.min(slotEnd, referenceMinutes);
+    if (effectiveEnd <= effectiveStart) return;
+    actualRaw += countAssigned(snapshotsByTime[timeLabel], step.id) * step.uph * PRODUCTION_EFFICIENCY * ((effectiveEnd - effectiveStart) / 60);
+  });
+
+  const actual = Math.min(step.planned, Math.round(actualRaw / 10) * 10);
+  const progress = step.planned > 0 ? Math.min(100, Math.round((actual / step.planned) * 100)) : 0;
+  let remainingRaw = Math.max(0, step.planned - actualRaw);
+  let etaMinutes: number | null = remainingRaw === 0 ? referenceMinutes : null;
+  const selectedIndex = Math.max(0, timeSlots.findIndex((timeLabel) => parseTime(timeLabel) === referenceMinutes));
+
+  if (remainingRaw > 0) {
+    for (let index = selectedIndex; index < timeSlots.length; index += 1) {
+      const slotStart = parseTime(timeSlots[index]);
+      const slotEnd = Math.min(slotStart + intervalMinutes, 24 * 60);
+      const effectiveStart = Math.max(slotStart, referenceMinutes);
+      const effectiveEnd = Math.max(effectiveStart, slotEnd);
+      const assignedCount = countAssigned(snapshotsByTime[timeSlots[index]], step.id);
+      if (assignedCount <= 0 || effectiveEnd <= effectiveStart) continue;
+
+      const hourlyCapacity = assignedCount * step.uph * PRODUCTION_EFFICIENCY;
+      const slotCapacity = hourlyCapacity * ((effectiveEnd - effectiveStart) / 60);
+      if (slotCapacity >= remainingRaw) {
+        etaMinutes = Math.ceil(effectiveStart + (remainingRaw / hourlyCapacity) * 60);
+        remainingRaw = 0;
+        break;
+      }
+
+      remainingRaw -= slotCapacity;
     }
   }
-  return changes;
+
+  if (remainingRaw > 0 && timeSlots.length > 0) {
+    const lastTimeLabel = timeSlots[timeSlots.length - 1];
+    const tailStart = Math.max(referenceMinutes, parseTime(lastTimeLabel) + intervalMinutes);
+    const tailAssignedCount = countAssigned(snapshotsByTime[lastTimeLabel], step.id);
+    if (tailAssignedCount > 0 && tailStart < 24 * 60) {
+      const hourlyCapacity = tailAssignedCount * step.uph * PRODUCTION_EFFICIENCY;
+      const remainingMinutes = 24 * 60 - tailStart;
+      const tailCapacity = hourlyCapacity * (remainingMinutes / 60);
+      if (tailCapacity >= remainingRaw) {
+        etaMinutes = Math.ceil(tailStart + (remainingRaw / hourlyCapacity) * 60);
+        remainingRaw = 0;
+      }
+    }
+  }
+
+  const eta = remainingRaw === 0
+    ? "完了"
+    : etaMinutes !== null
+      ? formatTime(Math.min(etaMinutes, 23 * 60 + 59))
+      : "--:--";
+  const remaining = Math.max(0, step.planned - actual);
+  const recommended = remaining === 0
+    ? step.assignedCount
+    : Math.max(1, Math.ceil((step.planned - actualRaw) / (step.uph * PRODUCTION_EFFICIENCY * Math.max((targetMinutes - referenceMinutes) / 60, 0.25))));
+  const shortage = Math.max(recommended - step.assignedCount, 0);
+  const overdue = eta !== "完了" && eta !== "--:--" && parseTime(eta) > targetMinutes;
+
+  return { actual, progress, eta, shortage, recommended, overdue };
 }
 
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
+function generateAssignmentChanges(params: {
+  timeSlots: string[];
+  currentSnapshots: SnapshotsByTime;
+  savedSnapshots: SnapshotsByTime;
+  workerMap: Map<string, Worker>;
+  stepMap: Map<string, StepTemplate>;
+}) {
+  const { timeSlots, currentSnapshots, savedSnapshots, workerMap, stepMap } = params;
+  const workerIds = Array.from(workerMap.keys());
+  const items: AssignmentChangeItem[] = [];
+
+  timeSlots.forEach((timeLabel, index) => {
+    const currentSnapshot = currentSnapshots[timeLabel] ?? {};
+    const savedSnapshot = savedSnapshots[timeLabel] ?? {};
+    const previousCurrent = index > 0 ? currentSnapshots[timeSlots[index - 1]] ?? {} : {};
+    const previousSaved = index > 0 ? savedSnapshots[timeSlots[index - 1]] ?? {} : {};
+
+    workerIds.forEach((workerId) => {
+      const currentStepId = findAssignedStepId(currentSnapshot, workerId);
+      const savedStepId = findAssignedStepId(savedSnapshot, workerId);
+      if (currentStepId === savedStepId) return;
+
+      const previousCurrentStepId = findAssignedStepId(previousCurrent, workerId);
+      const previousSavedStepId = findAssignedStepId(previousSaved, workerId);
+      if (index > 0 && previousCurrentStepId === currentStepId && previousSavedStepId === savedStepId) return;
+
+      const worker = workerMap.get(workerId);
+      const targetStep = stepMap.get(currentStepId ?? "") ?? stepMap.get(savedStepId ?? "");
+      items.push({
+        id: `${workerId}:${timeLabel}:${savedStepId ?? "none"}:${currentStepId ?? "none"}`,
+        panelId: targetStep?.workflowId ?? "all",
+        workerId,
+        workerName: worker?.name ?? workerId,
+        effectiveTime: timeLabel,
+        previousAssignment: formatAssignmentLabel(savedStepId, stepMap),
+        nextAssignment: formatAssignmentLabel(currentStepId, stepMap),
+      });
+    });
+  });
+
+  return items.sort(
+    (left, right) => parseTime(left.effectiveTime) - parseTime(right.effectiveTime)
+      || left.workerName.localeCompare(right.workerName, "ja")
+      || left.nextAssignment.localeCompare(right.nextAssignment, "ja"),
+  );
+}
+
+function statusLabel(status: WorkerStatus) {
+  switch (status) {
+    case "break":
+      return "休憩中";
+    case "absent":
+      return "離席";
+    default:
+      return "出勤中";
+  }
+}
+
+function StaffCard({
+  worker,
+  themeColors,
+  qualificationMap,
+  skillMap,
+  muted = false,
+  compact = false,
+  draggable = false,
+  onDragStart,
+  onDragEnd,
+}: {
+  worker: Worker;
+  themeColors: ThemeColors;
+  qualificationMap: Map<string, QualificationMaster>;
+  skillMap: Map<string, SkillMaster>;
+  muted?: boolean;
+  compact?: boolean;
+  draggable?: boolean;
+  onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
+}) {
+  const tagNames = [
+    ...worker.skillIds.map((id) => skillMap.get(id)?.name ?? ""),
+    ...worker.qualificationIds.map((id) => qualificationMap.get(id)?.name ?? ""),
+  ].filter(Boolean).slice(0, compact ? 1 : 2);
+
+  return (
+    <div
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      className={[
+        compact ? "rounded-lg border px-2.5 py-2 transition-all" : "rounded-xl border p-3 transition-all",
+        muted ? `${themeColors.borderCard} ${themeColors.bgSurface} opacity-70 grayscale` : `${themeColors.borderCard} ${themeColors.bgCard}`,
+        draggable ? "cursor-grab active:cursor-grabbing hover:-translate-y-0.5 hover:shadow-md" : "",
+      ].join(" ")}
+    >
+      <div className={`flex items-center ${compact ? "gap-2" : "gap-3"}`}>
+        <div className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${compact ? "h-7 w-7 text-[11px]" : "h-9 w-9 text-[13px]"} ${muted ? "bg-slate-400" : worker.color}`}>
+          {worker.initials}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className={`truncate font-semibold ${compact ? "text-[12px]" : "text-[13px]"} ${themeColors.textPrimary}`}>{worker.name}</div>
+          <div className={`${compact ? "text-[10px]" : "text-[11px]"} ${muted ? themeColors.textMuted : themeColors.textSecondary}`}>
+            {worker.note ?? statusLabel(worker.status)}
+          </div>
+        </div>
+      </div>
+      {tagNames.length > 0 && (
+        <div className={`flex flex-wrap gap-1 ${compact ? "mt-1" : "mt-2"}`}>
+          {tagNames.map((tag) => (
+            <span
+              key={`${worker.id}-${tag}`}
+              className={`rounded-full px-2 py-0.5 ${compact ? "text-[9px]" : "text-[10px]"} ${muted ? "bg-slate-500/10 text-slate-400" : "bg-slate-500/10 text-slate-500 dark:text-slate-300"}`}
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function LiveCommand() {
   const c = useThemeColors();
+  const { shippers, sites, areas, qualifications, skills, processes, workflows, selectedSiteId } = useMasterData();
   const [now, setNow] = useState(new Date());
+  const [timelineInterval, setTimelineInterval] = useState<TimelineInterval>(30);
+  const [selectedPanelId, setSelectedPanelId] = useState<string | "all">("all");
+  const [filterShipperId, setFilterShipperId] = useState("all");
+  const [filterAreaId, setFilterAreaId] = useState("all");
+  const [filterProcessId, setFilterProcessId] = useState("all");
+  const [filterKeyword, setFilterKeyword] = useState("");
+  const [selectedTime, setSelectedTime] = useState(() => formatTime(floorTimeToSlot(new Date().getHours() * 60 + new Date().getMinutes(), 30)));
+  const [rightTab, setRightTab] = useState<"staff" | "adjustments">("staff");
+  const [staffSearch, setStaffSearch] = useState("");
+  const [dragState, setDragState] = useState<DragState | null>(null);
+  const [snapshotsByTime, setSnapshotsByTime] = useState<SnapshotsByTime>({});
+  const [savedSnapshotsByTime, setSavedSnapshotsByTime] = useState<SnapshotsByTime>({});
+  const [savedAdjustmentItems, setSavedAdjustmentItems] = useState<AssignmentChangeItem[]>([]);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
+    const timerId = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timerId);
   }, []);
 
-  const n = new Date();
-  const currentMinutes = n.getHours() * 60 + n.getMinutes();
-  const nowLabel = formatTime(currentMinutes);
+  const qualificationMap = useMemo(() => new Map(qualifications.map((item) => [item.id, item])), [qualifications]);
+  const skillMap = useMemo(() => new Map(skills.map((item) => [item.id, item])), [skills]);
+  const workerMap = useMemo(() => new Map(MOCK_WORKERS.map((worker) => [worker.id, worker])), []);
+  const timeSlots = useMemo(() => createTimeSlots(timelineInterval), [timelineInterval]);
+  const deploymentStorageKey = useMemo(() => buildFieldDeploymentStorageKey(selectedSiteId), [selectedSiteId]);
+  const adjustmentStorageKey = useMemo(() => buildAdjustmentStorageKey(selectedSiteId), [selectedSiteId]);
 
-  const timeStr = now.toLocaleTimeString("ja-JP", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false
-  });
-  const dateStr = now.toLocaleDateString("ja-JP", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).replace(/\//g, "/");
-
-  // --- Timeline config ---
-  const [timelineInterval, setTimelineInterval] = useState<15 | 30 | 60>(30);
-  const timeSlots = useMemo(() => generateTimeSlots(timelineInterval), [timelineInterval]);
-
-  // --- Workers State ---
-  const [workers, setWorkers] = useState<Worker[]>(INITIAL_WORKERS);
-
-
-  // --- Area selection ---
-  const [areas] = useState<Area[]>(defaultAreas);
-  const [selectedAreaId, setSelectedAreaId] = useState<string | "all">("all");
-
-  // --- Time Axis ---
-  const [selectedTime, setSelectedTime] = useState(nowLabel);
-  const isCurrentTime = selectedTime === nowLabel;
-  const selectedMinutes = parseTime(selectedTime);
-  const sliderRef = useRef<HTMLDivElement>(null);
-
-  // --- Zone snapshots keyed by time ---
-  const [snapshotsByTime, setSnapshotsByTime] = useState<Record<string, Zone[]>>(() => ({
-    [nowLabel]: buildInitialZones(),
-  }));
-
-  // Current zones for the selected time
-  const allZones = useMemo(() => {
-    if (snapshotsByTime[selectedTime]) return snapshotsByTime[selectedTime];
-    const times = Object.keys(snapshotsByTime).sort();
-    let base = times[0];
-    for (const t of times) { if (parseTime(t) <= selectedMinutes) base = t; }
-    return cloneZones(snapshotsByTime[base]);
-  }, [snapshotsByTime, selectedTime, selectedMinutes]);
-
-  // Filtered zones for the selected area
-  const zones = useMemo(() => {
-    if (selectedAreaId === "all") return allZones;
-    return allZones.filter((z) => z.areaId === selectedAreaId);
-  }, [allZones, selectedAreaId]);
-
-  const setZones = useCallback((updater: (prev: Zone[]) => Zone[]) => {
-    setSnapshotsByTime((prev) => {
-      const current = prev[selectedTime] ?? cloneZones(allZones);
-      const next = updater(current);
-      return { ...prev, [selectedTime]: next };
-    });
-  }, [selectedTime, allZones]);
-
-  // --- Adjustment Queue ---
-  const [adjustments, setAdjustments] = useState<AdjustmentEntry[]>([
-    {
-      id: "adj-0",
-      scheduledTime: "12:00",
-      createdAt: "10:05",
-      changes: [
-        { workerId: "w7", workerName: "小林 さくら", fromZone: null, toZone: "仕分け" },
-        { workerId: "w9", workerName: "山田 裕子", fromZone: null, toZone: "仕分け" },
-      ],
-      status: "pending",
-      memo: "午後の仕分け増員",
-    },
-    {
-      id: "adj-1",
-      scheduledTime: "15:00",
-      createdAt: "10:10",
-      changes: [
-        { workerId: "w2", workerName: "渡辺 謙", fromZone: "検品", toZone: "梱包" },
-      ],
-      status: "notified",
-      memo: "出荷ピーク対応",
-    },
-  ]);
-  const [showAdjPanel, setShowAdjPanel] = useState(false);
-  const [adjMemo, setAdjMemo] = useState("");
-
-  // --- Other UI state ---
-  const [searchTerm, setSearchTerm] = useState("");
-  const [draggedWorkerId, setDraggedWorkerId] = useState<string | null>(null);
-  const [dragSource, setDragSource] = useState<{ processId: string; slotIndex: number } | null>(null);
-  const [expandedAreas, setExpandedAreas] = useState<Set<string>>(new Set());
-  const toggleAreaExpand = (areaId: string) => {
-    setExpandedAreas((prev) => {
-      const next = new Set(prev);
-      if (next.has(areaId)) next.delete(areaId); else next.add(areaId);
-      return next;
-    });
-  };
-  const isZoneExpanded = (zone: { areaId: string }) => expandedAreas.has(zone.areaId);
-  const [showCalculator, setShowCalculator] = useState(false);
-  const [calcProcessId, setCalcProcessId] = useState(defaultProcessSteps[0].id);
-  const [calcStartTime, setCalcStartTime] = useState(nowLabel);
-  const [calcEndTime, setCalcEndTime] = useState("18:00");
-  const [calcQuantity, setCalcQuantity] = useState("");
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
-
-  // Toast helper
-  const showToast = (msg: string) => { setToastMsg(msg); setTimeout(() => setToastMsg(null), 3000); };
-
-  // --- Derived ---
-  const assignedWorkerIds = useMemo(() => {
-    const ids = new Set<string>();
-    allZones.forEach((z) => z.slots.forEach((s) => { if (s.workerId) ids.add(s.workerId); }));
-    return ids;
-  }, [allZones]);
-
-  const freeWorkers = workers.filter((w: Worker) => w.status === "active" && !assignedWorkerIds.has(w.id));
-  const absentWorkers = workers.filter((w: Worker) => w.status === "absent");
-  const filteredFreeWorkers = freeWorkers.filter((w: Worker) => w.name.includes(searchTerm) || w.skills.some((s: any) => s.label.includes(searchTerm)));
-  const filteredAbsentWorkers = absentWorkers.filter((w: Worker) => w.name.includes(searchTerm) || w.skills.some((s: any) => s.label.includes(searchTerm)));
-
-  const totalActive = workers.filter((w: Worker) => w.status === "active" || w.status === "break").length;
-  const totalAll = workers.length;
-  const totalAbsent = workers.filter((w: Worker) => w.status === "absent").length;
-  const totalBreak = workers.filter((w: Worker) => w.status === "break").length;
-  const operationRate = Math.round(((totalActive - totalBreak) / totalAll) * 100);
-  const criticalZones = allZones.filter((z) => { const filled = z.slots.filter((s) => s.workerId).length; return filled / z.capacity < 0.25 && z.production.planned > 0; });
-
-  // Per-area stats
-  const areaStats = useMemo(() => {
-    const stats: Record<string, { workers: number; progress: number; critical: number }> = {};
-    for (const area of areas) {
-      const areaZones = allZones.filter((z) => z.areaId === area.id);
-      let workers = 0;
-      let totalProgress = 0;
-      let critical = 0;
-      for (const z of areaZones) {
-        const filled = z.slots.filter((s) => s.workerId).length;
-        workers += filled;
-        const m = calcZoneMetrics(z, currentMinutes);
-        totalProgress += m.progress;
-        if (filled / z.capacity < 0.25 && z.production.planned > 0) critical++;
-      }
-      stats[area.id] = {
-        workers,
-        progress: areaZones.length > 0 ? Math.round(totalProgress / areaZones.length) : 0,
-        critical,
-      };
-    }
-    return stats;
-  }, [allZones, areas, selectedMinutes]);
-
-  // Check if current time snapshot differs from the NOW snapshot
-  const hasChanges = useMemo(() => {
-    if (isCurrentTime) return false;
-    const baseSnapshot = snapshotsByTime[nowLabel]; // Optimized to use nowLabel
-    if (!baseSnapshot) return false;
-    return diffSnapshots(baseSnapshot, allZones, workers).length > 0;
-  }, [isCurrentTime, allZones, snapshotsByTime, workers, nowLabel]);
-
-  // Calculator result
-  const calcResult = useMemo(() => {
-    const zone = allZones.find((z) => z.processId === calcProcessId);
-    if (!zone) return null;
-    const qty = parseInt(calcQuantity) || Math.max(0, zone.production.planned - zone.production.actual);
-    const startMin = parseTime(calcStartTime);
-    const endMin = parseTime(calcEndTime);
-    const availH = Math.max(0.25, (endMin - startMin) / 60);
-    const uph = zone.production.currentUph || zone.baseUph;
-    const needed = Math.ceil(qty / (uph * availH));
-    const currentFilled = zone.slots.filter((s) => s.workerId).length;
-    return { zoneName: zone.name, quantity: qty, uph, needed: Math.max(1, needed), current: currentFilled, diff: Math.max(1, needed) - currentFilled };
-  }, [allZones, calcProcessId, calcStartTime, calcEndTime, calcQuantity]);
-
-  const pendingCount = adjustments.filter((a) => a.status === "pending").length;
-
-  // --- Handlers ---
-  const addToAdjustmentQueue = () => {
-    const baseSnapshot = snapshotsByTime[nowLabel];
-    if (!baseSnapshot) return;
-    const changes = diffSnapshots(baseSnapshot, allZones, workers);
-    if (changes.length === 0) { showToast("配置変更がありません"); return; }
-    const entry: AdjustmentEntry = {
-      id: `adj-${Date.now()}`,
-      scheduledTime: selectedTime,
-      createdAt: nowLabel,
-      changes,
-      status: "pending",
-      memo: adjMemo || `${selectedTime}の配置変更`,
-    };
-    setAdjustments((prev) => [...prev, entry]);
-    setAdjMemo("");
-    setShowAdjPanel(true);
-    showToast(`${selectedTime}の配置変更を調整リストに追加しました`);
-  };
-
-  const sendNotification = (adjId: string) => {
-    setAdjustments((prev) => prev.map((a) => a.id === adjId ? { ...a, status: "notified" as const } : a));
-    const adj = adjustments.find((a) => a.id === adjId);
-    showToast(`${adj?.scheduledTime ?? ""}の配置変更通知を${adj?.changes.length ?? 0}名に送信しました`);
-  };
-
-  const applyAdjustment = (adjId: string) => {
-    setAdjustments((prev) => prev.map((a) => a.id === adjId ? { ...a, status: "applied" as const } : a));
-    showToast("配置変更を適用しました");
-  };
-
-  const removeAdjustment = (adjId: string) => {
-    setAdjustments((prev) => prev.filter((a) => a.id !== adjId));
-  };
-
-  const sendAllPending = () => {
-    setAdjustments((prev) => prev.map((a) => a.status === "pending" ? { ...a, status: "notified" as const } : a));
-    showToast(`未送信${pendingCount}件の通知を一括送信しました`);
-  };
-
-  // Drag handlers
-  const handleDragStartFromPool = (workerId: string) => { setDraggedWorkerId(workerId); setDragSource(null); };
-  const handleDragStartFromSlot = (workerId: string, processId: string, slotIndex: number) => { setDraggedWorkerId(workerId); setDragSource({ processId, slotIndex }); };
-  const handleDropOnSlot = (processId: string, slotIndex: number | "new") => {
-    if (!draggedWorkerId) return;
-    setZones((prev) => {
-      const nz = cloneZones(prev);
-
-      if (slotIndex === "new") {
-        // Remove from old slot if moving
-        if (dragSource) {
-          const src = nz.find((z) => z.processId === dragSource.processId);
-          if (src) src.slots = src.slots.filter((_, i) => i !== dragSource.slotIndex);
-        }
-        // Append to new zone
-        const tgt = nz.find((z) => z.processId === processId);
-        if (tgt) tgt.slots.push({ workerId: draggedWorkerId });
-      } else {
-        // Existing slot - Handle Swap or Replace
-        const tgt = nz.find((z) => z.processId === processId);
-        if (tgt) {
-          const existingWorkerId = tgt.slots[slotIndex].workerId;
-
-          if (dragSource) {
-            // Internal move: swap
-            const src = nz.find((z) => z.processId === dragSource.processId);
-            if (src) {
-              if (existingWorkerId) {
-                // Swap
-                src.slots[dragSource.slotIndex].workerId = existingWorkerId;
-                tgt.slots[slotIndex].workerId = draggedWorkerId;
-              } else {
-                // Only move (safety, though slots shouldn't be empty anymore)
-                src.slots = src.slots.filter((_, i) => i !== dragSource.slotIndex);
-                tgt.slots[slotIndex].workerId = draggedWorkerId;
-              }
-            }
-          } else {
-            // From pool: replace
-            tgt.slots[slotIndex].workerId = draggedWorkerId;
-          }
-        }
-      }
-      return nz;
-    });
-    setDraggedWorkerId(null); setDragSource(null);
-  };
-  const handleDropOnPool = () => {
-    if (!draggedWorkerId || !dragSource) return;
-    setZones((prev) => {
-      const nz = cloneZones(prev);
-      const src = nz.find((z) => z.processId === dragSource.processId);
-      if (src) src.slots[dragSource.slotIndex].workerId = null;
-      return nz;
-    });
-    setDraggedWorkerId(null); setDragSource(null);
-  };
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); };
-  const handleDragEnd = () => { setDraggedWorkerId(null); setDragSource(null); };
-  const removeWorkerFromSlot = (processId: string, slotIndex: number) => {
-    setZones((prev) => prev.map((z) => z.processId === processId ? { ...z, slots: z.slots.map((s, i) => i === slotIndex ? { workerId: null } : s) } : z));
-  };
-  const getWorker = (id: string) => workers.find((w) => w.id === id);
-
-  const updateWorkerStatus = (workerId: string, newStatus: Worker["status"]) => {
-    setWorkers((prev) => prev.map((w) => w.id === workerId ? { ...w, status: newStatus } : w));
-
-    // If setting to 'absent', automatically remove from any zone slots
-    if (newStatus === "absent") {
-      setZones((prev) => prev.map((z) => ({
-        ...z,
-        slots: z.slots.map((s) => s.workerId === workerId ? { workerId: null } : s)
-      })));
-      showToast(`${getWorker(workerId)?.name}さんが退勤しました（配置から解除）`);
-    } else if (newStatus === "break") {
-      showToast(`${getWorker(workerId)?.name}さんが休憩に入りました`);
-    } else {
-      showToast(`${getWorker(workerId)?.name}さんが復帰しました`);
-    }
-  };
-
-  const updateZoneTime = (processId: string, field: "startTime" | "targetEndTime", value: string) => {
-    setZones((prev) => prev.map((z) => z.processId === processId ? { ...z, production: { ...z.production, [field]: value } } : z));
-  };
-
-  // Timeline navigation
-  const goToPrevSlot = () => {
-    const idx = timeSlots.indexOf(selectedTime);
-    if (idx > 0) setSelectedTime(timeSlots[idx - 1]);
-  };
-  const goToNextSlot = () => {
-    const idx = timeSlots.indexOf(selectedTime);
-    if (idx < timeSlots.length - 1) setSelectedTime(timeSlots[idx + 1]);
-  };
-  const goToNow = () => setSelectedTime(nowLabel);
-
-  // Scroll timeline to keep selection visible
   useEffect(() => {
-    if (sliderRef.current) {
-      const idx = timeSlots.indexOf(selectedTime);
-      const btn = sliderRef.current.children[idx] as HTMLElement | undefined;
-      if (btn) btn.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-    }
-  }, [selectedTime, timeSlots]);
+    if (timeSlots.includes(selectedTime)) return;
+    const currentSlot = formatTime(floorTimeToSlot(new Date().getHours() * 60 + new Date().getMinutes(), timelineInterval));
+    setSelectedTime(timeSlots.includes(currentSlot) ? currentSlot : (timeSlots[0] ?? currentSlot));
+  }, [timeSlots, selectedTime, timelineInterval]);
 
-  /* ================================================================ */
-  /*  Render                                                           */
-  /* ================================================================ */
+  const siteName = sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択";
+  const panels = useMemo(
+    () => buildPanels(workflows.filter((workflow) => workflow.siteId === selectedSiteId), shippers, areas, processes),
+    [workflows, selectedSiteId, shippers, areas, processes],
+  );
+  const allSteps = useMemo(() => panels.flatMap((panel) => panel.steps), [panels]);
+  const stepMap = useMemo(() => new Map(allSteps.map((step) => [step.id, step])), [allSteps]);
+  const baseSnapshot = useMemo(() => buildBaseSnapshot(allSteps, MOCK_WORKERS), [allSteps]);
+  const seededSnapshots = useMemo(() => createSeededSnapshots(timeSlots, allSteps, MOCK_WORKERS, baseSnapshot), [timeSlots, allSteps, baseSnapshot]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(deploymentStorageKey);
+      const rawAdjustment = window.localStorage.getItem(adjustmentStorageKey);
+      const defaultSnapshots = Object.fromEntries(
+        timeSlots.map((timeLabel) => [
+          timeLabel,
+          materializeSnapshot(seededSnapshots[timeLabel] ?? baseSnapshot, allSteps),
+        ]),
+      ) as SnapshotsByTime;
+
+      if (!raw) {
+        setSnapshotsByTime(defaultSnapshots);
+        setSavedSnapshotsByTime(defaultSnapshots);
+        if (rawAdjustment) {
+          const storedAdjustment = JSON.parse(rawAdjustment) as { savedAt?: string; items?: AssignmentChangeItem[] };
+          setSavedAdjustmentItems(storedAdjustment.items ?? []);
+          setLastSavedAt(storedAdjustment.savedAt ?? null);
+        } else {
+          setSavedAdjustmentItems([]);
+          setLastSavedAt(null);
+        }
+        return;
+      }
+
+      const stored = JSON.parse(raw) as Record<string, AssignmentSnapshot>;
+      const merged = Object.fromEntries(
+        timeSlots.map((timeLabel) => [
+          timeLabel,
+          materializeSnapshot(stored?.[timeLabel] ?? seededSnapshots[timeLabel] ?? baseSnapshot, allSteps),
+        ]),
+      ) as SnapshotsByTime;
+      setSnapshotsByTime(merged);
+      setSavedSnapshotsByTime(merged);
+      if (rawAdjustment) {
+        const storedAdjustment = JSON.parse(rawAdjustment) as { savedAt?: string; items?: AssignmentChangeItem[] };
+        setSavedAdjustmentItems(storedAdjustment.items ?? []);
+        setLastSavedAt(storedAdjustment.savedAt ?? null);
+      } else {
+        setSavedAdjustmentItems([]);
+        setLastSavedAt(null);
+      }
+    } catch {
+      const fallbackSnapshots = Object.fromEntries(
+        timeSlots.map((timeLabel) => [
+          timeLabel,
+          materializeSnapshot(seededSnapshots[timeLabel] ?? baseSnapshot, allSteps),
+        ]),
+      ) as SnapshotsByTime;
+      setSnapshotsByTime(fallbackSnapshots);
+      setSavedSnapshotsByTime(fallbackSnapshots);
+      setSavedAdjustmentItems([]);
+      setLastSavedAt(null);
+    }
+  }, [adjustmentStorageKey, deploymentStorageKey, seededSnapshots, timeSlots, baseSnapshot, allSteps]);
+
+  const normalizedSnapshotsByTime = useMemo(
+    () => Object.fromEntries(
+      timeSlots.map((timeLabel) => [
+        timeLabel,
+        materializeSnapshot(snapshotsByTime[timeLabel] ?? seededSnapshots[timeLabel] ?? baseSnapshot, allSteps),
+      ]),
+    ) as SnapshotsByTime,
+    [snapshotsByTime, timeSlots, seededSnapshots, baseSnapshot, allSteps],
+  );
+
+  const savedNormalizedSnapshotsByTime = useMemo(
+    () => Object.fromEntries(
+      timeSlots.map((timeLabel) => [
+        timeLabel,
+        materializeSnapshot(savedSnapshotsByTime[timeLabel] ?? seededSnapshots[timeLabel] ?? baseSnapshot, allSteps),
+      ]),
+    ) as SnapshotsByTime,
+    [savedSnapshotsByTime, timeSlots, seededSnapshots, baseSnapshot, allSteps],
+  );
+
+  const currentSnapshot = useMemo(
+    () => normalizedSnapshotsByTime[selectedTime] ?? materializeSnapshot(seededSnapshots[selectedTime] ?? baseSnapshot, allSteps),
+    [normalizedSnapshotsByTime, selectedTime, seededSnapshots, baseSnapshot, allSteps],
+  );
+
+  const panelsWithSlots = useMemo(
+    () => panels.map((panel) => ({
+      ...panel,
+      steps: panel.steps.map((step) => {
+        const slots = currentSnapshot[step.id] ?? [];
+        return {
+          ...step,
+          slots,
+          assignedCount: slots.filter((slot): slot is string => Boolean(slot)).length,
+        } satisfies StepView;
+      }),
+    })),
+    [panels, currentSnapshot],
+  );
+
+  const shipperOptions = useMemo(
+    () => shippers.filter((shipper) => panelsWithSlots.some((panel) => panel.shipperId === shipper.id)),
+    [panelsWithSlots, shippers],
+  );
+  const areaOptions = useMemo(
+    () => areas.filter((area) => panelsWithSlots.some((panel) => panel.areaId === area.id)),
+    [panelsWithSlots, areas],
+  );
+  const processOptions = useMemo(
+    () => processes.filter((process) => panelsWithSlots.some((panel) => panel.steps.some((step) => step.processId === process.id))),
+    [panelsWithSlots, processes],
+  );
+
+  const filteredPanels = useMemo(() => {
+    const keyword = filterKeyword.trim().toLowerCase();
+    return panelsWithSlots.filter((panel) => {
+      if (filterShipperId !== "all" && panel.shipperId !== filterShipperId) return false;
+      if (filterAreaId !== "all" && panel.areaId !== filterAreaId) return false;
+      if (filterProcessId !== "all" && !panel.steps.some((step) => step.processId === filterProcessId)) return false;
+      if (!keyword) return true;
+      const haystack = `${panel.shipperName} ${panel.areaName} ${panel.workflowName} ${panel.steps.map((step) => step.processName).join(" ")}`.toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [panelsWithSlots, filterShipperId, filterAreaId, filterProcessId, filterKeyword]);
+
+  useEffect(() => {
+    if (selectedPanelId === "all") return;
+    if (filteredPanels.some((panel) => panel.id === selectedPanelId)) return;
+    setSelectedPanelId("all");
+  }, [filteredPanels, selectedPanelId]);
+
+  const displayPanels = useMemo(
+    () => selectedPanelId === "all" ? filteredPanels : filteredPanels.filter((panel) => panel.id === selectedPanelId),
+    [filteredPanels, selectedPanelId],
+  );
+
+  const selectedMinutes = parseTime(selectedTime);
+  const metricsByStepId = useMemo(
+    () => new Map(
+      panelsWithSlots.flatMap((panel) => panel.steps.map((step) => [
+        step.id,
+        calcStepMetrics(step, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime),
+      ])),
+    ),
+    [panelsWithSlots, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime],
+  );
+  const visibleSteps = useMemo(
+    () => displayPanels.flatMap((panel) => panel.steps.map((step) => ({
+      panel,
+      step,
+      meta: metricsByStepId.get(step.id) ?? calcStepMetrics(step, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime),
+    }))),
+    [displayPanels, metricsByStepId, normalizedSnapshotsByTime, selectedMinutes, timeSlots, timelineInterval],
+  );
+  const adjustmentItems = useMemo(
+    () => visibleSteps
+      .filter(({ meta }) => meta.shortage > 0 || meta.overdue || meta.progress < 50)
+      .map(({ panel, step, meta }) => ({
+        id: `${panel.id}:${step.id}`,
+        panelId: panel.id,
+        areaName: panel.areaName,
+        processName: step.processName,
+        shortage: meta.shortage,
+        recommended: meta.recommended,
+        progress: meta.progress,
+        eta: meta.eta,
+        overdue: meta.overdue,
+      }))
+      .sort((left, right) => (Number(right.overdue) - Number(left.overdue)) || (right.shortage - left.shortage) || (left.progress - right.progress)),
+    [visibleSteps],
+  );
+
+  const assignedWorkerIds = useMemo(
+    () => new Set(Object.values(currentSnapshot).flat().filter((value): value is string => Boolean(value))),
+    [currentSnapshot],
+  );
+
+  const filteredWorkerText = staffSearch.trim().toLowerCase();
+  const freeWorkers = MOCK_WORKERS.filter((worker) => {
+    if (worker.status !== "active" || assignedWorkerIds.has(worker.id)) return false;
+    if (!filteredWorkerText) return true;
+    const haystack = `${worker.name} ${worker.skillIds.map((id) => skillMap.get(id)?.name ?? "").join(" ")} ${worker.note ?? ""}`.toLowerCase();
+    return haystack.includes(filteredWorkerText);
+  });
+  const breakWorkers = MOCK_WORKERS.filter((worker) => worker.status === "break");
+  const absentWorkers = MOCK_WORKERS.filter((worker) => worker.status === "absent");
+  const activeCount = MOCK_WORKERS.filter((worker) => worker.status === "active").length;
+  const assignedCount = Array.from(assignedWorkerIds).length;
+  const breakCount = breakWorkers.length;
+  const absentCount = absentWorkers.length;
+  const attendanceRate = Math.round((activeCount / MOCK_WORKERS.length) * 100);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowSlot = formatTime(floorTimeToSlot(nowMinutes, timelineInterval));
+  const hasFilters = filterShipperId !== "all" || filterAreaId !== "all" || filterProcessId !== "all" || filterKeyword.trim().length > 0;
+  const unsavedAdjustmentItems = useMemo(
+    () => generateAssignmentChanges({
+      timeSlots,
+      currentSnapshots: normalizedSnapshotsByTime,
+      savedSnapshots: savedNormalizedSnapshotsByTime,
+      workerMap,
+      stepMap,
+    }),
+    [timeSlots, normalizedSnapshotsByTime, savedNormalizedSnapshotsByTime, workerMap, stepMap],
+  );
+  const changedTimeSlots = useMemo(
+    () => new Set(unsavedAdjustmentItems.map((item) => item.effectiveTime)),
+    [unsavedAdjustmentItems],
+  );
+
+  const updateFutureSnapshots = (workerId: string, targetStepId: string | null, targetIndex: number) => {
+    const selectedIndex = timeSlots.indexOf(selectedTime);
+    if (selectedIndex < 0) return;
+
+    setSnapshotsByTime((prev) => {
+      const nextState = { ...prev };
+
+      for (let index = selectedIndex; index < timeSlots.length; index += 1) {
+        const timeLabel = timeSlots[index];
+        const source = materializeSnapshot(prev[timeLabel] ?? seededSnapshots[timeLabel] ?? baseSnapshot, allSteps);
+        const nextSnapshot = cloneSnapshot(source);
+
+        Object.keys(nextSnapshot).forEach((stepKey) => {
+          nextSnapshot[stepKey] = (nextSnapshot[stepKey] ?? []).filter(
+            (assignedId): assignedId is string => Boolean(assignedId) && assignedId !== workerId,
+          );
+        });
+
+        if (targetStepId) {
+          const targetSlots = [...(nextSnapshot[targetStepId] ?? [])].filter((assignedId): assignedId is string => Boolean(assignedId));
+          const insertIndex = clamp(targetIndex, 0, targetSlots.length);
+          targetSlots.splice(insertIndex, 0, workerId);
+          nextSnapshot[targetStepId] = targetSlots;
+        }
+
+        const materializedSnapshot = materializeSnapshot(nextSnapshot, allSteps);
+        nextState[timeLabel] = materializedSnapshot;
+      }
+
+      return nextState;
+    });
+  };
+
+  const handleDropToSlot = (stepId: string, slotIndex: number) => {
+    if (!dragState) return;
+    updateFutureSnapshots(dragState.workerId, stepId, slotIndex);
+    setDragState(null);
+  };
+
+  const handleDropToPool = () => {
+    if (!dragState) return;
+    updateFutureSnapshots(dragState.workerId, null, 0);
+    setDragState(null);
+  };
+
+  const moveTimeline = (direction: -1 | 1) => {
+    const index = timeSlots.indexOf(selectedTime);
+    if (index < 0) return;
+    const nextIndex = clamp(index + direction, 0, timeSlots.length - 1);
+    setSelectedTime(timeSlots[nextIndex]);
+  };
+
+  const resetSelectedTime = () => {
+    const selectedIndex = timeSlots.indexOf(selectedTime);
+    if (selectedIndex < 0) return;
+
+    setSnapshotsByTime((prev) => {
+      const nextState = { ...prev };
+
+      for (let index = selectedIndex; index < timeSlots.length; index += 1) {
+        const timeLabel = timeSlots[index];
+        const resetSnapshot = seededSnapshots[timeLabel];
+        if (!resetSnapshot) continue;
+        nextState[timeLabel] = materializeSnapshot(resetSnapshot, allSteps);
+      }
+
+      return nextState;
+    });
+  };
+
+  const handleSave = () => {
+    const savedAt = new Date().toISOString();
+    const effectiveTimes = Array.from(new Set(unsavedAdjustmentItems.map((item) => item.effectiveTime)))
+      .sort((left, right) => parseTime(left) - parseTime(right));
+
+    effectiveTimes.forEach((timeLabel) => {
+      if (!selectedSiteId) return;
+      pushAssignmentChangeNotifications({
+        siteId: selectedSiteId,
+        effectiveTime: timeLabel,
+        previousSnapshot: savedNormalizedSnapshotsByTime[timeLabel] ?? {},
+        nextSnapshot: normalizedSnapshotsByTime[timeLabel] ?? {},
+        stepMap,
+        workerMap,
+      });
+    });
+
+    window.localStorage.setItem(deploymentStorageKey, JSON.stringify(normalizedSnapshotsByTime));
+    window.localStorage.setItem(adjustmentStorageKey, JSON.stringify({ savedAt, items: unsavedAdjustmentItems }));
+    setSavedSnapshotsByTime(normalizedSnapshotsByTime);
+    setSavedAdjustmentItems(unsavedAdjustmentItems);
+    setLastSavedAt(savedAt);
+    setRightTab("adjustments");
+  };
 
   return (
-    <div className={`h-full flex flex-col ${c.isDark ? "bg-[#0d0d1a]" : "bg-gray-50"} relative`}>
-
-      {/* ── Toast ── */}
-      {toastMsg && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 animate-[fadeIn_0.2s_ease]">
-          <div className={`flex items-center gap-2 px-5 py-3 rounded-xl shadow-lg ${c.isDark ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-300" : "bg-emerald-50 border border-emerald-200 text-emerald-700"
-            }`}>
-            <Check className="w-4 h-4" />
-            <span className="text-[13px]">{toastMsg}</span>
+    <div className={`flex h-full min-h-0 flex-col ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-50"}`}>
+      <div className={`${c.bgCard} border-b ${c.border} px-5 py-4`}>
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-3">
+            <Clock3 className={`h-5 w-5 ${c.textMuted}`} />
+            <div>
+              <div className={`text-[30px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                {now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })}
+              </div>
+              <div className={`mt-1 text-[13px] ${c.textSecondary}`}>{now.toLocaleDateString("ja-JP")}</div>
+            </div>
           </div>
-        </div>
-      )}
 
-      {/* ══════════ Top Bar ══════════ */}
-      <div className={`${c.bgCard} border-b ${c.border} px-5 py-2.5 flex items-center gap-5`}>
-        <div className="flex items-center gap-2">
-          <Clock className={`w-5 h-5 ${c.textMuted}`} />
-          <span className={`text-[26px] ${c.textPrimary} tracking-tight tabular-nums`}>{timeStr}</span>
-          <span className={`text-[13px] ${c.textSecondary} ml-1`}>{dateStr}</span>
-        </div>
-        <div className={`flex items-center gap-5 border-l ${c.border} pl-5`}>
-          <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>出勤</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalActive}<span className={`text-[12px] ${c.textSecondary}`}>/{totalAll}</span></div></div>
-          <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>休憩</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalBreak}</div></div>
-          <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>未出勤・退勤</div><div className={`text-[17px] ${c.textPrimary} tabular-nums`}>{totalAbsent}</div></div>
-          <div className="text-center"><div className={`text-[11px] ${c.textSecondary}`}>稼働率</div><div className="text-[17px] text-emerald-500 tabular-nums">{operationRate}%</div></div>
-        </div>
-        {criticalZones.length > 0 && (
-          <div className={`flex-1 flex items-center gap-2 rounded-lg px-3 py-1.5 ${c.isDark ? "bg-amber-500/10 border border-amber-500/30" : "bg-amber-50 border border-amber-200"}`}>
-            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-            <span className={`text-[12px] ${c.isDark ? "text-amber-300" : "text-amber-800"}`}>{criticalZones.map((z) => z.name).join("、")}で人員不足</span>
+          <div className={`flex flex-wrap items-center gap-5 border-l ${c.border} pl-5`}>
+            <div>
+              <div className={`text-[11px] ${c.textMuted}`}>出勤</div>
+              <div className={`text-[18px] font-semibold tabular-nums ${c.textPrimary}`}>{activeCount}</div>
+            </div>
+            <div>
+              <div className={`text-[11px] ${c.textMuted}`}>休憩</div>
+              <div className={`text-[18px] font-semibold tabular-nums ${c.textPrimary}`}>{breakCount}</div>
+            </div>
+            <div>
+              <div className={`text-[11px] ${c.textMuted}`}>離席</div>
+              <div className={`text-[18px] font-semibold tabular-nums ${c.textPrimary}`}>{absentCount}</div>
+            </div>
+            <div>
+              <div className={`text-[11px] ${c.textMuted}`}>配置済み</div>
+              <div className={`text-[18px] font-semibold tabular-nums ${c.textPrimary}`}>{assignedCount}</div>
+            </div>
+            <div>
+              <div className={`text-[11px] ${c.textMuted}`}>稼働率</div>
+              <div className="text-[18px] font-semibold tabular-nums text-emerald-500">{attendanceRate}%</div>
+            </div>
           </div>
-        )}
-        <div className="flex items-center gap-2 ml-auto shrink-0">
-          <button onClick={() => setShowCalculator(!showCalculator)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] transition-all ${showCalculator ? "bg-violet-600 text-white" : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`}`}>
-            <Calculator className="w-3.5 h-3.5" />推薦人数
+
+          <div className={`flex min-w-[280px] flex-1 items-center gap-2 rounded-2xl border px-4 py-3 ${c.isDark ? "border-amber-500/30 bg-amber-500/10" : "border-amber-200 bg-amber-50"}`}>
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            <span className={`text-[12px] ${c.isDark ? "text-amber-200" : "text-amber-900"}`}>
+              {adjustmentItems.length > 0 ? `注意工程 ${adjustmentItems.slice(0, 3).map((item) => item.processName).join(" / ")}` : "調整が必要な工程はありません"}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={resetSelectedTime}
+            className={`ml-auto inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-medium ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            この時点以降を初期配置へ戻す
           </button>
-          <button onClick={() => setShowAdjPanel(!showAdjPanel)}
-            className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] transition-all ${showAdjPanel ? "bg-orange-600 text-white" : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`}`}>
-            <ListChecks className="w-3.5 h-3.5" />調整リスト
-            {pendingCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center">{pendingCount}</span>
+          <button
+            type="button"
+            onClick={handleSave}
+            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-blue-500"
+          >
+            <Save className="h-3.5 w-3.5" />
+            保存
+            {unsavedAdjustmentItems.length > 0 && (
+              <span className="rounded-full bg-white/15 px-1.5 py-0.5 text-[10px]">{unsavedAdjustmentItems.length}</span>
             )}
           </button>
-          <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 text-white text-[12px] hover:bg-blue-500 transition-all">
-            <Save className="w-3.5 h-3.5" />保存
-          </button>
+        </div>
+        <div className={`mt-3 flex items-center justify-end gap-2 text-[11px] ${c.textSecondary}`}>
+          {unsavedAdjustmentItems.length > 0 ? (
+            <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-amber-500">
+              未保存の配置変更 {unsavedAdjustmentItems.length}件
+            </span>
+          ) : lastSavedAt ? (
+            <span>最終保存 {new Date(lastSavedAt).toLocaleString("ja-JP")}</span>
+          ) : (
+            <span>保存済みの配置変更はありません</span>
+          )}
         </div>
       </div>
 
-      {/* ══════════ Area Tabs ══════════ */}
-      <div className={`${c.bgCard} border-b ${c.border} px-5 py-2 flex items-center gap-2 overflow-x-auto`}>
-        <MapPin className={`w-4 h-4 ${c.textMuted} shrink-0`} />
+      <div className={`${c.bgCard} border-b ${c.border} px-5 py-3`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${c.bgSurface} ${c.borderCard}`}>
+            <MapPin className={`h-4 w-4 ${c.textMuted}`} />
+            <div>
+              <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{siteName}</div>
+              <div className={`text-[10px] ${c.textMuted}`}>ワークフロー {panelsWithSlots.length}件</div>
+            </div>
+          </div>
+          <select value={filterShipperId} onChange={(event) => setFilterShipperId(event.target.value)} className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} rounded-xl border px-3 py-2 text-[12px] outline-none`}>
+            <option value="all">荷主: すべて</option>
+            {shipperOptions.map((shipper) => <option key={shipper.id} value={shipper.id}>{shipper.name}</option>)}
+          </select>
+          <select value={filterAreaId} onChange={(event) => setFilterAreaId(event.target.value)} className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} rounded-xl border px-3 py-2 text-[12px] outline-none`}>
+            <option value="all">エリア: すべて</option>
+            {areaOptions.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+          </select>
+          <select value={filterProcessId} onChange={(event) => setFilterProcessId(event.target.value)} className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} rounded-xl border px-3 py-2 text-[12px] outline-none`}>
+            <option value="all">工程: すべて</option>
+            {processOptions.map((process) => <option key={process.id} value={process.id}>{process.name}</option>)}
+          </select>
+          <div className={`flex min-w-[240px] flex-1 items-center gap-2 rounded-xl border px-3 py-2 ${c.bgSurface} ${c.borderCard}`}>
+            <Search className={`h-4 w-4 ${c.textMuted}`} />
+            <input
+              value={filterKeyword}
+              onChange={(event) => setFilterKeyword(event.target.value)}
+              placeholder="荷主・エリア・工程で検索"
+              className={`w-full bg-transparent text-[12px] ${c.textPrimary} outline-none placeholder:text-slate-400`}
+            />
+          </div>
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilterShipperId("all");
+                setFilterAreaId("all");
+                setFilterProcessId("all");
+                setFilterKeyword("");
+                setSelectedPanelId("all");
+              }}
+              className={`rounded-xl border px-3 py-2 text-[12px] ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}
+            >
+              クリア
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className={`${c.bgCard} border-b ${c.border} px-5 py-3`}>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => moveTimeline(-1)} className={`rounded-xl border p-2 ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <div className="flex flex-1 items-center gap-2 overflow-x-auto pb-1">
+            {timeSlots.map((timeLabel) => {
+              const isSelected = selectedTime === timeLabel;
+              const isCurrent = nowSlot === timeLabel;
+              const isChanged = changedTimeSlots.has(timeLabel);
+              return (
+                <button
+                  key={timeLabel}
+                  type="button"
+                  onClick={() => setSelectedTime(timeLabel)}
+                  className={[
+                    "shrink-0 rounded-xl border px-3 py-2 text-left transition-all",
+                    isSelected
+                      ? isChanged
+                        ? (c.isDark ? "border-amber-500/50 bg-amber-500/20 text-amber-100" : "border-amber-400 bg-amber-100 text-amber-800")
+                        : (c.isDark ? "border-cyan-500/40 bg-cyan-500/15 text-cyan-200" : "border-cyan-300 bg-cyan-50 text-cyan-700")
+                      : isChanged
+                        ? (c.isDark ? "border-amber-500/40 bg-amber-500/15 text-amber-200" : "border-amber-300 bg-amber-50 text-amber-700")
+                      : `${c.bgSurface} ${c.borderCard} ${c.textSecondary}`,
+                  ].join(" ")}
+                >
+                  <div className="text-[12px] font-semibold tabular-nums">{timeLabel}</div>
+                  <div className={`text-[10px] ${isChanged || isCurrent ? "text-amber-500" : c.textMuted}`}>
+                    {isChanged ? "変更" : isCurrent ? "現在" : "時点"}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <button type="button" onClick={() => moveTimeline(1)} className={`rounded-xl border p-2 ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <div className={`ml-2 flex items-center gap-1 rounded-xl border p-1 ${c.bgSurface} ${c.borderCard}`}>
+            {INTERVAL_OPTIONS.map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setTimelineInterval(option)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] ${timelineInterval === option ? "bg-blue-600 text-white" : c.textSecondary}`}
+              >
+                {option}分
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className={`${c.bgCard} border-b ${c.border} flex items-center gap-2 overflow-x-auto px-5 py-2`}>
+        <Filter className={`h-4 w-4 ${c.textMuted}`} />
         <button
-          onClick={() => setSelectedAreaId("all")}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${selectedAreaId === "all"
-            ? c.isDark
-              ? "bg-blue-500/15 border-blue-500/40 text-blue-300"
-              : "bg-blue-50 border-blue-300 text-blue-700"
-            : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
-            }`}
+          type="button"
+          onClick={() => setSelectedPanelId("all")}
+          className={`rounded-xl border px-3 py-1.5 text-[12px] ${selectedPanelId === "all" ? (c.isDark ? "border-blue-500/40 bg-blue-500/15 text-blue-300" : "border-blue-300 bg-blue-50 text-blue-700") : `${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}`}
         >
-          <Layers className="w-3.5 h-3.5" />
-          全エリア
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${c.bgSurface} ${c.textMuted}`}>
-            {allZones.length}
-          </span>
+          全ワークフロー
         </button>
-        {areas.map((area) => {
-          const aColors = processColorClasses[area.color] ?? processColorClasses.cyan;
-          const isActive = selectedAreaId === area.id;
-          const stats = areaStats[area.id];
+        {filteredPanels.map((panel) => {
+          const average = panel.steps.length > 0
+            ? Math.round(panel.steps.reduce((sum, step) => sum + (metricsByStepId.get(step.id)?.progress ?? 0), 0) / panel.steps.length)
+            : 0;
+          const colorTone = processColorClasses[panel.color] ?? processColorClasses.cyan;
           return (
             <button
-              key={area.id}
-              onClick={() => setSelectedAreaId(area.id)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[12px] transition-all shrink-0 border ${isActive
-                ? `${aColors.bg} ${aColors.border} ${aColors.text}`
-                : `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`
-                }`}
+              key={panel.id}
+              type="button"
+              onClick={() => setSelectedPanelId(panel.id)}
+              className={`flex shrink-0 items-center gap-2 rounded-xl border px-3 py-1.5 text-[12px] ${selectedPanelId === panel.id ? `${colorTone.bg} ${colorTone.border} ${colorTone.text}` : `${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}`}
             >
-              <div className={`w-2 h-2 rounded-full ${aColors.bg} border ${aColors.border}`} />
-              <span className="max-w-[120px] truncate">{area.name}</span>
-              <div className="flex items-center gap-1.5">
-                <span className={`text-[10px] ${c.textMuted} flex items-center gap-0.5`}>
-                  <Users className="w-2.5 h-2.5" />{stats?.workers ?? 0}
-                </span>
-                <span className={`text-[10px] tabular-nums ${(stats?.progress ?? 0) >= 70 ? "text-emerald-400"
-                  : (stats?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
-                  }`}>{stats?.progress ?? 0}%</span>
-                {(stats?.critical ?? 0) > 0 && (
-                  <AlertTriangle className="w-3 h-3 text-amber-400" />
-                )}
+              <div className="text-left">
+                <div className="max-w-[160px] truncate font-semibold">{panel.areaName}</div>
+                <div className={`max-w-[160px] truncate text-[10px] ${c.textMuted}`}>{panel.shipperName}</div>
               </div>
+              <span className={`text-[10px] font-semibold tabular-nums ${average >= 70 ? "text-emerald-500" : average >= 40 ? "text-amber-500" : "text-rose-500"}`}>{average}%</span>
             </button>
           );
         })}
       </div>
 
-      {/* ══════════ Time Axis ══════════ */}
-      <div className={`${c.bgCard} border-b ${c.border} px-3 py-2`}>
-        <div className="flex items-center gap-2">
-          {/* Interval Selector */}
-          <div className={`flex items-center gap-1 p-1 rounded-lg ${c.bgSurface} border ${c.borderCard} mr-2 shrink-0`}>
-            {[15, 30, 60].map((v) => (
-              <button
-                key={v}
-                onClick={() => setTimelineInterval(v as any)}
-                className={`px-2 py-0.5 rounded text-[10px] transition-all ${timelineInterval === v
-                  ? "bg-blue-600 text-white"
-                  : `${c.textMuted} hover:${c.textPrimary}`
-                  }`}
-              >
-                {v === 60 ? "1h" : `${v}m`}
-              </button>
-            ))}
-          </div>
-
-          <button onClick={goToPrevSlot} className={`${c.textMuted} hover:${c.textPrimary} p-1 rounded transition-colors`}><ChevronLeft className="w-4 h-4" /></button>
-
-          {/* Timeline slider */}
-          <div className="flex-1 relative overflow-hidden">
-            <div ref={sliderRef} className="flex items-center gap-0 overflow-x-auto scrollbar-hide" style={{ scrollbarWidth: "none" }}>
-              {timeSlots.map((t) => {
-                const mins = parseTime(t);
-                const isNow = t === nowLabel;
-                const isSelected = t === selectedTime;
-                const isPast = mins < currentMinutes;
-                const hasSnapshot = !!snapshotsByTime[t] && t !== nowLabel;
-                const hasAdj = adjustments.some((a) => a.scheduledTime === t);
-                const isHour = mins % 60 === 0;
+      <div className="grid min-h-0 flex-1 gap-4 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-h-0 overflow-y-auto pr-1">
+          {displayPanels.length === 0 ? (
+            <div className={`rounded-3xl border border-dashed ${c.borderCard} ${c.bgCard} px-6 py-12 text-center`}>
+              <div className={`text-[16px] font-semibold ${c.textPrimary}`}>対象のワークフローがありません</div>
+              <div className={`mt-2 text-[13px] ${c.textSecondary}`}>現在の拠点・フィルター条件に一致する工程が見つかりません。</div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {displayPanels.map((panel) => {
+                const totalRequired = panel.steps.reduce((sum, step) => sum + step.headcount, 0);
+                const totalAssigned = panel.steps.reduce((sum, step) => sum + step.assignedCount, 0);
+                const averageProgress = panel.steps.length > 0
+                  ? Math.round(panel.steps.reduce((sum, step) => sum + (metricsByStepId.get(step.id)?.progress ?? 0), 0) / panel.steps.length)
+                  : 0;
+                const panelTone = processColorClasses[panel.color] ?? processColorClasses.cyan;
 
                 return (
-                  <button
-                    key={t}
-                    onClick={() => setSelectedTime(t)}
-                    className={`relative flex flex-col items-center shrink-0 transition-all ${isHour ? "min-w-[48px]" : "min-w-[36px]"} py-1 rounded-lg ${isSelected
-                      ? c.isDark ? "bg-blue-500/20 ring-1 ring-blue-500/50" : "bg-blue-50 ring-1 ring-blue-300"
-                      : "hover:bg-white/5"
-                      }`}
-                  >
-                    <span className={`text-[10px] tabular-nums ${isSelected ? (c.isDark ? "text-blue-300" : "text-blue-600")
-                      : isNow ? "text-emerald-400"
-                        : isPast ? (c.isDark ? "text-gray-500" : "text-gray-400")
-                          : (c.isDark ? "text-blue-400" : "text-blue-500")
-                      } ${!isHour ? "text-[9px]" : ""}`}>{t}</span>
-
-                    <div className="relative mt-1">
-                      {isNow ? (
-                        <div className="w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-emerald-500/30 animate-pulse" />
-                      ) : isSelected ? (
-                        <div className={`w-3 h-3 rounded-full ${c.isDark ? "bg-blue-400" : "bg-blue-500"} ring-2 ${c.isDark ? "ring-blue-400/30" : "ring-blue-300"}`} />
-                      ) : hasSnapshot || hasAdj ? (
-                        <div className={`w-2 h-2 rounded-full ${hasAdj ? "bg-orange-400" : "bg-cyan-400"}`} />
-                      ) : (
-                        <div className={`w-1.5 h-1.5 rounded-full ${isPast
-                          ? (c.isDark ? "bg-gray-700" : "bg-gray-300")
-                          : (c.isDark ? "bg-blue-500/40" : "bg-blue-200")
-                          }`} />
-                      )}
+                  <section key={panel.id} className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`h-3 w-3 rounded-full border ${panelTone.bg} ${panelTone.border}`} />
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`text-[18px] font-semibold ${c.textPrimary}`}>{panel.areaName}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] ${panelTone.bg} ${panelTone.text}`}>{panel.shipperName}</span>
+                          </div>
+                          <div className={`text-[12px] ${c.textSecondary}`}>{panel.workflowName}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className={`text-[12px] ${c.textSecondary}`}><Users className="mr-1 inline h-3.5 w-3.5" />{totalAssigned}/{totalRequired}名</div>
+                        <div className={`text-[12px] font-semibold ${averageProgress >= 70 ? "text-emerald-500" : averageProgress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{averageProgress}%</div>
+                      </div>
                     </div>
 
-                    {hasAdj && !isSelected && (
-                      <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-orange-400" />
-                    )}
-                  </button>
+                    <div className="grid gap-4 2xl:grid-cols-2">
+                      {panel.steps.map((step) => {
+                        const tone = processColorClasses[step.color] ?? processColorClasses.cyan;
+                        const meta = metricsByStepId.get(step.id) ?? calcStepMetrics(step, selectedMinutes, timeSlots, timelineInterval, normalizedSnapshotsByTime);
+                        const requiredLabels = [
+                          ...step.requiredSkillIds.map((id) => skillMap.get(id)?.name ?? ""),
+                          ...step.requiredQualificationIds.map((id) => qualificationMap.get(id)?.name ?? ""),
+                        ].filter(Boolean).slice(0, 3);
+
+                        return (
+                          <article key={step.id} className={`rounded-3xl border p-3 ${c.bgCard} ${c.border}`}>
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${tone.bg} ${tone.text}`}>
+                                  <step.icon className="h-5 w-5" />
+                                </div>
+                                <div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <div className={`text-[18px] font-semibold ${c.textPrimary}`}>{step.processName}</div>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] ${tone.bg} ${tone.text}`}>{step.areaName}</span>
+                                  </div>
+                                  <div className={`text-[12px] ${c.textSecondary}`}>{step.description}</div>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className={`text-[12px] ${c.textSecondary}`}>{step.assignedCount}/{step.headcount}名</div>
+                                <div className={`text-[12px] font-semibold ${meta.shortage > 0 ? "text-rose-500" : "text-emerald-500"}`}>
+                                  {meta.shortage > 0 ? `不足 ${meta.shortage}名` : "配置充足"}
+                                </div>
+                              </div>
+                            </div>
+
+                            {requiredLabels.length > 0 && (
+                              <div className="mt-3 flex flex-wrap gap-1">
+                                {requiredLabels.map((label) => (
+                                  <span key={`${step.id}-${label}`} className={`rounded-full px-2 py-0.5 text-[10px] ${c.bgSurface} ${c.textSecondary}`}>
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className={`mt-4 grid grid-cols-5 gap-2 rounded-2xl px-3 py-3 ${c.bgSurface}`}>
+                              <div>
+                                <div className={`text-[10px] ${c.textMuted}`}>予定</div>
+                                <div className={`text-[16px] font-semibold tabular-nums ${c.textPrimary}`}>{step.planned.toLocaleString("ja-JP")}</div>
+                              </div>
+                              <div>
+                                <div className={`text-[10px] ${c.textMuted}`}>実績</div>
+                                <div className="text-[16px] font-semibold tabular-nums text-cyan-500">{meta.actual.toLocaleString("ja-JP")}</div>
+                              </div>
+                              <div>
+                                <div className={`text-[10px] ${c.textMuted}`}>進捗</div>
+                                <div className={`text-[16px] font-semibold tabular-nums ${meta.progress < 50 ? "text-rose-500" : "text-amber-500"}`}>{meta.progress}%</div>
+                              </div>
+                              <div>
+                                <div className={`text-[10px] ${c.textMuted}`}>UPH</div>
+                                <div className="text-[16px] font-semibold tabular-nums text-violet-500">{step.assignedCount * step.uph}</div>
+                              </div>
+                              <div>
+                                <div className={`text-[10px] ${c.textMuted}`}>見込</div>
+                                <div className={`text-[16px] font-semibold tabular-nums ${meta.overdue ? "text-rose-500" : c.textPrimary}`}>{meta.eta}</div>
+                              </div>
+                            </div>
+
+                            <div className="mt-3">
+                              <div className={`h-2 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                                <div className={`h-2 rounded-full ${meta.progress >= 70 ? "bg-emerald-500" : meta.progress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(meta.progress, 4)}%` }} />
+                              </div>
+                              <div className={`mt-2 flex items-center justify-between text-[11px] ${c.textSecondary}`}>
+                                <span>開始 {step.startTime}</span>
+                                <span>目標終了 {step.targetEndTime}</span>
+                                <span>推奨 {meta.recommended}名</span>
+                              </div>
+                            </div>
+
+                            <div
+                              className={`mt-3 rounded-2xl border p-2.5 ${dragState ? "border-cyan-400/60" : c.borderCard}`}
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={() => handleDropToSlot(step.id, step.slots.length)}
+                            >
+                              <div className="mb-2 flex items-center justify-between">
+                                <div className={`text-[12px] font-semibold ${c.textPrimary}`}>作業員カード</div>
+                                <div className={`text-[10px] ${c.textMuted}`}>時点 {selectedTime} / 以降へ反映</div>
+                              </div>
+                              <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+                                {step.slots.map((workerId, slotIndex) => {
+                                  const worker = workerId ? workerMap.get(workerId) : undefined;
+                                  if (!worker) return null;
+                                  return (
+                                    <div
+                                      key={`${step.id}-slot-${slotIndex}`}
+                                      onDragOver={(event) => event.preventDefault()}
+                                      onDrop={(event) => {
+                                        event.preventDefault();
+                                        handleDropToSlot(step.id, slotIndex);
+                                      }}
+                                      className={worker ? "min-h-[84px]" : `min-h-[84px] rounded-xl border p-1.5 ${c.borderCard} ${c.bgSurface}`}
+                                    >
+                                      <div className={`mb-1 text-[9px] ${c.textMuted}`}>枠 {slotIndex + 1}</div>
+                                      <StaffCard
+                                        worker={worker}
+                                        themeColors={c}
+                                        qualificationMap={qualificationMap}
+                                        skillMap={skillMap}
+                                        muted={worker.status !== "active"}
+                                        compact
+                                        draggable
+                                        onDragStart={(event) => {
+                                          event.dataTransfer.effectAllowed = "move";
+                                          event.dataTransfer.setData("text/plain", worker.id);
+                                          setDragState({ workerId: worker.id, fromStepId: step.id, fromSlotIndex: slotIndex });
+                                        }}
+                                        onDragEnd={() => setDragState(null)}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                                <div
+                                  onDragOver={(event) => event.preventDefault()}
+                                  onDrop={(event) => {
+                                    event.preventDefault();
+                                    handleDropToSlot(step.id, step.slots.length);
+                                  }}
+                                  className={`min-h-[84px] rounded-xl border p-1.5 ${c.borderCard} ${c.bgSurface}`}
+                                >
+                                  <div className={`mb-1 text-[9px] ${c.textMuted}`}>追加枠</div>
+                                  <div className={`flex h-[52px] items-center justify-center rounded-lg ${c.bgCard} text-[11px] ${c.textMuted}`}>
+                                    ここへ配置
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
                 );
               })}
             </div>
-            <div className={`absolute bottom-[13px] left-0 right-0 h-px ${c.isDark ? "bg-gray-700" : "bg-gray-300"} pointer-events-none`} />
-          </div>
-
-          <button onClick={goToNextSlot} className={`${c.textMuted} hover:${c.textPrimary} p-1 rounded transition-colors`}><ChevronRight className="w-4 h-4" /></button>
-          {!isCurrentTime && (
-            <button onClick={goToNow} className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] hover:bg-emerald-500 transition-all shrink-0">
-              <SkipForward className="w-3 h-3" />現在
-            </button>
           )}
         </div>
 
-        {/* Time context bar */}
-        <div className="flex items-center justify-between mt-1.5">
-          <div className="flex items-center gap-2">
-            <span className={`text-[12px] tabular-nums ${isCurrentTime ? "text-emerald-400" : (c.isDark ? "text-blue-300" : "text-blue-600")}`}>
-              {isCurrentTime ? "▶ 現在の配置" : `⏱ ${selectedTime} の配置計画`}
-            </span>
-            {!isCurrentTime && (
-              <span className={`text-[11px] px-2 py-0.5 rounded-full ${selectedMinutes > currentMinutes
-                ? c.isDark ? "bg-blue-500/10 text-blue-400 border border-blue-500/30" : "bg-blue-50 text-blue-600 border border-blue-200"
-                : c.isDark ? "bg-gray-700 text-gray-400" : "bg-gray-100 text-gray-500"
-                }`}>
-                {selectedMinutes > currentMinutes ? `${Math.round((selectedMinutes - currentMinutes) / 60 * 10) / 10}時間後` : "過去"}
-              </span>
-            )}
-          </div>
-          {!isCurrentTime && hasChanges && (
+        <aside className={`min-h-0 overflow-y-auto rounded-3xl border ${c.border} ${c.bgCard}`}>
+          <div className={`sticky top-0 z-10 border-b ${c.border} ${c.bgCard} px-4 py-4`}>
             <div className="flex items-center gap-2">
-              <input
-                type="text"
-                placeholder="メモ（例: 午後の増員）"
-                value={adjMemo}
-                onChange={(e) => setAdjMemo(e.target.value)}
-                className={`${c.bgSurface} border ${c.borderCard} rounded-lg px-3 py-1 text-[12px] ${c.textPrimary} outline-none w-[200px]`}
-              />
-              <button onClick={addToAdjustmentQueue}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-600 text-white text-[12px] hover:bg-orange-500 transition-all">
-                <Plus className="w-3.5 h-3.5" />調整リストに追加
+              <button
+                type="button"
+                onClick={() => setRightTab("staff")}
+                className={`inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-[12px] font-semibold ${rightTab === "staff" ? "bg-blue-600 text-white" : `${c.bgSurface} ${c.textSecondary}`}`}
+              >
+                <Users className="h-4 w-4" />
+                スタッフ
+              </button>
+              <button
+                type="button"
+                onClick={() => setRightTab("adjustments")}
+                className={`inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-[12px] font-semibold ${rightTab === "adjustments" ? "bg-blue-600 text-white" : `${c.bgSurface} ${c.textSecondary}`}`}
+              >
+                <AlertTriangle className="h-4 w-4" />
+                調整リスト
               </button>
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* ══════════ Calculator Panel ══════════ */}
-      {showCalculator && (
-        <div className={`${c.bgCard} border-b ${c.border} px-5 py-3`}>
-          <div className="flex items-end gap-4 flex-wrap">
-            <div className="flex items-center gap-2 shrink-0">
-              <Zap className="w-4 h-4 text-violet-400" />
-              <span className={`${c.textPrimary} text-[13px]`}>推薦人数</span>
-            </div>
-            <div><label className={`text-[10px] ${c.textMuted} block mb-0.5`}>工程</label>
-              <select value={calcProcessId} onChange={(e) => setCalcProcessId(e.target.value)} className={`${c.bgSurface} border ${c.borderCard} rounded-lg px-2 py-1.5 text-[12px] ${c.textPrimary} outline-none min-w-[120px]`}>
-                {allZones.map((z) => <option key={z.processId} value={z.processId}>{z.name}</option>)}
-              </select>
-            </div>
-            <div><label className={`text-[10px] ${c.textMuted} block mb-0.5`}>開始</label>
-              <input type="time" value={calcStartTime} onChange={(e) => setCalcStartTime(e.target.value)} className={`${c.bgSurface} border ${c.borderCard} rounded-lg px-2 py-1.5 text-[12px] ${c.textPrimary} outline-none`} />
-            </div>
-            <div><label className={`text-[10px] ${c.textMuted} block mb-0.5`}>目標完了</label>
-              <input type="time" value={calcEndTime} onChange={(e) => setCalcEndTime(e.target.value)} className={`${c.bgSurface} border ${c.borderCard} rounded-lg px-2 py-1.5 text-[12px] ${c.textPrimary} outline-none`} />
-            </div>
-            <div><label className={`text-[10px] ${c.textMuted} block mb-0.5`}>数量(空=残量)</label>
-              <input type="number" placeholder={calcResult ? String(calcResult.quantity) : ""} value={calcQuantity} onChange={(e) => setCalcQuantity(e.target.value)} className={`${c.bgSurface} border ${c.borderCard} rounded-lg px-2 py-1.5 text-[12px] ${c.textPrimary} outline-none w-[100px]`} />
-            </div>
-            {calcResult && (
-              <div className={`flex items-center gap-3 px-4 py-2 rounded-xl ${c.isDark ? "bg-violet-500/10 border border-violet-500/30" : "bg-violet-50 border border-violet-200"}`}>
-                <div className="text-center"><div className={`text-[10px] ${c.textMuted}`}>推薦</div><div className="text-[18px] text-violet-400 tabular-nums">{calcResult.needed}<span className={`text-[12px] ${c.textMuted}`}>名</span></div></div>
-                <div className={`w-px h-7 ${c.border}`} />
-                <div className="text-center"><div className={`text-[10px] ${c.textMuted}`}>現在</div><div className={`text-[14px] ${c.textPrimary} tabular-nums`}>{calcResult.current}名</div></div>
-                <div className={`w-px h-7 ${c.border}`} />
-                <div className="text-center"><div className={`text-[10px] ${c.textMuted}`}>差</div><div className={`text-[14px] tabular-nums ${calcResult.diff > 0 ? "text-red-400" : "text-emerald-400"}`}>{calcResult.diff > 0 ? `+${calcResult.diff}不足` : calcResult.diff === 0 ? "適正" : `${Math.abs(calcResult.diff)}余裕`}</div></div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ══════════ Main Content ══════════ */}
-      <div className="flex-1 flex overflow-hidden">
-
-        {/* ── Zone Area ── */}
-        <div className="flex-1 p-4 overflow-y-auto">
-          {/* Process Flow per area or all */}
-          {selectedAreaId === "all" ? (
-            /* All areas view: group by area */
-            areas.map((area) => {
-              const aColors = processColorClasses[area.color] ?? processColorClasses.cyan;
-              const areaZones = allZones.filter((z) => z.areaId === area.id);
-              if (areaZones.length === 0) return null;
-              return (
-                <div key={area.id} className="mb-5">
-                  {/* Area header */}
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className={`w-3 h-3 rounded-full ${aColors.bg} border ${aColors.border}`} />
-                    <h3 className={`${aColors.text} text-[13px]`}>{area.name}</h3>
-                    <span className={`text-[11px] ${c.textMuted}`}>{area.description}</span>
-                    <div className="flex items-center gap-1.5 ml-auto">
-                      <span className={`text-[10px] ${c.textMuted} flex items-center gap-0.5`}>
-                        <Users className="w-2.5 h-2.5" />{areaStats[area.id]?.workers ?? 0}名
-                      </span>
-                      <span className={`text-[10px] tabular-nums ${(areaStats[area.id]?.progress ?? 0) >= 70 ? "text-emerald-400"
-                        : (areaStats[area.id]?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
-                        }`}>{areaStats[area.id]?.progress ?? 0}%</span>
-                      <button
-                        onClick={() => toggleAreaExpand(area.id)}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] transition-all ${expandedAreas.has(area.id)
-                          ? `${aColors.bg} ${aColors.border} border ${aColors.text}`
-                          : `${c.bgSurface} border ${c.borderCard} ${c.textMuted}`
-                          }`}
-                      >
-                        {expandedAreas.has(area.id) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                        {expandedAreas.has(area.id) ? "閉じる" : "展開"}
-                      </button>
-                    </div>
-                  </div>
-                  {/* Flow indicator */}
-                  <div className="flex items-center gap-1 mb-2 overflow-x-auto pb-1">
-                    <span className={`text-[10px] ${c.textMuted} mr-1 shrink-0`}>フロー:</span>
-                    {areaZones.map((zone, idx) => {
-                      const colors = processColorClasses[zone.color];
-                      const m = calcZoneMetrics(zone, currentMinutes);
-                      return (
-                        <div key={zone.processId} className="flex items-center gap-1 shrink-0">
-                          <button onClick={() => toggleAreaExpand(zone.areaId)}
-                            className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all ${isZoneExpanded(zone) ? `${colors.bg} ${colors.border} border` : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`
-                              }`}>
-                            <zone.icon className={`w-3 h-3 ${colors.text}`} />
-                            <span className={isZoneExpanded(zone) ? colors.text : c.textSecondary}>{zone.name}</span>
-                            <span className={`tabular-nums ${m.progress >= 80 ? "text-emerald-400" : m.progress >= 40 ? "text-amber-400" : "text-red-400"}`}>{m.progress}%</span>
-                          </button>
-                          {idx < areaZones.length - 1 && <ArrowRight className={`w-3 h-3 ${c.textDimmed}`} />}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {/* Zone Cards */}
-                  <div className="grid grid-cols-2 gap-3">
-                    {areaZones.map((zone) => renderZoneCard(zone))}
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            /* Single area view */
-            <>
-              {/* Flow indicator */}
-              <div className="flex items-center gap-1 mb-3 overflow-x-auto pb-1">
-                <span className={`text-[10px] ${c.textMuted} mr-1 shrink-0`}>フロー:</span>
-                {zones.length > 0 && (() => {
-                  const aId = zones[0].areaId;
-                  const areaC = processColorClasses[areas.find((a) => a.id === aId)?.color ?? "cyan"] ?? processColorClasses.cyan;
-                  return (
-                    <button
-                      onClick={() => toggleAreaExpand(aId)}
-                      className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all shrink-0 mr-1 border ${expandedAreas.has(aId)
-                        ? `${areaC.bg} ${areaC.border} ${areaC.text}`
-                        : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
-                        }`}
-                    >
-                      {expandedAreas.has(aId) ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                      {expandedAreas.has(aId) ? "全閉じ" : "全展開"}
-                    </button>
-                  );
-                })()}
-                {zones.map((zone, idx) => {
-                  const colors = processColorClasses[zone.color];
-                  const m = calcZoneMetrics(zone, selectedMinutes);
-                  return (
-                    <div key={zone.processId} className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => toggleAreaExpand(zone.areaId)}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] transition-all ${isZoneExpanded(zone) ? `${colors.bg} ${colors.border} border` : `${c.bgSurface} border ${c.borderCard} ${c.textSecondary}`
-                          }`}>
-                        <zone.icon className={`w-3 h-3 ${colors.text}`} />
-                        <span className={isZoneExpanded(zone) ? colors.text : c.textSecondary}>{zone.name}</span>
-                        <span className={`tabular-nums ${m.progress >= 80 ? "text-emerald-400" : m.progress >= 40 ? "text-amber-400" : "text-red-400"}`}>{m.progress}%</span>
-                      </button>
-                      {idx < zones.length - 1 && <ArrowRight className={`w-3 h-3 ${c.textDimmed}`} />}
-                    </div>
-                  );
-                })}
-              </div>
-              {/* Zone Cards */}
-              <div className="grid grid-cols-2 gap-3">
-                {zones.map((zone) => renderZoneCard(zone))}
-              </div>
-            </>
-          )}
-
-        </div>
-
-        {/* ── Right Panel: Staff Pool + Adjustment Queue ── */}
-        <div className={`w-[280px] ${c.bgCard} border-l ${c.border} flex flex-col shrink-0`}>
-
-          {/* Tab switcher */}
-          <div className={`flex border-b ${c.border}`}>
-            <button
-              onClick={() => setShowAdjPanel(false)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] transition-all ${!showAdjPanel ? `${c.textPrimary} border-b-2 border-blue-500` : `${c.textMuted}`
-                }`}
-            >
-              <Users className="w-3.5 h-3.5" />スタッフ
-            </button>
-            <button
-              onClick={() => setShowAdjPanel(true)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-[12px] transition-all relative ${showAdjPanel ? `${c.textPrimary} border-b-2 border-orange-500` : `${c.textMuted}`
-                }`}
-            >
-              <ListChecks className="w-3.5 h-3.5" />調整リスト
-              {pendingCount > 0 && (
-                <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center">{pendingCount}</span>
-              )}
-            </button>
           </div>
 
-          {!showAdjPanel ? (
-            /* ── Staff Pool Tab ── */
-            <div className="flex-1 flex flex-col overflow-hidden" onDragOver={handleDragOver} onDrop={handleDropOnPool}>
-              <div className={`p-3 border-b ${c.border}`}>
-                <div className="relative">
-                  <Search className={`w-3.5 h-3.5 ${c.textSecondary} absolute left-2.5 top-1/2 -translate-y-1/2`} />
-                  <input type="text" placeholder="名前・スキル検索..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-                    className={`w-full ${c.bgSurface} border ${c.border} rounded-lg pl-8 pr-3 py-1.5 text-[12px] ${c.textPrimary} focus:border-blue-400 outline-none`} />
+          {rightTab === "staff" ? (
+            <div className="space-y-5 p-4">
+              <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${c.bgSurface} ${c.borderCard}`}>
+                <Search className={`h-4 w-4 ${c.textMuted}`} />
+                <input
+                  value={staffSearch}
+                  onChange={(event) => setStaffSearch(event.target.value)}
+                  placeholder="名前・スキルで検索"
+                  className={`w-full bg-transparent text-[12px] ${c.textPrimary} outline-none placeholder:text-slate-400`}
+                />
+              </div>
+
+              <div
+                className={`rounded-2xl border border-dashed p-3 ${dragState?.fromStepId ? "border-cyan-400/60" : c.borderCard}`}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  handleDropToPool();
+                }}
+              >
+                <div className="mb-3 flex items-center justify-between">
+                  <div>
+                    <div className={`text-[14px] font-semibold ${c.textPrimary}`}>未配置</div>
+                    <div className={`text-[11px] ${c.textSecondary}`}>ドラッグして工程へ配置</div>
+                  </div>
+                  <span className={`rounded-full px-2 py-0.5 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>{freeWorkers.length}</span>
+                </div>
+                <div className="space-y-2">
+                  {freeWorkers.length === 0 ? (
+                    <div className={`rounded-xl ${c.bgSurface} px-3 py-6 text-center text-[12px] ${c.textMuted}`}>
+                      未配置スタッフはいません
+                    </div>
+                  ) : freeWorkers.map((worker) => (
+                    <StaffCard
+                      key={worker.id}
+                      worker={worker}
+                      themeColors={c}
+                      qualificationMap={qualificationMap}
+                      skillMap={skillMap}
+                      compact
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", worker.id);
+                        setDragState({ workerId: worker.id, fromStepId: null, fromSlotIndex: null });
+                      }}
+                      onDragEnd={() => setDragState(null)}
+                    />
+                  ))}
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className={`text-[11px] ${c.textMuted}`}>未割当</span>
-                    <span className={`text-[10px] ${c.textSecondary} ${c.bgSurface} px-1.5 py-0.5 rounded-full`}>{filteredFreeWorkers.length}</span>
-                  </div>
-                  <div className="space-y-1">
-                    {filteredFreeWorkers.map((worker: Worker) => (
-                      <div key={worker.id} draggable onDragStart={() => handleDragStartFromPool(worker.id)} onDragEnd={handleDragEnd}
-                        className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${c.border} ${c.bgCard} cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow`}>
-                        <div className={`w-7 h-7 rounded-full ${worker.color} text-white flex items-center justify-center text-[11px] shrink-0`}>{worker.initials}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className={`text-[11px] ${c.textPrimary} truncate`}>{worker.name}</div>
-                          <div className="flex items-center gap-0.5 mt-0.5">
-                            {worker.skills.map((skill: any) => (
-                              <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${skill.label === "New" ? "bg-green-100 text-green-600" : skill.label === "FL" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
-                                }`}>{skill.icon}{skill.label}</span>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
-                      </div>
-                    ))}
-                    {filteredFreeWorkers.length === 0 && <p className={`text-[11px] ${c.textSecondary} text-center py-2`}>該当なし</p>}
-                  </div>
+
+              <div>
+                <div className="mb-3 flex items-center justify-between">
+                  <div className={`text-[14px] font-semibold ${c.textPrimary}`}>休憩・離席</div>
+                  <span className={`rounded-full px-2 py-0.5 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>{breakWorkers.length + absentWorkers.length}</span>
                 </div>
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className={`text-[11px] ${c.textMuted}`}>未出勤・退勤</span>
-                    <span className={`text-[10px] ${c.textSecondary} ${c.bgSurface} px-1.5 py-0.5 rounded-full`}>{filteredAbsentWorkers.length}</span>
-                  </div>
-                  <div className="space-y-1">
-                    {filteredAbsentWorkers.map((worker: Worker) => (
-                      <div key={worker.id} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${c.border} ${c.bgSurface} group`}>
-                        <div className={`w-7 h-7 rounded-full ${worker.color} text-white flex items-center justify-center text-[11px] shrink-0 opacity-60`}>{worker.initials}</div>
-                        <div className="flex-1 min-w-0">
-                          <div className={`text-[11px] ${c.textSecondary} truncate`}>{worker.name}</div>
-                          <div className="flex items-center gap-0.5 mt-0.5">
-                            {worker.skills.map((skill: any) => (
-                              <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${c.bgSurface} ${c.textMuted}`}>{skill.icon}{skill.label}</span>
-                            ))}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => updateWorkerStatus(worker.id, "active")}
-                          className="opacity-0 group-hover:opacity-100 bg-blue-600 text-white p-1 rounded transition-opacity"
-                          title="出勤に復帰"
-                        >
-                          <Zap className="w-3 h-3" />
-                        </button>
-                        <div className="w-2 h-2 rounded-full bg-gray-600 shrink-0" />
-                      </div>
-                    ))}
-                    {filteredAbsentWorkers.length === 0 && <p className={`text-[11px] ${c.textSecondary} text-center py-2`}>該当なし</p>}
-                  </div>
+                <div className="space-y-2">
+                  {[...breakWorkers, ...absentWorkers].map((worker) => (
+                    <StaffCard
+                      key={worker.id}
+                      worker={worker}
+                      themeColors={c}
+                      qualificationMap={qualificationMap}
+                      skillMap={skillMap}
+                      compact
+                      muted
+                    />
+                  ))}
                 </div>
               </div>
             </div>
           ) : (
-            /* ── Adjustment Queue Tab ── */
-            <div className="flex-1 flex flex-col overflow-hidden">
-              {/* Queue Header */}
-              <div className={`p-3 border-b ${c.border} flex items-center justify-between`}>
-                <span className={`text-[12px] ${c.textPrimary}`}>配置調整 {adjustments.length}件</span>
-                {pendingCount > 0 && (
-                  <button onClick={sendAllPending}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-orange-600 text-white text-[11px] hover:bg-orange-500 transition-all">
-                    <Send className="w-3 h-3" />一括送信({pendingCount})
-                  </button>
-                )}
-              </div>
-
-              {/* Queue List */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-2">
-                {adjustments.length === 0 && (
-                  <div className={`text-center py-8 ${c.textDimmed}`}>
-                    <ListChecks className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                    <p className="text-[12px]">調整リストは空です</p>
-                    <p className="text-[10px] mt-1">時間軸をスライドして配置を変更後、<br />「調整リストに追加」してください</p>
-                  </div>
-                )}
-
-                {adjustments
-                  .sort((a, b) => parseTime(a.scheduledTime) - parseTime(b.scheduledTime))
-                  .map((adj) => {
-                    const isPast = parseTime(adj.scheduledTime) <= currentMinutes;
-                    return (
-                      <div key={adj.id} className={`rounded-xl border ${c.border} overflow-hidden ${adj.status === "applied" ? "opacity-50" : ""
-                        }`}>
-                        {/* Entry Header */}
-                        <div className={`px-3 py-2 flex items-center justify-between ${adj.status === "pending"
-                          ? c.isDark ? "bg-orange-500/10" : "bg-orange-50"
-                          : adj.status === "notified"
-                            ? c.isDark ? "bg-blue-500/10" : "bg-blue-50"
-                            : c.isDark ? "bg-emerald-500/10" : "bg-emerald-50"
-                          }`}>
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[14px] tabular-nums ${c.textPrimary}`}>{adj.scheduledTime}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${adj.status === "pending" ? "bg-orange-500/20 text-orange-400"
-                              : adj.status === "notified" ? "bg-blue-500/20 text-blue-400"
-                                : "bg-emerald-500/20 text-emerald-400"
-                              }`}>
-                              {adj.status === "pending" ? "未送信" : adj.status === "notified" ? "通知済" : "適用済"}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            {adj.status === "pending" && (
-                              <button onClick={() => sendNotification(adj.id)}
-                                className="flex items-center gap-0.5 px-2 py-1 rounded-lg bg-orange-600 text-white text-[10px] hover:bg-orange-500 transition-all"
-                                title="作業者に通知送信">
-                                <BellRing className="w-3 h-3" />通知
-                              </button>
-                            )}
-                            {adj.status === "notified" && !isPast && (
-                              <button onClick={() => applyAdjustment(adj.id)}
-                                className="flex items-center gap-0.5 px-2 py-1 rounded-lg bg-emerald-600 text-white text-[10px] hover:bg-emerald-500 transition-all">
-                                <Check className="w-3 h-3" />適用
-                              </button>
-                            )}
-                            {adj.status !== "applied" && (
-                              <button onClick={() => removeAdjustment(adj.id)}
-                                className={`p-1 rounded ${c.textMuted} hover:text-red-400 transition-colors`}>
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Changes detail */}
-                        <div className={`px-3 py-2 ${c.bgCard}`}>
-                          {adj.memo && <p className={`text-[11px] ${c.textSecondary} mb-1.5`}>{adj.memo}</p>}
-                          <div className="space-y-1">
-                            {adj.changes.map((ch, i) => {
-                              const worker = workers.find((w: Worker) => w.id === ch.workerId);
-                              return (
-                                <div key={i} className="flex items-center gap-1.5 text-[10px]">
-                                  {worker && (
-                                    <div className={`w-5 h-5 rounded-full ${worker.color} text-white flex items-center justify-center text-[8px] shrink-0`}>
-                                      {worker.initials}
-                                    </div>
-                                  )}
-                                  <span className={c.textPrimary}>{ch.workerName}</span>
-                                  <span className={c.textDimmed}>:</span>
-                                  <span className={c.textMuted}>{ch.fromZone ?? "プール"}</span>
-                                  <ArrowRight className={`w-3 h-3 ${c.textDimmed}`} />
-                                  <span className={ch.toZone ? "text-cyan-400" : "text-amber-400"}>{ch.toZone ?? "プール"}</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                          <div className={`text-[9px] ${c.textDimmed} mt-1.5`}>作成: {adj.createdAt} | {adj.changes.length}名の変更</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-
-              {/* Notification Legend */}
-              <div className={`p-3 border-t ${c.border}`}>
-                <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-orange-400" /><span className={`text-[9px] ${c.textMuted}`}>未送信</span></div>
-                  <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-400" /><span className={`text-[9px] ${c.textMuted}`}>通知済</span></div>
-                  <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-400" /><span className={`text-[9px] ${c.textMuted}`}>適用済</span></div>
+            <div className="space-y-3 p-4">
+              <div>
+                <div className={`text-[14px] font-semibold ${c.textPrimary}`}>人員配置調整リスト</div>
+                <div className={`text-[12px] ${c.textSecondary}`}>
+                  {unsavedAdjustmentItems.length > 0 ? "保存すると最新の調整リストを確定します" : "保存済みの配置変更を表示します"}
                 </div>
-                <p className={`text-[9px] ${c.textDimmed} mt-1`}>
-                  <Bell className="w-2.5 h-2.5 inline mr-0.5" />
-                  時刻になると作業者端末に自動通知されます
-                </p>
               </div>
+              {savedAdjustmentItems.length === 0 ? (
+                <div className={`rounded-2xl ${c.bgSurface} px-4 py-8 text-center text-[12px] ${c.textMuted}`}>
+                  {unsavedAdjustmentItems.length > 0 ? `未保存の変更が ${unsavedAdjustmentItems.length} 件あります` : "保存済みの配置変更はありません"}
+                </div>
+              ) : savedAdjustmentItems.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedTime(item.effectiveTime);
+                    setSelectedPanelId(item.panelId);
+                  }}
+                  className={`w-full rounded-2xl border px-4 py-3 text-left ${c.borderCard} ${c.bgSurface}`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{item.workerName}</div>
+                      <div className={`text-[11px] ${c.textSecondary}`}>変更時点 {item.effectiveTime}</div>
+                    </div>
+                    <div className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-500">
+                      保存済み
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                    <div>
+                      <div className={c.textMuted}>元作業</div>
+                      <div className={`font-semibold ${c.textPrimary}`}>{item.previousAssignment}</div>
+                    </div>
+                    <div>
+                      <div className={c.textMuted}>新作業</div>
+                      <div className={`font-semibold ${c.textPrimary}`}>{item.nextAssignment}</div>
+                    </div>
+                  </div>
+                </button>
+              ))}
             </div>
           )}
-        </div>
+        </aside>
       </div>
     </div>
   );
-
-  /* ── Zone Card Renderer ── */
-  function renderZoneCard(zone: Zone) {
-    const metrics = calcZoneMetrics(zone, selectedMinutes);
-    const isExpanded = isZoneExpanded(zone);
-    const cols = zone.capacity <= 4 ? 2 : zone.capacity <= 6 ? 3 : 4;
-    const colors = processColorClasses[zone.color];
-    const progressColor = metrics.progress >= 80 ? "bg-emerald-500" : metrics.progress >= 50 ? "bg-cyan-500" : metrics.progress >= 25 ? "bg-amber-500" : "bg-red-500";
-    const borderStyle = metrics.filled === 0 && zone.production.planned > 0 ? "border-red-400"
-      : metrics.isOverdue ? "border-amber-400" : c.isDark ? colors.border : "border-gray-200";
-    const area = areas.find((a) => a.id === zone.areaId);
-
-    return (
-      <div key={zone.processId} className={`rounded-xl border-2 ${c.bgCard} ${borderStyle} overflow-hidden`}>
-        <div className="p-3 pb-2">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-2">
-              <div className={`w-6 h-6 rounded-lg ${colors.bg} flex items-center justify-center`}>
-                <zone.icon className={`w-3 h-3 ${colors.text}`} />
-              </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <h3 className={`${c.textPrimary} text-[13px]`}>{zone.name}</h3>
-                  {selectedAreaId === "all" && area && (
-                    <span className={`text-[9px] px-1 py-0.5 rounded ${(processColorClasses[area.color] ?? processColorClasses.cyan).bg} ${(processColorClasses[area.color] ?? processColorClasses.cyan).text}`}>
-                      {area.name.split("（")[0]}
-                    </span>
-                  )}
-                </div>
-                <span className={`text-[10px] ${c.textMuted}`}>{zone.description}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className={`text-[11px] flex items-center gap-0.5 ${metrics.filled === 0 && zone.production.planned > 0 ? "text-red-400" : metrics.filled < zone.capacity / 2 ? "text-amber-400" : c.textMuted
-                }`}>
-                {metrics.filled === 0 && zone.production.planned > 0 && <AlertTriangle className="w-3 h-3" />}
-                <Users className="w-3 h-3" />{metrics.filled}/{zone.capacity}
-              </span>
-              <button onClick={() => toggleAreaExpand(zone.areaId)} className={c.textMuted}>
-                {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-          </div>
-
-          {/* KPI */}
-          <div className={`grid grid-cols-5 gap-1 rounded-lg ${c.bgSurface} p-2 mb-1.5`}>
-            <div className="text-center">
-              <div className={`text-[9px] ${c.textMuted} flex items-center justify-center gap-0.5`}><Target className="w-2.5 h-2.5" />予定</div>
-              <div className={`text-[13px] ${c.textPrimary} tabular-nums`}>{zone.production.planned.toLocaleString()}</div>
-            </div>
-            <div className="text-center">
-              <div className={`text-[9px] ${c.textMuted} flex items-center justify-center gap-0.5`}><CheckCircle2 className="w-2.5 h-2.5" />実績</div>
-              <div className="text-[13px] text-cyan-400 tabular-nums">{zone.production.actual.toLocaleString()}</div>
-            </div>
-            <div className="text-center">
-              <div className={`text-[9px] ${c.textMuted} flex items-center justify-center gap-0.5`}><TrendingUp className="w-2.5 h-2.5" />進捗</div>
-              <div className={`text-[13px] tabular-nums ${metrics.progress >= 70 ? "text-emerald-400" : metrics.progress >= 40 ? "text-amber-400" : "text-red-400"}`}>{metrics.progress}%</div>
-            </div>
-            <div className="text-center">
-              <div className={`text-[9px] ${c.textMuted}`}>UPH</div>
-              <div className={`text-[13px] tabular-nums ${metrics.totalUph > 0 ? "text-violet-400" : c.textDimmed}`}>{metrics.totalUph || "—"}</div>
-            </div>
-            <div className="text-center">
-              <div className={`text-[9px] ${c.textMuted} flex items-center justify-center gap-0.5`}><Timer className="w-2.5 h-2.5" />見込</div>
-              <div className={`text-[13px] tabular-nums ${metrics.estimatedEnd === "完了" ? "text-emerald-400" : metrics.isOverdue ? "text-red-400" : c.textPrimary}`}>{metrics.estimatedEnd}</div>
-            </div>
-          </div>
-
-          {/* Progress */}
-          <div className={`w-full h-1.5 rounded-full ${c.isDark ? "bg-gray-800" : "bg-gray-200"} overflow-hidden`}>
-            <div className={`h-full rounded-full ${progressColor} transition-all duration-500`} style={{ width: `${metrics.progress}%` }} />
-          </div>
-
-          {/* Time & Rec */}
-          <div className="flex items-center justify-between mt-1.5">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1">
-                <span className={`text-[9px] ${c.textMuted}`}>開始</span>
-                <input type="time" value={zone.production.startTime} onChange={(e) => updateZoneTime(zone.processId, "startTime", e.target.value)}
-                  className={`${c.bgSurface} border ${c.borderCard} rounded px-1 py-0.5 text-[10px] ${c.textPrimary} outline-none w-[64px] tabular-nums`} />
-              </div>
-              <div className="flex items-center gap-1">
-                <span className={`text-[9px] ${c.textMuted}`}>目標</span>
-                <input type="time" value={zone.production.targetEndTime} onChange={(e) => updateZoneTime(zone.processId, "targetEndTime", e.target.value)}
-                  className={`${c.bgSurface} border ${c.borderCard} rounded px-1 py-0.5 text-[10px] ${c.textPrimary} outline-none w-[64px] tabular-nums`} />
-              </div>
-            </div>
-            <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] ${metrics.recommendedWorkers > metrics.filled
-              ? c.isDark ? "bg-red-500/10 text-red-400 border border-red-500/30" : "bg-red-50 text-red-600 border border-red-200"
-              : c.isDark ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30" : "bg-emerald-50 text-emerald-600 border border-emerald-200"
-              }`}>
-              <Zap className="w-2.5 h-2.5" />推薦{metrics.recommendedWorkers}名
-              {metrics.recommendedWorkers > metrics.filled && <span className="text-[9px]">(+{metrics.recommendedWorkers - metrics.filled})</span>}
-            </div>
-          </div>
-        </div>
-
-        {/* Slots */}
-        {isExpanded && (
-          <div className={`px-3 pb-3 pt-2 border-t ${c.border}`}>
-            <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
-              {zone.slots.map((slot, slotIdx) => {
-                const worker = slot.workerId ? getWorker(slot.workerId) : null;
-                if (!worker) return null;
-                const isBreak = worker.status === "break";
-                return (
-                  <div key={slotIdx} draggable={!isBreak} onDragStart={() => handleDragStartFromSlot(worker.id, zone.processId, slotIdx)} onDragEnd={handleDragEnd}
-                    className={`relative group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${c.border} ${c.bgCard} ${isBreak ? "opacity-75" : "cursor-grab active:cursor-grabbing hover:shadow-md"} transition-all`}>
-                    <div className={`w-7 h-7 rounded-full ${isBreak ? "bg-gray-400" : worker.color} text-white flex items-center justify-center text-[11px] shrink-0 transition-colors`}>
-                      {isBreak ? "☕" : worker.initials}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className={`text-[11px] ${isBreak ? c.textMuted : c.textPrimary} truncate flex items-center gap-1`}>
-                        {worker.name}
-                        {isBreak && <span className="text-[9px] px-1 rounded bg-gray-700 text-gray-400">休憩</span>}
-                      </div>
-                      <div className="flex items-center gap-0.5 mt-0.5">
-                        {worker.skills.slice(0, 2).map((skill: any) => (
-                          <span key={skill.label} className={`text-[8px] px-1 py-0.5 rounded ${isBreak ? "bg-gray-800 text-gray-500" :
-                            skill.label === "New" ? "bg-green-100 text-green-600" :
-                              skill.label === "FL" || skill.label === "L" ? "bg-blue-100 text-blue-600" : `${c.bgSurface} ${c.textMuted}`
-                            }`}>{skill.icon}{skill.label}</span>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Status quick actions on hover */}
-                    <div className="absolute inset-0 bg-gray-900/80 rounded-lg flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                      {isBreak ? (
-                        <button onClick={() => updateWorkerStatus(worker.id, "active")} className="p-1 rounded bg-emerald-600 text-white hover:bg-emerald-500" title="仕事に復帰">
-                          <Zap className="w-3.5 h-3.5" />
-                        </button>
-                      ) : (
-                        <button onClick={() => updateWorkerStatus(worker.id, "break")} className="p-1 rounded bg-amber-600 text-white hover:bg-amber-500" title="休憩・離席">
-                          <Timer className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      <button onClick={() => updateWorkerStatus(worker.id, "absent")} className="p-1 rounded bg-rose-600 text-white hover:bg-rose-500" title="退勤（配置解除）">
-                        <SkipForward className="w-3.5 h-3.5" />
-                      </button>
-                      <button onClick={() => removeWorkerFromSlot(zone.processId, slotIdx)} className="p-1 rounded bg-gray-700 text-white hover:bg-gray-600" title="解除してプールへ">
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    <div className={`w-2 h-2 rounded-full ${isBreak ? "bg-gray-500" : "bg-emerald-400"} shrink-0`} />
-                  </div>
-                );
-              })}
-
-              {/* Add New Slot Target */}
-              <div
-                onDragOver={handleDragOver}
-                onDrop={() => handleDropOnSlot(zone.processId, "new")}
-                className={`flex items-center justify-center p-2 rounded-lg border-2 border-dashed transition-all h-[42px] ${draggedWorkerId ? "border-blue-400 bg-blue-500/10 scale-102" : `border-gray-700 hover:border-blue-500/50 hover:bg-blue-500/5`
-                  }`}
-              >
-                <div className={`flex items-center gap-2 ${draggedWorkerId ? "text-blue-400" : "text-gray-500"}`}>
-                  <PlusCircle className={`w-4 h-4 ${draggedWorkerId ? "animate-pulse" : ""}`} />
-                  <span className="text-[10px]">追加</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
 }

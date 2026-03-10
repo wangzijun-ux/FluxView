@@ -1,0 +1,526 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  BarChart3, 
+  Users, 
+  Clock, 
+  LayoutDashboard, 
+  Smartphone, 
+  ShieldCheck, 
+  Zap, 
+  ChevronRight, 
+  Menu, 
+  X, 
+  CheckCircle2,
+  TrendingUp,
+  MapPin,
+  ArrowRightLeft
+} from 'lucide-react';
+
+const App = () => {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => setScrolled(window.scrollY > 50);
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const navLinks = [
+    { name: '価値', href: '#value' },
+    { name: '機能', href: '#features' },
+    { name: '現場の声', href: '#testimonials' },
+    { name: '導入の流れ', href: '#process' }
+  ];
+
+  const features = [
+    {
+      title: "リアルタイム現場配置",
+      description: "ドラッグ＆ドロップで作業員を工程へ再配置。変更は即座に作業者のスマホへ通知されます。",
+      icon: <Users className="w-6 h-6 text-blue-600" />,
+      image: "現場配置の直感的なインターフェース"
+    },
+    {
+      title: "進捗・UPHの可視化",
+      description: "現在の進捗率とUPHに基づき、完了見込み時刻を自動算出。遅延傾向をいち早く察知します。",
+      icon: <TrendingUp className="w-6 h-6 text-cyan-600" />,
+      image: "ダッシュボードによるKPI管理"
+    },
+    {
+      title: "作業者専用モバイルUI",
+      description: "迷わせないシンプルな導線。当日タスクの確認から配置変更のリマインドまで、現場を強力にサポート。",
+      icon: <Smartphone className="w-6 h-6 text-indigo-600" />,
+      image: "モバイルビューでのタスク確認"
+    },
+    {
+      title: "精緻なコスト分析",
+      description: "雇用形態別の原価構成をグラフ化。予算差異を可視化し、収益性の改善に貢献します。",
+      icon: <BarChart3 className="w-6 h-6 text-emerald-600" />,
+      image: "コスト分析レポート"
+    }
+  ];
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 overflow-x-hidden">
+      {/* Navigation */}
+      <nav className={`fixed w-full z-50 transition-all duration-300 ${scrolled ? 'bg-white/90 backdrop-blur-md shadow-sm py-3' : 'bg-transparent py-5'}`}>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
+          <div className="flex items-center space-x-2">
+            <div className="bg-blue-600 p-1.5 rounded-lg">
+              <div className="w-6 h-6 border-2 border-white rounded-sm rotate-45 flex items-center justify-center">
+                <div className="w-2 h-2 bg-white rounded-full"></div>
+              </div>
+            </div>
+            <span className="text-2xl font-black tracking-tighter text-slate-800">FLUXVIEW</span>
+          </div>
+          
+          <div className="hidden md:flex items-center space-x-8">
+            {navLinks.map((link) => (
+              <a key={link.name} href={link.href} className="text-sm font-medium text-slate-600 hover:text-blue-600 transition-colors">
+                {link.name}
+              </a>
+            ))}
+            <button className="bg-blue-600 text-white px-5 py-2.5 rounded-full text-sm font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200">
+              お問い合わせ・デモ依頼
+            </button>
+          </div>
+
+          <button className="md:hidden" onClick={() => setIsMenuOpen(!isMenuOpen)}>
+            {isMenuOpen ? <X /> : <Menu />}
+          </button>
+        </div>
+      </nav>
+
+      {/* Mobile Menu */}
+      {isMenuOpen && (
+        <div className="fixed inset-0 z-40 bg-white flex flex-col items-center justify-center space-y-8 animate-in fade-in zoom-in">
+          {navLinks.map((link) => (
+            <a key={link.name} href={link.href} className="text-2xl font-bold" onClick={() => setIsMenuOpen(false)}>
+              {link.name}
+            </a>
+          ))}
+          <button className="bg-blue-600 text-white px-8 py-3 rounded-full text-lg font-bold">
+            お問い合わせ
+          </button>
+        </div>
+      )}
+
+      {/* Hero Section */}
+      <section className="relative pt-32 pb-20 lg:pt-48 lg:pb-32 overflow-hidden">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full -z-10 opacity-10">
+          <div className="absolute top-20 left-1/4 w-96 h-96 bg-blue-400 rounded-full blur-3xl"></div>
+          <div className="absolute bottom-20 right-1/4 w-96 h-96 bg-cyan-400 rounded-full blur-3xl"></div>
+        </div>
+        
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+          <div className="inline-flex items-center space-x-2 bg-blue-50 border border-blue-100 px-4 py-1.5 rounded-full mb-8 animate-bounce">
+            <Zap className="w-4 h-4 text-blue-600" />
+            <span className="text-xs font-bold text-blue-700 uppercase tracking-wider">Next-Gen Logistics Ops</span>
+          </div>
+          <h1 className="text-4xl md:text-6xl lg:text-7xl font-black text-slate-900 leading-[1.1] mb-6">
+            現場の<span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-500">「今」</span>を可視化し、<br />
+            物流を最適化する。
+          </h1>
+          <p className="text-lg md:text-xl text-slate-600 max-w-3xl mx-auto mb-10 leading-relaxed">
+            人員配置・進捗管理・コスト分析。物流センター運営に必要なすべての情報をデジタルで一元化。
+            勘と経験に頼らない、データドリブンな現場運営を実現します。
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4">
+            <button className="w-full sm:w-auto bg-blue-600 text-white px-8 py-4 rounded-xl text-lg font-bold hover:bg-blue-700 transition-all shadow-xl shadow-blue-200 flex items-center justify-center group">
+              無料でデモを体験する
+              <ChevronRight className="ml-2 w-5 h-5 group-hover:translate-x-1 transition-transform" />
+            </button>
+            <button className="w-full sm:w-auto bg-white text-slate-700 border border-slate-200 px-8 py-4 rounded-xl text-lg font-bold hover:bg-slate-50 transition-all">
+              資料ダウンロード
+            </button>
+          </div>
+
+          {/* Product Preview Mockup */}
+          <div className="mt-20 relative">
+            <div className="relative mx-auto max-w-5xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden transform hover:-translate-y-2 transition-transform duration-500">
+              <div className="bg-slate-100 px-4 py-2 border-bottom flex items-center space-x-2">
+                <div className="w-3 h-3 rounded-full bg-red-400"></div>
+                <div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+                <div className="w-3 h-3 rounded-full bg-green-400"></div>
+                <div className="flex-1 bg-white mx-4 rounded-md h-6 flex items-center px-3">
+                  <span className="text-[10px] text-slate-400">fluxview.app/dashboard</span>
+                </div>
+              </div>
+              <img 
+                src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=1200" 
+                alt="FluxView Dashboard Interface" 
+                className="w-full h-auto opacity-90"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-white/20 to-transparent"></div>
+            </div>
+            {/* Mobile Mockup Overlay */}
+            <div className="hidden lg:block absolute -right-10 -bottom-10 w-64 bg-slate-900 rounded-[3rem] p-3 shadow-2xl border-4 border-slate-800 transform rotate-6 hover:rotate-0 transition-all duration-500">
+              <div className="bg-white rounded-[2.5rem] h-[500px] overflow-hidden relative">
+                <div className="p-6">
+                  <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6"></div>
+                  <div className="flex items-center justify-between mb-8">
+                    <span className="text-xl font-black">FluxView</span>
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs">A</div>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                        <span className="text-xs font-bold text-blue-600">現在作業中</span>
+                      </div>
+                      <p className="text-sm font-bold">検品工程 Aエリア</p>
+                      <p className="text-[10px] text-slate-500">予定終了: 15:30</p>
+                    </div>
+                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl opacity-60">
+                      <p className="text-[10px] font-bold text-slate-400">NEXT TASK</p>
+                      <p className="text-sm font-bold text-slate-500">梱包工程 Bエリア</p>
+                    </div>
+                  </div>
+                </div>
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-32 h-1 bg-slate-200 rounded-full"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Problems Section */}
+      <section className="py-24 bg-white" id="value">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-sm font-bold text-blue-600 tracking-widest uppercase mb-2">Pain Points</h2>
+            <p className="text-3xl md:text-4xl font-black mb-4">その「現場の悩み」、放置していませんか？</p>
+            <div className="w-20 h-1 bg-blue-600 mx-auto rounded-full"></div>
+          </div>
+          
+          <div className="grid md:grid-cols-3 gap-8">
+            {[
+              {
+                title: "配置の不透明さ",
+                desc: "「誰がどこにいるか」がホワイトボードやエクセルでしか分からず、突発的な変更に弱い。",
+                icon: <Users className="w-8 h-8 text-slate-400" />
+              },
+              {
+                title: "進捗のブラックボックス",
+                desc: "工程の遅れを夕方になって初めて気づく。完了見込みが分からず残業が慢性化している。",
+                icon: <Clock className="w-8 h-8 text-slate-400" />
+              },
+              {
+                title: "管理コストの増大",
+                desc: "派遣会社への連絡や勤怠の付け合わせに膨大な工数がかかり、現場改善に手が回らない。",
+                icon: <ArrowRightLeft className="w-8 h-8 text-slate-400" />
+              }
+            ].map((item, i) => (
+              <div key={i} className="bg-slate-50 p-8 rounded-2xl border border-slate-100 hover:border-blue-200 transition-colors">
+                <div className="mb-4">{item.icon}</div>
+                <h3 className="text-xl font-bold mb-3">{item.title}</h3>
+                <p className="text-slate-600 leading-relaxed text-sm">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Features Section */}
+      <section className="py-24 bg-slate-900 text-white overflow-hidden" id="features">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col lg:flex-row items-center justify-between mb-20">
+            <div className="lg:w-1/2 mb-10 lg:mb-0">
+              <h2 className="text-sm font-bold text-cyan-400 tracking-widest uppercase mb-2">Solutions</h2>
+              <p className="text-4xl md:text-5xl font-black mb-6 leading-tight text-white">
+                直感的なUIが、<br />現場のオペレーションを変える。
+              </p>
+              <p className="text-slate-400 text-lg mb-8 max-w-lg">
+                管理者が欲しい情報を1画面に凝縮。PC、タブレット、スマホ。デバイスを問わず、同じデータで会話できます。
+              </p>
+            </div>
+            <div className="lg:w-1/2 flex justify-end">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white/5 backdrop-blur p-6 rounded-2xl border border-white/10">
+                  <div className="text-3xl font-black text-cyan-400 mb-1">20%</div>
+                  <div className="text-xs text-slate-400">平均作業効率向上</div>
+                </div>
+                <div className="bg-white/5 backdrop-blur p-6 rounded-2xl border border-white/10">
+                  <div className="text-3xl font-black text-blue-400 mb-1">15h</div>
+                  <div className="text-xs text-slate-400">月間平均管理工数削減</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
+            {features.map((feature, i) => (
+              <div key={i} className="group relative bg-white/5 hover:bg-white/10 p-8 rounded-3xl border border-white/5 transition-all duration-300">
+                <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center mb-6 transform group-hover:scale-110 transition-transform">
+                  {feature.icon}
+                </div>
+                <h3 className="text-xl font-bold mb-4">{feature.title}</h3>
+                <p className="text-slate-400 text-sm leading-relaxed mb-6">
+                  {feature.description}
+                </p>
+                <div className="text-[10px] font-bold text-blue-400 tracking-widest uppercase flex items-center group-hover:translate-x-1 transition-transform cursor-pointer">
+                  詳しく見る <ChevronRight className="ml-1 w-3 h-3" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Detailed Content / Benefits */}
+      <section className="py-24 bg-white">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col lg:flex-row items-center gap-16">
+            <div className="lg:w-1/2">
+              <div className="relative">
+                <div className="absolute -top-4 -left-4 w-24 h-24 bg-blue-100 rounded-full -z-10"></div>
+                <h2 className="text-3xl md:text-4xl font-black mb-8 leading-tight">
+                  「誰でも使える」から、<br />定着する。
+                </h2>
+              </div>
+              <ul className="space-y-6">
+                {[
+                  {
+                    title: "ドラッグ＆ドロップの人員配置",
+                    desc: "複雑なシフト管理もマウス操作一つで完結。変更内容は即座に現場へ。"
+                  },
+                  {
+                    title: "自動リマインド通知",
+                    desc: "配置変更の5分前に作業者の端末へリマインド。移動時間を考慮した指示出しが可能です。"
+                  },
+                  {
+                    title: "拠点横断のマスタ管理",
+                    desc: "荷主、拠点、スキル情報を一元管理。組織改編や新規拠点開設にも柔軟に対応。"
+                  }
+                ].map((benefit, i) => (
+                  <li key={i} className="flex items-start space-x-4">
+                    <div className="mt-1 bg-blue-600 rounded-full p-1 shrink-0">
+                      <CheckCircle2 className="w-4 h-4 text-white" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-lg mb-1">{benefit.title}</h4>
+                      <p className="text-slate-600 text-sm">{benefit.desc}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="lg:w-1/2 bg-slate-50 p-8 rounded-3xl border border-slate-100 shadow-inner">
+               {/* Simplified visualization of the dashboard as per the provided PRD images */}
+               <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 mb-4">
+                  <div className="flex items-center justify-between mb-4 border-b pb-2">
+                    <span className="text-xs font-bold text-slate-400">リアルタイム進捗</span>
+                    <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-bold uppercase">Live</span>
+                  </div>
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex justify-between text-[10px] mb-1">
+                        <span className="font-bold">検品工程 Aエリア</span>
+                        <span className="text-blue-600 font-bold">85%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-600 w-[85%]"></div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-[10px] mb-1">
+                        <span className="font-bold">出荷工程 Bエリア</span>
+                        <span className="text-orange-500 font-bold">42% (遅延傾向)</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-orange-500 w-[42%]"></div>
+                      </div>
+                    </div>
+                  </div>
+               </div>
+               <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+                  <div className="flex items-center space-x-2 mb-3">
+                    <div className="w-2 h-2 rounded-full bg-blue-600"></div>
+                    <span className="text-xs font-bold">人員最適化アラート</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mb-3">出荷工程の遅延を解消するため、検品工程から2名の移動を推奨します。</p>
+                  <button className="w-full py-2 bg-blue-50 text-blue-600 text-[10px] font-bold rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors">
+                    推奨アクションを適用する
+                  </button>
+               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Testimonials */}
+      <section className="py-24 bg-slate-50" id="testimonials">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-sm font-bold text-blue-600 tracking-widest uppercase mb-2">Success Stories</h2>
+            <p className="text-3xl md:text-4xl font-black">導入企業様の声</p>
+          </div>
+          <div className="grid md:grid-cols-2 gap-8">
+            <div className="bg-white p-10 rounded-3xl shadow-sm border border-slate-100">
+              <div className="flex items-center space-x-1 mb-6">
+                {[...Array(5)].map((_, i) => <Zap key={i} className="w-4 h-4 text-yellow-400 fill-current" />)}
+              </div>
+              <p className="text-lg italic text-slate-700 mb-8 leading-relaxed">
+                「現場配置の指示出しが驚くほどスムーズになりました。これまでは事務所に戻ってエクセルを叩いていましたが、今はタブレットを持って現場を歩きながらその場で調整。作業員もスマホで自分の役割をすぐ確認できるので、混乱がなくなりました。」
+              </p>
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold">T</div>
+                <div>
+                  <p className="font-bold">大手物流センター センター長</p>
+                  <p className="text-xs text-slate-500">東京都 / 従業員数 150名規模</p>
+                </div>
+              </div>
+            </div>
+            <div className="bg-white p-10 rounded-3xl shadow-sm border border-slate-100">
+              <div className="flex items-center space-x-1 mb-6">
+                {[...Array(5)].map((_, i) => <Zap key={i} className="w-4 h-4 text-yellow-400 fill-current" />)}
+              </div>
+              <p className="text-lg italic text-slate-700 mb-8 leading-relaxed">
+                「進捗の可視化により、残業時間が月平均で20%削減されました。完了見込みが常に数値で出ているため、早めに人員を投入するなどの先手が打てるようになったことが大きいです。コスト分析機能も、荷主様への報告に非常に役立っています。」
+              </p>
+              <div className="flex items-center space-x-4">
+                <div className="w-12 h-12 bg-cyan-100 rounded-full flex items-center justify-center text-cyan-600 font-bold">K</div>
+                <div>
+                  <p className="font-bold">3PL企業 運営責任者</p>
+                  <p className="text-xs text-slate-500">大阪府 / 複数拠点管理</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Process */}
+      <section className="py-24 bg-white" id="process">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-3xl md:text-4xl font-black mb-4 text-slate-900">導入までの3ステップ</h2>
+            <p className="text-slate-500 italic">最短2週間で運用開始可能です</p>
+          </div>
+          <div className="relative">
+            <div className="absolute left-8 top-0 bottom-0 w-0.5 bg-slate-100 hidden sm:block"></div>
+            <div className="space-y-12">
+              {[
+                {
+                  step: "01",
+                  title: "現状のワークフロー整理",
+                  desc: "専任の担当者が、現在の工程や人員配置のルールをヒアリング。マスタ設定をサポートします。"
+                },
+                {
+                  step: "02",
+                  title: "テスト導入・設定",
+                  desc: "実際の現場で一部工程からスタート。拠点やエリア、作業者の情報を登録し、使い心地を確認します。"
+                },
+                {
+                  step: "03",
+                  title: "本番運用・改善",
+                  desc: "全工程での運用を開始。蓄積されたデータを元に、更なる効率化に向けた改善を継続的に行います。"
+                }
+              ].map((item, i) => (
+                <div key={i} className="relative flex items-center sm:items-start space-x-10 group">
+                  <div className="w-16 h-16 rounded-2xl bg-white border-2 border-slate-100 flex items-center justify-center text-xl font-black text-blue-600 z-10 group-hover:border-blue-600 transition-colors shrink-0">
+                    {item.step}
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="text-xl font-bold mb-2">{item.title}</h4>
+                    <p className="text-slate-600 leading-relaxed text-sm">{item.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* CTA Section */}
+      <section className="py-20 bg-blue-600 relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-1/3 h-full bg-white opacity-[0.05] skew-x-12 translate-x-20"></div>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center relative z-10">
+          <h2 className="text-3xl md:text-5xl font-black text-white mb-8">
+            現場のパフォーマンスを、<br />最大化しませんか？
+          </h2>
+          <p className="text-blue-100 text-lg mb-10 max-w-2xl mx-auto">
+            まずは無料デモで、FluxViewが実現する「次世代の現場運営」をご体験ください。
+            専門スタッフが貴社の課題に合わせた最適なプランをご提案いたします。
+          </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-6">
+            <button className="bg-white text-blue-600 px-10 py-5 rounded-2xl text-xl font-black hover:bg-slate-100 transition-all shadow-2xl">
+              無料デモを予約する
+            </button>
+            <button className="bg-blue-700 text-white border border-blue-500/50 px-10 py-5 rounded-2xl text-xl font-black hover:bg-blue-800 transition-all">
+              お問い合わせ
+            </button>
+          </div>
+          <div className="mt-12 flex items-center justify-center space-x-8 text-white/60 text-sm">
+            <div className="flex items-center space-x-2">
+              <ShieldCheck className="w-5 h-5" />
+              <span>ISMS取得済み</span>
+            </div>
+            <div className="flex items-center space-x-2">
+              <Smartphone className="w-5 h-5" />
+              <span>マルチデバイス対応</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="bg-slate-950 text-white pt-20 pb-10 border-t border-white/5">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid md:grid-cols-4 gap-12 mb-16">
+            <div className="col-span-2">
+              <div className="flex items-center space-x-2 mb-6">
+                <div className="bg-blue-600 p-1.5 rounded-lg">
+                  <div className="w-6 h-6 border-2 border-white rounded-sm rotate-45 flex items-center justify-center">
+                    <div className="w-2 h-2 bg-white rounded-full"></div>
+                  </div>
+                </div>
+                <span className="text-2xl font-black tracking-tighter">FLUXVIEW</span>
+              </div>
+              <p className="text-slate-400 max-w-md leading-relaxed">
+                物流現場のデジタルトランスフォーメーションを推進する、現場主導のオペレーション管理プラットフォーム。
+                人員配置、進捗管理、コスト分析を一つのツールで。
+              </p>
+            </div>
+            <div>
+              <h5 className="font-bold mb-6 text-sm uppercase tracking-widest text-slate-500">Service</h5>
+              <ul className="space-y-4 text-slate-400 text-sm">
+                <li><a href="#" className="hover:text-white transition-colors">ダッシュボード</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">現場配置管理</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">進捗・コスト分析</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">モバイルワーカービュー</a></li>
+              </ul>
+            </div>
+            <div>
+              <h5 className="font-bold mb-6 text-sm uppercase tracking-widest text-slate-500">Company</h5>
+              <ul className="space-y-4 text-slate-400 text-sm">
+                <li><a href="#" className="hover:text-white transition-colors">会社概要</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">プライバシーポリシー</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">利用規約</a></li>
+                <li><a href="#" className="hover:text-white transition-colors">採用情報</a></li>
+              </ul>
+            </div>
+          </div>
+          <div className="pt-8 border-t border-white/5 flex flex-col md:flex-row justify-between items-center space-y-4 md:space-y-0">
+            <p className="text-slate-500 text-xs italic">
+              powered by Dialog,Inc. © 2026 All Rights Reserved.
+            </p>
+            <div className="flex space-x-6">
+              <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 cursor-pointer">
+                <span className="text-xs font-bold text-slate-400">X</span>
+              </div>
+              <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 cursor-pointer">
+                <span className="text-xs font-bold text-slate-400">f</span>
+              </div>
+              <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center hover:bg-white/10 cursor-pointer">
+                <span className="text-xs font-bold text-slate-400">in</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+export default App;

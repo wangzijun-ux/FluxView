@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import {
   ArrowUpRight,
   TrendingUp,
@@ -105,33 +105,12 @@ const processCostData: CostEntry[] = [
     volume: 82000, costPerUnit: 6.7, budgetVariance: 2.5, trend: "up"
   },
   {
-    id: "P003", name: "仕分け", category: "作業",
+    id: "P003", name: "格納", category: "作業",
     workers: { fullTime: 10, partner: 20, dispatch: 30 },
     hours: { fullTime: 80, partner: 160, dispatch: 240 },
     cost: { fullTime: 136000, partner: 224000, dispatch: 300000, overhead: 45000 },
     volume: 80000, costPerUnit: 8.8, budgetVariance: 5.1, trend: "up"
   },
-  {
-    id: "P004", name: "流通加工", category: "加工作業",
-    workers: { fullTime: 20, partner: 15, dispatch: 25 },
-    hours: { fullTime: 160, partner: 120, dispatch: 200 },
-    cost: { fullTime: 272000, partner: 168000, dispatch: 250000, overhead: 50000 },
-    volume: 45000, costPerUnit: 16.4, budgetVariance: -0.8, trend: "stable"
-  },
-  {
-    id: "P005", name: "梱包", category: "最終作業",
-    workers: { fullTime: 12, partner: 10, dispatch: 25 },
-    hours: { fullTime: 96, partner: 80, dispatch: 200 },
-    cost: { fullTime: 163200, partner: 112000, dispatch: 250000, overhead: 38000 },
-    volume: 78000, costPerUnit: 7.2, budgetVariance: 8.4, trend: "up"
-  },
-  {
-    id: "P006", name: "出荷", category: "共通",
-    workers: { fullTime: 15, partner: 5, dispatch: 20 },
-    hours: { fullTime: 120, partner: 40, dispatch: 160 },
-    cost: { fullTime: 204000, partner: 56000, dispatch: 200000, overhead: 40000 },
-    volume: 82000, costPerUnit: 6.1, budgetVariance: -2.0, trend: "down"
-  }
 ];
 
 const monthlyTrendData = [
@@ -220,13 +199,7 @@ export function CostAnalysis() {
   return (
     <div className="p-6 space-y-5 h-full overflow-y-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className={c.textPrimary}>原価分析</h1>
-          <p className={`${c.textSecondary} text-[14px] mt-1`}>
-            雇用形態別（正社員・パートナー・派遣）の原価構成と収益性を分析
-          </p>
-        </div>
+      <div className="flex items-center justify-end">
         <div className="flex items-center gap-4">
           <div className={`flex items-center rounded-lg ${c.bgCard} p-1 border ${c.borderCard}`}>
             <button
@@ -579,3 +552,5 @@ export function CostAnalysis() {
     </div>
   );
 }
+
+

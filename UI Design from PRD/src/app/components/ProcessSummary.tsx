@@ -1,616 +1,1000 @@
-import { useState, useMemo } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
-  TrendingUp,
-  MapPin,
-  ArrowRight,
-  Users,
-  Clock,
   AlertTriangle,
-  CheckCircle2,
-  Zap,
   BarChart3,
-  Filter,
-  ArrowUpDown,
-  ChevronDown,
-  ChevronUp,
-  Target,
-  Timer,
+  CheckCircle2,
+  Clock3,
+  Layers,
   Package,
+  Search,
+  Target,
+  TrendingUp,
+  Warehouse,
+  ClipboardCheck,
+  Box,
+  Truck,
+  X,
+  type LucideIcon,
 } from "lucide-react";
+import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
-import {
-  defaultProcessSteps,
-  defaultProductionData,
-  defaultSlotAssignments,
-  defaultAreas,
-  processColorClasses,
-  getProcessStepsForArea,
-  type ProcessStep,
-  type ZoneProduction,
-  type Area,
-} from "./processStore";
+import { processColorClasses } from "./processStore";
+import type { AreaMaster, ProcessMaster, Shipper, WorkflowDefinition } from "./masterStore";
 
-/* ------------------------------------------------------------------ */
-/*  Types                                                              */
-/* ------------------------------------------------------------------ */
+const PLAN_STORAGE_KEY = "fluxview-progress-plans-v1";
+const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
 
-interface ZoneSlot { workerId: string | null; }
+type PlanStore = Record<string, Record<string, number>>;
+type StatusTone = "on_track" | "delayed" | "not_started" | "done";
+type TrendPoint = { label: string; planned: number; actual: number };
+const TREND_SAMPLE_MINUTES = [6 * 60, 8 * 60, 10 * 60, 12 * 60, 14 * 60, 16 * 60, 18 * 60, 20 * 60];
 
-interface Zone {
-  processId: string;
+interface StepView {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  shipperId: string;
+  shipperName: string;
   areaId: string;
-  name: string;
+  areaName: string;
+  processId: string;
+  processName: string;
   description: string;
   color: string;
-  icon: ProcessStep["icon"];
-  capacity: number;
-  baseUph: number;
-  requiredSkills: string[];
-  slots: ZoneSlot[];
-  production: ZoneProduction;
+  icon: LucideIcon;
+  headcount: number;
+  uph: number;
+  defaultPlanned: number;
+  weight: number;
+  startTime: string;
+  targetEndTime: string;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-function parseTime(t: string): number { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); }
-function formatTime(mins: number): string {
-  const h = Math.floor(mins / 60); const m = mins % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+interface WorkflowView {
+  id: string;
+  workflowName: string;
+  shipperId: string;
+  shipperName: string;
+  areaId: string;
+  areaName: string;
+  color: string;
+  updatedAt: string;
+  steps: StepView[];
 }
 
-const NOW_MINUTES = 10 * 60 + 15;
+interface StepMetrics {
+  planned: number;
+  actual: number;
+  remaining: number;
+  progress: number;
+  totalUph: number;
+  eta: string;
+  status: StatusTone;
+}
 
-function buildZones(): Zone[] {
-  const zones: Zone[] = [];
-  for (const area of defaultAreas) {
-    const areaSteps = getProcessStepsForArea(area);
-    for (const step of areaSteps) {
-      const prod = defaultProductionData[step.id] ?? { planned: 0, actual: 0, currentUph: step.baseUph, startTime: "06:00", targetEndTime: "18:00" };
-      const slotAssign = defaultSlotAssignments[step.id] ?? Array(step.defaultCapacity).fill(null);
-      zones.push({
-        processId: step.id, areaId: area.id, name: step.name, description: step.zoneDescription,
-        color: step.color, icon: step.icon, capacity: step.defaultCapacity,
-        baseUph: step.baseUph, requiredSkills: step.requiredSkills,
-        slots: slotAssign.map((wId: string | null) => ({ workerId: wId })),
-        production: { ...prod },
-      });
-    }
+interface WorkflowMetrics {
+  totalPlanned: number;
+  totalActual: number;
+  totalRemaining: number;
+  averageProgress: number;
+  delayedCount: number;
+  status: StatusTone;
+  trend: TrendPoint[];
+}
+
+interface AreaMetrics {
+  areaId: string;
+  areaName: string;
+  workflowCount: number;
+  processCount: number;
+  totalPlanned: number;
+  totalActual: number;
+  averageProgress: number;
+  delayedCount: number;
+}
+
+interface TrendDialogState {
+  title: string;
+  subtitle: string;
+  points: TrendPoint[];
+  plannedTotal: number;
+  actualTotal: number;
+  statusLabel: string;
+}
+
+function toDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseTime(value: string) {
+  const [hours, minutes] = value.split(":").map(Number);
+  return (hours || 0) * 60 + (minutes || 0);
+}
+
+function formatTime(totalMinutes: number) {
+  const safeMinutes = Math.max(0, totalMinutes);
+  const hours = Math.floor(safeMinutes / 60);
+  const minutes = safeMinutes % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function pickColor(index: number) {
+  return COLORS[index % COLORS.length];
+}
+
+function hashString(value: string) {
+  return Array.from(value).reduce((acc, char, index) => acc + char.charCodeAt(0) * (index + 1), 0);
+}
+
+function readPlanStore(): PlanStore {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(PLAN_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
   }
-  return zones;
 }
 
-function calcZoneMetrics(zone: Zone, nowMin: number = NOW_MINUTES) {
-  const { production: p } = zone;
-  const filled = zone.slots.filter((s) => s.workerId).length;
-  const remaining = Math.max(0, p.planned - p.actual);
-  const progress = p.planned > 0 ? Math.round((p.actual / p.planned) * 100) : 0;
-  let estimatedEnd = "--:--";
-  let isOverdue = false;
-  if (filled > 0 && p.currentUph > 0 && remaining > 0) {
-    const totalUph = p.currentUph * filled;
-    const minutesToComplete = Math.ceil((remaining / totalUph) * 60);
-    const endMinutes = nowMin + minutesToComplete;
-    estimatedEnd = formatTime(Math.min(endMinutes, 23 * 60 + 59));
-    isOverdue = endMinutes > parseTime(p.targetEndTime);
-  } else if (remaining === 0) { estimatedEnd = "完了"; }
-  const targetEnd = parseTime(p.targetEndTime);
-  const availableHours = Math.max(0.25, (targetEnd - nowMin) / 60);
-  let recommendedWorkers = 0;
-  if (remaining > 0 && p.currentUph > 0) { recommendedWorkers = Math.ceil(remaining / (p.currentUph * availableHours)); }
-  return { remaining, progress, estimatedEnd, isOverdue, recommendedWorkers, filled, totalUph: filled > 0 ? p.currentUph * filled : 0 };
+function iconForProcess(processId: string, processName: string): LucideIcon {
+  switch (processId) {
+    case "proc-1":
+      return Warehouse;
+    case "proc-2":
+    case "proc-8":
+      return ClipboardCheck;
+    case "proc-3":
+    case "proc-4":
+      return Box;
+    case "proc-7":
+      return Package;
+    case "proc-9":
+      return Truck;
+    default:
+      return processName.includes("検") ? ClipboardCheck : Layers;
+  }
 }
 
-type SortKey = "area" | "name" | "progress" | "remaining" | "uph" | "workers" | "status";
-type StatusFilter = "all" | "running" | "delayed" | "idle" | "done";
+function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[], areas: AreaMaster[], processes: ProcessMaster[]) {
+  const shipperMap = new Map(shippers.map((item) => [item.id, item]));
+  const areaMap = new Map(areas.map((item) => [item.id, item]));
+  const processMap = new Map(processes.map((item) => [item.id, item]));
 
-/* ------------------------------------------------------------------ */
-/*  Component                                                          */
-/* ------------------------------------------------------------------ */
+  return workflows
+    .slice()
+    .sort((left, right) => left.name.localeCompare(right.name, "ja"))
+    .map((workflow, workflowIndex) => ({
+      id: workflow.id,
+      workflowName: workflow.name,
+      shipperId: workflow.shipperId,
+      shipperName: shipperMap.get(workflow.shipperId)?.name ?? "未設定荷主",
+      areaId: workflow.areaId,
+      areaName: areaMap.get(workflow.areaId)?.name ?? workflow.name,
+      color: pickColor(workflowIndex),
+      updatedAt: workflow.updatedAt,
+      steps: workflow.steps.map((step, stepIndex) => {
+        const process = processMap.get(step.processId);
+        const headcount = Math.max(step.standardHeadcount || process?.defaultHeadcount || 1, 1);
+        const uph = step.uph || process?.defaultUph || 100;
+        const weight = Math.max(headcount * uph, 1);
+        const defaultPlanned = Math.max(400, Math.round((weight * (1.4 + ((workflowIndex + stepIndex) % 3) * 0.25)) / 10) * 10);
+        const startMinutes = 6 * 60 + stepIndex * 70 + (workflowIndex % 2) * 10;
+        const endMinutes = Math.min(startMinutes + 240 - stepIndex * 10, 20 * 60 + 30);
+
+        return {
+          id: `${workflow.id}:${step.id}`,
+          workflowId: workflow.id,
+          workflowName: workflow.name,
+          shipperId: workflow.shipperId,
+          shipperName: shipperMap.get(workflow.shipperId)?.name ?? "未設定荷主",
+          areaId: workflow.areaId,
+          areaName: areaMap.get(workflow.areaId)?.name ?? workflow.name,
+          processId: step.processId,
+          processName: process?.name ?? `工程${stepIndex + 1}`,
+          description: process?.description ?? "標準工程",
+          color: pickColor(workflowIndex + stepIndex),
+          icon: iconForProcess(step.processId, process?.name ?? ""),
+          headcount,
+          uph,
+          defaultPlanned,
+          weight,
+          startTime: formatTime(startMinutes),
+          targetEndTime: formatTime(endMinutes),
+        } satisfies StepView;
+      }),
+    })) satisfies WorkflowView[];
+}
+
+function distributeWorkflowPlan(total: number, steps: StepView[]) {
+  const safeTotal = Math.max(0, total);
+  const totalWeight = steps.reduce((sum, step) => sum + step.weight, 0) || steps.length || 1;
+  const nextValues: Record<string, number> = {};
+  let remaining = safeTotal;
+
+  steps.forEach((step, index) => {
+    if (index === steps.length - 1) {
+      nextValues[step.id] = Math.max(0, remaining);
+      return;
+    }
+
+    const rawValue = Math.round((safeTotal * step.weight / totalWeight) / 10) * 10;
+    const value = Math.max(0, Math.min(remaining, rawValue));
+    nextValues[step.id] = value;
+    remaining -= value;
+  });
+
+  return nextValues;
+}
+
+function statusConfig(status: StatusTone) {
+  switch (status) {
+    case "done":
+      return { label: "完了", className: "bg-emerald-500/15 text-emerald-500", icon: CheckCircle2 };
+    case "delayed":
+      return { label: "遅延", className: "bg-amber-500/15 text-amber-500", icon: AlertTriangle };
+    case "not_started":
+      return { label: "未着手", className: "bg-slate-500/15 text-slate-500", icon: Clock3 };
+    default:
+      return { label: "進行中", className: "bg-cyan-500/15 text-cyan-500", icon: TrendingUp };
+  }
+}
+
+function getStepMetrics(step: StepView, planned: number, selectedDate: string, today: string, nowMinutes: number): StepMetrics {
+  const seed = hashString(`${selectedDate}:${step.id}`);
+  const selectedDateValue = selectedDate.replaceAll("-", "");
+  const todayValue = today.replaceAll("-", "");
+  const timeFactor = clamp((nowMinutes - 6 * 60) / (14 * 60), 0, 1);
+  const noise = ((seed % 19) - 9) / 100;
+
+  let progressFactor = 0;
+  if (selectedDateValue < todayValue) {
+    progressFactor = 0.88 + (seed % 11) / 100;
+  } else if (selectedDateValue > todayValue) {
+    progressFactor = (seed % 7) / 100;
+  } else {
+    progressFactor = clamp(0.1 + timeFactor * 0.78 + noise, 0, 0.98);
+  }
+
+  const actual = planned > 0 ? Math.min(planned, Math.round((planned * progressFactor) / 10) * 10) : 0;
+  const remaining = Math.max(0, planned - actual);
+  const progress = planned > 0 ? Math.round((actual / planned) * 100) : 0;
+  const totalUph = Math.max(step.headcount * step.uph, step.uph);
+
+  let eta = "--:--";
+  if (planned === 0) eta = "未設定";
+  else if (remaining === 0) eta = "完了";
+  else if (selectedDateValue > todayValue) eta = step.targetEndTime;
+  else eta = formatTime(Math.min(nowMinutes + Math.ceil((remaining / totalUph) * 60), 23 * 60 + 59));
+
+  const expectedProgress = selectedDateValue < todayValue ? 100 : selectedDateValue > todayValue ? 0 : Math.round(timeFactor * 100);
+  let status: StatusTone = "on_track";
+  if (planned === 0) status = "not_started";
+  else if (remaining === 0) status = "done";
+  else if (selectedDateValue > todayValue || actual === 0) status = "not_started";
+  else if (progress + 12 < expectedProgress) status = "delayed";
+
+  return { planned, actual, remaining, progress, totalUph, eta, status };
+}
+
+function formatTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("ja-JP", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+
+function sum(values: number[]) {
+  return values.reduce((acc, value) => acc + value, 0);
+}
+
+function getPlannedValueAtMinute(step: StepView, planned: number, minute: number) {
+  if (planned <= 0) return 0;
+  const start = parseTime(step.startTime);
+  const end = Math.max(parseTime(step.targetEndTime), start + 30);
+  if (minute <= start) return 0;
+  if (minute >= end) return planned;
+  const progress = (minute - start) / (end - start);
+  return Math.round((planned * progress) / 10) * 10;
+}
+
+function buildStepTrend(step: StepView, planned: number, actual: number, selectedDate: string, today: string, nowMinutes: number): TrendPoint[] {
+  const selectedDateValue = selectedDate.replaceAll("-", "");
+  const todayValue = today.replaceAll("-", "");
+  const effectiveCurrentMinutes = selectedDateValue > todayValue ? 6 * 60 : nowMinutes;
+
+  return TREND_SAMPLE_MINUTES.map((minute) => {
+    const plannedAtPoint = getPlannedValueAtMinute(step, planned, minute);
+    if (selectedDateValue > todayValue) {
+      return { label: formatTime(minute), planned: plannedAtPoint, actual: 0 };
+    }
+
+    const effectiveMinute = selectedDateValue < todayValue ? minute : Math.min(minute, effectiveCurrentMinutes);
+    const plannedAtEffectiveMinute = getPlannedValueAtMinute(step, planned, effectiveMinute);
+    const actualAtPoint = planned > 0
+      ? Math.min(actual, Math.round((actual * (plannedAtEffectiveMinute / planned)) / 10) * 10)
+      : 0;
+
+    return {
+      label: formatTime(minute),
+      planned: plannedAtPoint,
+      actual: selectedDateValue < todayValue || minute <= effectiveCurrentMinutes ? actualAtPoint : actual,
+    };
+  });
+}
+
+function buildWorkflowTrend(stepTrends: TrendPoint[][]): TrendPoint[] {
+  if (stepTrends.length === 0) return TREND_SAMPLE_MINUTES.map((minute) => ({ label: formatTime(minute), planned: 0, actual: 0 }));
+  return TREND_SAMPLE_MINUTES.map((minute, index) => ({
+    label: formatTime(minute),
+    planned: sum(stepTrends.map((points) => points[index]?.planned ?? 0)),
+    actual: sum(stepTrends.map((points) => points[index]?.actual ?? 0)),
+  }));
+}
+
+function toSparklinePath(values: number[], width: number, height: number, padding = 4) {
+  const maxValue = Math.max(...values, 1);
+  const usableWidth = width - padding * 2;
+  const usableHeight = height - padding * 2;
+  return values.map((value, index) => {
+    const x = padding + (values.length === 1 ? usableWidth / 2 : (usableWidth * index) / (values.length - 1));
+    const y = padding + usableHeight - (value / maxValue) * usableHeight;
+    return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+}
+
+function TrendSparkline({ points, themeColors }: { points: TrendPoint[]; themeColors: ReturnType<typeof useThemeColors> }) {
+  const width = 160;
+  const height = 48;
+  const plannedValues = points.map((point) => point.planned);
+  const actualValues = points.map((point) => point.actual);
+  const guideValues = [0, Math.max(...plannedValues, ...actualValues, 1) / 2, Math.max(...plannedValues, ...actualValues, 1)];
+  const plannedPath = toSparklinePath(plannedValues, width, height);
+  const actualPath = toSparklinePath(actualValues, width, height);
+  const lastPoint = points[points.length - 1];
+
+  return (
+    <div className="min-w-[176px]">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-12 w-[160px]" role="img" aria-label={`予定 ${lastPoint?.planned ?? 0}、実績 ${lastPoint?.actual ?? 0} の推移`}>
+        {guideValues.map((value, index) => {
+          const y = 4 + ((height - 8) * index) / Math.max(guideValues.length - 1, 1);
+          return (
+            <line
+              key={`${value}-${index}`}
+              x1="4"
+              y1={y}
+              x2={width - 4}
+              y2={y}
+              stroke={themeColors.isDark ? "rgba(148,163,184,0.18)" : "rgba(148,163,184,0.22)"}
+              strokeWidth="1"
+            />
+          );
+        })}
+        <path d={plannedPath} fill="none" stroke="#8b5cf6" strokeWidth="2" strokeDasharray="4 3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d={actualPath} fill="none" stroke="#06b6d4" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      <div className={`mt-1 flex items-center gap-3 text-[10px] ${themeColors.textMuted}`}>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-violet-500" />
+          予定
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2 w-2 rounded-full bg-cyan-500" />
+          実績
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TrendDetailChart({ points, themeColors }: { points: TrendPoint[]; themeColors: ReturnType<typeof useThemeColors> }) {
+  const width = 720;
+  const height = 240;
+  const padding = 18;
+  const plannedValues = points.map((point) => point.planned);
+  const actualValues = points.map((point) => point.actual);
+  const maxValue = Math.max(...plannedValues, ...actualValues, 1);
+  const guideValues = [maxValue, Math.round(maxValue / 2), 0];
+  const plannedPath = toSparklinePath(plannedValues, width, height, padding);
+  const actualPath = toSparklinePath(actualValues, width, height, padding);
+  const usableWidth = width - padding * 2;
+  const usableHeight = height - padding * 2;
+  const pointX = (index: number) => padding + (points.length === 1 ? usableWidth / 2 : (usableWidth * index) / Math.max(points.length - 1, 1));
+  const pointY = (value: number) => padding + usableHeight - (value / maxValue) * usableHeight;
+
+  return (
+    <div className={`${themeColors.bgSurface} ${themeColors.borderCard} rounded-3xl border p-4`}>
+      <div className="grid gap-4 lg:grid-cols-[56px_minmax(0,1fr)]">
+        <div className={`flex flex-col justify-between py-2 text-[11px] tabular-nums ${themeColors.textMuted}`}>
+          {guideValues.map((value, index) => (
+            <span key={`${value}-${index}`}>{value.toLocaleString("ja-JP")}</span>
+          ))}
+        </div>
+        <div>
+          <svg viewBox={`0 0 ${width} ${height}`} className="h-[240px] w-full" role="img" aria-label="予定数と実績数の推移チャート">
+            {guideValues.map((value, index) => {
+              const y = padding + ((height - padding * 2) * index) / Math.max(guideValues.length - 1, 1);
+              return (
+                <line
+                  key={`${value}-${index}`}
+                  x1={padding}
+                  y1={y}
+                  x2={width - padding}
+                  y2={y}
+                  stroke={themeColors.isDark ? "rgba(148,163,184,0.18)" : "rgba(148,163,184,0.22)"}
+                  strokeWidth="1"
+                />
+              );
+            })}
+            <path d={plannedPath} fill="none" stroke="#8b5cf6" strokeWidth="3" strokeDasharray="8 6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d={actualPath} fill="none" stroke="#06b6d4" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+            {points.map((point, index) => (
+              <g key={point.label}>
+                <circle cx={pointX(index)} cy={pointY(point.planned)} r="4.5" fill="#8b5cf6" />
+                <circle cx={pointX(index)} cy={pointY(point.actual)} r="4.5" fill="#06b6d4" />
+              </g>
+            ))}
+          </svg>
+          <div className={`mt-3 grid grid-cols-4 gap-2 text-[11px] ${themeColors.textMuted} lg:grid-cols-8`}>
+            {points.map((point) => (
+              <div key={point.label} className="text-center">{point.label}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className={`mt-4 flex flex-wrap items-center gap-4 text-[12px] ${themeColors.textSecondary}`}>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-violet-500" />
+          予定数
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-cyan-500" />
+          実績数
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export function ProcessSummary() {
   const c = useThemeColors();
-  const areas = defaultAreas;
-  const allZones = useMemo(() => buildZones(), []);
+  const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
+  const [now, setNow] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
+  const [filterShipperId, setFilterShipperId] = useState("all");
+  const [filterAreaId, setFilterAreaId] = useState("all");
+  const [filterProcessId, setFilterProcessId] = useState("all");
+  const [filterKeyword, setFilterKeyword] = useState("");
+  const [planStore, setPlanStore] = useState<PlanStore>(() => readPlanStore());
+  const [selectedTrend, setSelectedTrend] = useState<TrendDialogState | null>(null);
 
-  const [selectedAreaId, setSelectedAreaId] = useState<string>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("area");
-  const [sortAsc, setSortAsc] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [expandedAreaIds, setExpandedAreaIds] = useState<Set<string>>(new Set(areas.map((a) => a.id)));
+  useEffect(() => {
+    const timerId = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timerId);
+  }, []);
 
-  const zones = useMemo(() => {
-    if (selectedAreaId === "all") return allZones;
-    return allZones.filter((z) => z.areaId === selectedAreaId);
-  }, [allZones, selectedAreaId]);
+  useEffect(() => {
+    window.localStorage.setItem(PLAN_STORAGE_KEY, JSON.stringify(planStore));
+  }, [planStore]);
 
-  // Compute metrics for all zones
-  const zoneMetrics = useMemo(() => {
-    const map = new Map<string, ReturnType<typeof calcZoneMetrics>>();
-    zones.forEach((z) => map.set(z.processId, calcZoneMetrics(z)));
-    return map;
-  }, [zones]);
+  useEffect(() => {
+    if (!selectedTrend) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedTrend(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedTrend]);
 
-  // Status for a zone
-  const getStatus = (zone: Zone, m: ReturnType<typeof calcZoneMetrics>): StatusFilter => {
-    if (m.filled === 0 && zone.production.planned > 0) return "idle";
-    if (m.estimatedEnd === "完了") return "done";
-    if (m.isOverdue) return "delayed";
-    return "running";
-  };
+  const today = toDateInput(now);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
 
-  // Area summary stats
-  const areaSummary = useMemo(() => {
-    const map: Record<string, { workers: number; capacity: number; planned: number; actual: number; progress: number; delayed: number; idle: number; done: number; running: number }> = {};
-    for (const area of areas) {
-      const areaZones = allZones.filter((z) => z.areaId === area.id);
-      let workers = 0, capacity = 0, planned = 0, actual = 0, totalProgress = 0;
-      let delayed = 0, idle = 0, done = 0, running = 0;
-      for (const z of areaZones) {
-        const m = calcZoneMetrics(z);
-        const filled = z.slots.filter((s) => s.workerId).length;
-        workers += filled;
-        capacity += z.capacity;
-        planned += z.production.planned;
-        actual += z.production.actual;
-        totalProgress += m.progress;
-        const s = getStatus(z, m);
-        if (s === "delayed") delayed++;
-        else if (s === "idle") idle++;
-        else if (s === "done") done++;
-        else running++;
-      }
-      map[area.id] = {
-        workers, capacity, planned, actual,
-        progress: areaZones.length > 0 ? Math.round(totalProgress / areaZones.length) : 0,
-        delayed, idle, done, running,
-      };
-    }
-    return map;
-  }, [allZones, areas]);
-
-  // Filter & sort
-  const sortedZones = useMemo(() => {
-    let filtered = zones;
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((z) => {
-        const m = zoneMetrics.get(z.processId)!;
-        return getStatus(z, m) === statusFilter;
-      });
-    }
-    const sorted = [...filtered];
-    sorted.sort((a, b) => {
-      const ma = zoneMetrics.get(a.processId)!;
-      const mb = zoneMetrics.get(b.processId)!;
-      let cmp = 0;
-      switch (sortKey) {
-        case "area": cmp = a.areaId.localeCompare(b.areaId); break;
-        case "name": cmp = a.name.localeCompare(b.name); break;
-        case "progress": cmp = ma.progress - mb.progress; break;
-        case "remaining": cmp = ma.remaining - mb.remaining; break;
-        case "uph": cmp = ma.totalUph - mb.totalUph; break;
-        case "workers": cmp = ma.filled - mb.filled; break;
-        case "status": {
-          const order = { idle: 0, delayed: 1, running: 2, done: 3, all: 4 };
-          cmp = order[getStatus(a, ma)] - order[getStatus(b, mb)];
-          break;
-        }
-      }
-      return sortAsc ? cmp : -cmp;
-    });
-    return sorted;
-  }, [zones, zoneMetrics, sortKey, sortAsc, statusFilter]);
-
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) setSortAsc(!sortAsc);
-    else { setSortKey(key); setSortAsc(true); }
-  };
-
-  const toggleAreaExpand = (aId: string) => {
-    setExpandedAreaIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(aId)) next.delete(aId); else next.add(aId);
-      return next;
-    });
-  };
-
-  // Global totals
-  const globalTotals = useMemo(() => {
-    let workers = 0, capacity = 0, planned = 0, actual = 0, delayed = 0, idle = 0;
-    allZones.forEach((z) => {
-      const m = calcZoneMetrics(z);
-      const filled = z.slots.filter((s) => s.workerId).length;
-      workers += filled; capacity += z.capacity;
-      planned += z.production.planned; actual += z.production.actual;
-      const s = getStatus(z, m);
-      if (s === "delayed") delayed++;
-      if (s === "idle") idle++;
-    });
-    return { workers, capacity, planned, actual, progress: planned > 0 ? Math.round((actual / planned) * 100) : 0, delayed, idle };
-  }, [allZones]);
-
-  const SortHeader = ({ label, sortKeyVal, className = "" }: { label: string; sortKeyVal: SortKey; className?: string }) => (
-    <th
-      className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left cursor-pointer select-none hover:${c.textSecondary} transition-colors ${className}`}
-      onClick={() => handleSort(sortKeyVal)}
-    >
-      <div className="flex items-center gap-1">
-        {label}
-        {sortKey === sortKeyVal && (
-          sortAsc ? <ChevronUp className="w-3 h-3 text-cyan-400" /> : <ChevronDown className="w-3 h-3 text-cyan-400" />
-        )}
-        {sortKey !== sortKeyVal && <ArrowUpDown className="w-2.5 h-2.5 opacity-30" />}
-      </div>
-    </th>
+  const workflowViews = useMemo(
+    () => buildWorkflowViews(workflows.filter((workflow) => workflow.siteId === selectedSiteId), shippers, areas, processes),
+    [workflows, selectedSiteId, shippers, areas, processes],
   );
 
-  const statusConfig = {
-    running: { label: "稼働中", color: "bg-cyan-500/15 text-cyan-400", icon: Zap },
-    delayed: { label: "遅延", color: "bg-amber-500/15 text-amber-400", icon: AlertTriangle },
-    idle:    { label: "未稼働", color: "bg-red-500/15 text-red-400", icon: Clock },
-    done:    { label: "完了", color: "bg-emerald-500/15 text-emerald-400", icon: CheckCircle2 },
+  const shipperOptions = useMemo(
+    () => shippers.filter((shipper) => workflowViews.some((workflow) => workflow.shipperId === shipper.id)),
+    [workflowViews, shippers],
+  );
+  const areaOptions = useMemo(
+    () => areas.filter((area) => workflowViews.some((workflow) => workflow.areaId === area.id)),
+    [workflowViews, areas],
+  );
+  const processOptions = useMemo(
+    () => processes.filter((process) => workflowViews.some((workflow) => workflow.steps.some((step) => step.processId === process.id))),
+    [workflowViews, processes],
+  );
+
+  const filteredWorkflows = useMemo(() => {
+    const keyword = filterKeyword.trim().toLowerCase();
+    return workflowViews.filter((workflow) => {
+      if (filterShipperId !== "all" && workflow.shipperId !== filterShipperId) return false;
+      if (filterAreaId !== "all" && workflow.areaId !== filterAreaId) return false;
+      if (filterProcessId !== "all" && !workflow.steps.some((step) => step.processId === filterProcessId)) return false;
+      if (!keyword) return true;
+      const haystack = `${workflow.workflowName} ${workflow.shipperName} ${workflow.areaName} ${workflow.steps.map((step) => step.processName).join(" ")}`.toLowerCase();
+      return haystack.includes(keyword);
+    });
+  }, [workflowViews, filterShipperId, filterAreaId, filterProcessId, filterKeyword]);
+
+  const dayPlans = planStore[selectedDate] ?? {};
+
+  const workflowRows = useMemo(() => {
+    return filteredWorkflows.map((workflow) => {
+      const steps = workflow.steps.map((step) => {
+        const planned = dayPlans[step.id] ?? step.defaultPlanned;
+        const metrics = getStepMetrics(step, planned, selectedDate, today, nowMinutes);
+        const trend = buildStepTrend(step, planned, metrics.actual, selectedDate, today, nowMinutes);
+        return { ...step, ...metrics, trend };
+      });
+
+      const totalPlanned = sum(steps.map((step) => step.planned));
+      const totalActual = sum(steps.map((step) => step.actual));
+      const totalRemaining = Math.max(0, totalPlanned - totalActual);
+      const averageProgress = totalPlanned > 0 ? Math.round((totalActual / totalPlanned) * 100) : 0;
+      const delayedCount = steps.filter((step) => step.status === "delayed").length;
+      const trend = buildWorkflowTrend(steps.map((step) => step.trend));
+      const status: StatusTone = totalPlanned === 0
+        ? "not_started"
+        : delayedCount > 0
+          ? "delayed"
+          : steps.every((step) => step.status === "done")
+            ? "done"
+            : steps.every((step) => step.status === "not_started")
+              ? "not_started"
+              : "on_track";
+
+      return {
+        ...workflow,
+        steps,
+        metrics: {
+          totalPlanned,
+          totalActual,
+          totalRemaining,
+          averageProgress,
+          delayedCount,
+          status,
+          trend,
+        } satisfies WorkflowMetrics,
+      };
+    });
+  }, [filteredWorkflows, dayPlans, selectedDate, today, nowMinutes]);
+
+  const processRows = useMemo(
+    () => workflowRows.flatMap((workflow) => workflow.steps.map((step) => ({ ...step, workflowColor: workflow.color }))).filter((step) => filterProcessId === "all" || step.processId === filterProcessId),
+    [workflowRows, filterProcessId],
+  );
+
+  const areaRows = useMemo(() => {
+    const map = new Map<string, AreaMetrics>();
+    workflowRows.forEach((workflow) => {
+      const current = map.get(workflow.areaId) ?? {
+        areaId: workflow.areaId,
+        areaName: workflow.areaName,
+        workflowCount: 0,
+        processCount: 0,
+        totalPlanned: 0,
+        totalActual: 0,
+        averageProgress: 0,
+        delayedCount: 0,
+      };
+      current.workflowCount += 1;
+      current.processCount += workflow.steps.length;
+      current.totalPlanned += workflow.metrics.totalPlanned;
+      current.totalActual += workflow.metrics.totalActual;
+      current.delayedCount += workflow.metrics.delayedCount;
+      current.averageProgress = current.totalPlanned > 0 ? Math.round((current.totalActual / current.totalPlanned) * 100) : 0;
+      map.set(workflow.areaId, current);
+    });
+    return Array.from(map.values());
+  }, [workflowRows]);
+
+  const kpis = useMemo(() => {
+    const totalPlanned = sum(workflowRows.map((workflow) => workflow.metrics.totalPlanned));
+    const totalActual = sum(workflowRows.map((workflow) => workflow.metrics.totalActual));
+    const delayed = sum(workflowRows.map((workflow) => workflow.metrics.delayedCount));
+    const progress = totalPlanned > 0 ? Math.round((totalActual / totalPlanned) * 100) : 0;
+    return [
+      { label: "対象ワークフロー", value: workflowRows.length.toLocaleString("ja-JP"), suffix: "件", icon: Layers, color: "text-cyan-500" },
+      { label: "対象工程", value: processRows.length.toLocaleString("ja-JP"), suffix: "件", icon: Package, color: "text-blue-500" },
+      { label: "予定合計", value: totalPlanned.toLocaleString("ja-JP"), suffix: "個", icon: Target, color: "text-violet-500" },
+      { label: "実績合計", value: totalActual.toLocaleString("ja-JP"), suffix: "個", icon: TrendingUp, color: "text-emerald-500" },
+      { label: "平均進捗", value: `${progress}`, suffix: "%", icon: BarChart3, color: progress >= 70 ? "text-emerald-500" : progress >= 40 ? "text-amber-500" : "text-rose-500" },
+      { label: "遅延工程", value: delayed.toLocaleString("ja-JP"), suffix: "件", icon: AlertTriangle, color: delayed > 0 ? "text-amber-500" : "text-emerald-500" },
+    ];
+  }, [workflowRows, processRows]);
+
+  const handleWorkflowPlannedChange = (workflow: WorkflowView, value: number) => {
+    const distributed = distributeWorkflowPlan(value, workflow.steps);
+    setPlanStore((prev) => ({
+      ...prev,
+      [selectedDate]: {
+        ...(prev[selectedDate] ?? {}),
+        ...distributed,
+      },
+    }));
   };
 
-  return (
-    <div className={`h-full flex flex-col ${c.bgMain} overflow-hidden`}>
-      {/* Header */}
-      <div className={`flex items-center justify-between px-6 py-4 border-b ${c.border} ${c.bgCard}`}>
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center">
-            <BarChart3 className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className={`${c.textPrimary} text-[17px]`}>工程別サマリー</h1>
-            <p className={`${c.textMuted} text-[12px]`}>全エリア・工程のリアルタイム進捗と配置状況</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg ${c.bgSurface} border ${c.border}`}>
-            <Clock className="w-3.5 h-3.5 text-cyan-400" />
-            <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{formatTime(NOW_MINUTES)}</span>
-          </div>
-        </div>
-      </div>
+  const handleProcessPlannedChange = (stepId: string, value: number) => {
+    setPlanStore((prev) => ({
+      ...prev,
+      [selectedDate]: {
+        ...(prev[selectedDate] ?? {}),
+        [stepId]: Math.max(0, value),
+      },
+    }));
+  };
 
-      {/* Top KPI Cards */}
-      <div className={`px-6 py-4 border-b ${c.border} ${c.bgCard}`}>
-        <div className="grid grid-cols-6 gap-3">
-          {[
-            { label: "総工程数", value: allZones.length, suffix: "工程", icon: Package, color: "text-cyan-400" },
-            { label: "配置人数", value: `${globalTotals.workers}/${globalTotals.capacity}`, suffix: "名", icon: Users, color: "text-blue-400" },
-            { label: "予定数量", value: globalTotals.planned.toLocaleString(), suffix: "", icon: Target, color: "text-violet-400" },
-            { label: "実績数量", value: globalTotals.actual.toLocaleString(), suffix: "", icon: TrendingUp, color: "text-emerald-400" },
-            { label: "遅延工程", value: globalTotals.delayed, suffix: "件", icon: AlertTriangle, color: globalTotals.delayed > 0 ? "text-amber-400" : "text-emerald-400" },
-            { label: "未稼働", value: globalTotals.idle, suffix: "件", icon: Clock, color: globalTotals.idle > 0 ? "text-red-400" : "text-emerald-400" },
-          ].map((kpi) => (
-            <div key={kpi.label} className={`${c.bgSurface} rounded-xl border ${c.border} px-4 py-3`}>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className={`text-[11px] ${c.textMuted}`}>{kpi.label}</span>
-                <kpi.icon className={`w-4 h-4 ${kpi.color}`} />
+  const cardClass = `${c.bgCard} border ${c.border} rounded-3xl`;
+  const inputClass = `${c.bgSurface} ${c.borderCard} ${c.textPrimary} w-full rounded-xl border px-3 py-2 text-[13px] outline-none`;
+  const trendButtonClass = `rounded-2xl p-2 text-left transition ${c.isDark ? "hover:bg-slate-900/60" : "hover:bg-slate-100"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60`;
+
+  return (
+    <div className={`flex h-full min-h-0 flex-col ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-50"}`}>
+      <div className={`${c.bgCard} border-b ${c.border} px-6 py-4`}>
+        <div className="grid gap-3 lg:grid-cols-6">
+          {kpis.map((item) => (
+            <div key={item.label} className={`${c.bgSurface} ${c.borderCard} rounded-2xl border px-4 py-3`}>
+              <div className="mb-2 flex items-center justify-between">
+                <span className={`text-[11px] ${c.textMuted}`}>{item.label}</span>
+                <item.icon className={`h-4 w-4 ${item.color}`} />
               </div>
-              <div className={`text-[18px] ${c.textPrimary} tabular-nums`}>
-                {kpi.value}<span className={`text-[11px] ${c.textMuted} ml-1`}>{kpi.suffix}</span>
+              <div className={`text-[20px] font-semibold tabular-nums ${c.textPrimary}`}>
+                {item.value}
+                <span className={`ml-1 text-[11px] ${c.textMuted}`}>{item.suffix}</span>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Area Tabs + Filters */}
-      <div className={`flex items-center gap-3 px-6 py-3 border-b ${c.border}`}>
-        {/* Area tabs */}
-        <div className="flex items-center gap-1.5">
-          <MapPin className={`w-3.5 h-3.5 ${c.textMuted} shrink-0`} />
-          <button
-            onClick={() => setSelectedAreaId("all")}
-            className={`px-3 py-1.5 rounded-lg text-[12px] transition-all ${
-              selectedAreaId === "all"
-                ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30"
-                : `${c.bgSurface} ${c.textSecondary} border ${c.borderCard}`
-            }`}
-          >
-            全エリア
-          </button>
-          {areas.map((area) => {
-            const ac = processColorClasses[area.color] ?? processColorClasses.cyan;
-            return (
-              <button
-                key={area.id}
-                onClick={() => setSelectedAreaId(area.id)}
-                className={`px-3 py-1.5 rounded-lg text-[12px] transition-all ${
-                  selectedAreaId === area.id
-                    ? `${ac.bg} ${ac.text} border ${ac.border}`
-                    : `${c.bgSurface} ${c.textSecondary} border ${c.borderCard}`
-                }`}
-              >
-                {area.name.split("（")[0]}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className={`w-px h-6 ${c.border}`} />
-
-        {/* Status filter */}
-        <div className="flex items-center gap-1.5">
-          <Filter className={`w-3.5 h-3.5 ${c.textMuted} shrink-0`} />
-          {(["all", "running", "delayed", "idle", "done"] as StatusFilter[]).map((sf) => (
-            <button
-              key={sf}
-              onClick={() => setStatusFilter(sf)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] transition-all ${
-                statusFilter === sf
-                  ? sf === "all" ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30"
-                    : `${statusConfig[sf as keyof typeof statusConfig].color} border border-current/20`
-                  : `${c.bgSurface} ${c.textMuted} border ${c.borderCard}`
-              }`}
-            >
-              {sf === "all" ? "全て" : statusConfig[sf as keyof typeof statusConfig].label}
-            </button>
-          ))}
-        </div>
-
-        <div className="ml-auto flex items-center gap-2">
-          <span className={`text-[11px] ${c.textMuted}`}>
-            {sortedZones.length} / {zones.length} 件表示
-          </span>
+      <div className={`${c.bgCard} border-b ${c.border} px-6 py-3`}>
+        <div className="grid gap-3 xl:grid-cols-[220px_180px_180px_180px_minmax(0,1fr)]">
+          <label className="space-y-1">
+            <span className={`text-[11px] ${c.textMuted}`}>作業日</span>
+            <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} className={inputClass} />
+          </label>
+          <label className="space-y-1">
+            <span className={`text-[11px] ${c.textMuted}`}>荷主</span>
+            <select value={filterShipperId} onChange={(event) => setFilterShipperId(event.target.value)} className={inputClass}>
+              <option value="all">すべて</option>
+              {shipperOptions.map((shipper) => <option key={shipper.id} value={shipper.id}>{shipper.name}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className={`text-[11px] ${c.textMuted}`}>エリア</span>
+            <select value={filterAreaId} onChange={(event) => setFilterAreaId(event.target.value)} className={inputClass}>
+              <option value="all">すべて</option>
+              {areaOptions.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className={`text-[11px] ${c.textMuted}`}>工程</span>
+            <select value={filterProcessId} onChange={(event) => setFilterProcessId(event.target.value)} className={inputClass}>
+              <option value="all">すべて</option>
+              {processOptions.map((process) => <option key={process.id} value={process.id}>{process.name}</option>)}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className={`text-[11px] ${c.textMuted}`}>キーワード</span>
+            <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${c.bgSurface} ${c.borderCard}`}>
+              <Search className={`h-4 w-4 ${c.textMuted}`} />
+              <input value={filterKeyword} onChange={(event) => setFilterKeyword(event.target.value)} placeholder="ワークフロー名・工程名で検索" className={`w-full bg-transparent text-[13px] ${c.textPrimary} outline-none placeholder:text-slate-400`} />
+            </div>
+          </label>
         </div>
       </div>
 
-      {/* Main content */}
-      <div className="flex-1 overflow-y-auto">
-        {selectedAreaId === "all" ? (
-          /* ── Grouped by Area view ── */
-          <div className="px-6 py-4 space-y-4">
-            {areas.map((area) => {
-              const ac = processColorClasses[area.color] ?? processColorClasses.cyan;
-              const stats = areaSummary[area.id];
-              const areaZones = sortedZones.filter((z) => z.areaId === area.id);
-              if (areaZones.length === 0 && statusFilter !== "all") return null;
-              const isExpanded = expandedAreaIds.has(area.id);
-
-              return (
-                <div key={area.id} className={`${c.bgCard} rounded-xl border ${c.border} overflow-hidden`}>
-                  {/* Area Header */}
-                  <button
-                    onClick={() => toggleAreaExpand(area.id)}
-                    className={`w-full flex items-center gap-3 px-5 py-3.5 border-b ${c.border} transition-colors ${c.bgCardHover}`}
-                  >
-                    <div className={`w-3 h-3 rounded-full ${ac.bg} border ${ac.border}`} />
-                    <h3 className={`${ac.text} text-[14px]`}>{area.name}</h3>
-                    <span className={`text-[11px] ${c.textMuted}`}>{area.description}</span>
-
-                    {/* Area flow preview */}
-                    <div className="flex items-center gap-1 ml-3">
-                      {allZones.filter((z) => z.areaId === area.id).map((z, idx, arr) => {
-                        const zc = processColorClasses[z.color];
-                        return (
-                          <div key={z.processId} className="flex items-center gap-1">
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${zc.bg} ${zc.text}`}>{z.name}</span>
-                            {idx < arr.length - 1 && <ArrowRight className={`w-2.5 h-2.5 ${c.textDimmed}`} />}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="ml-auto flex items-center gap-4">
-                      <div className="flex items-center gap-3 text-[11px]">
-                        <span className={`${c.textMuted} flex items-center gap-1`}>
-                          <Users className="w-3 h-3" />{stats?.workers ?? 0}/{stats?.capacity ?? 0}名
-                        </span>
-                        <span className={`tabular-nums ${
-                          (stats?.progress ?? 0) >= 70 ? "text-emerald-400"
-                            : (stats?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"
-                        }`}>{stats?.progress ?? 0}%</span>
-                        {(stats?.delayed ?? 0) > 0 && (
-                          <span className="flex items-center gap-0.5 text-amber-400">
-                            <AlertTriangle className="w-3 h-3" />{stats.delayed}
-                          </span>
-                        )}
-                        {(stats?.idle ?? 0) > 0 && (
-                          <span className="flex items-center gap-0.5 text-red-400">
-                            <Clock className="w-3 h-3" />{stats.idle}
-                          </span>
-                        )}
-                      </div>
-                      {isExpanded ? <ChevronUp className={`w-4 h-4 ${c.textMuted}`} /> : <ChevronDown className={`w-4 h-4 ${c.textMuted}`} />}
-                    </div>
-                  </button>
-
-                  {/* Area progress bar */}
-                  <div className={`h-1 ${c.isDark ? "bg-gray-800" : "bg-gray-200"}`}>
-                    <div
-                      className={`h-full transition-all duration-500 ${
-                        (stats?.progress ?? 0) >= 70 ? "bg-emerald-500"
-                          : (stats?.progress ?? 0) >= 40 ? "bg-amber-500" : "bg-red-500"
-                      }`}
-                      style={{ width: `${stats?.progress ?? 0}%` }}
-                    />
-                  </div>
-
-                  {/* Collapsible table */}
-                  {isExpanded && (
-                    <table className="w-full">
-                      <thead>
-                        <tr className={`border-b ${c.border}`}>
-                          <SortHeader label="工程" sortKeyVal="name" />
-                          <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>予定</th>
-                          <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>実績</th>
-                          <SortHeader label="残量" sortKeyVal="remaining" />
-                          <SortHeader label="進捗" sortKeyVal="progress" />
-                          <SortHeader label="UPH" sortKeyVal="uph" />
-                          <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>完了見込</th>
-                          <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>推薦</th>
-                          <SortHeader label="配置" sortKeyVal="workers" />
-                          <SortHeader label="状態" sortKeyVal="status" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {areaZones.map((zone) => {
-                          const m = zoneMetrics.get(zone.processId)!;
-                          const colors = processColorClasses[zone.color];
-                          const status = getStatus(zone, m);
-                          const sc = statusConfig[status as keyof typeof statusConfig];
-                          return (
-                            <tr key={zone.processId} className={`border-b ${c.border} ${c.bgCardHover} transition-colors`}>
-                              <td className="px-3 py-2.5">
-                                <div className="flex items-center gap-2">
-                                  <zone.icon className={`w-3.5 h-3.5 ${colors.text}`} />
-                                  <span className={`text-[12px] ${c.textPrimary}`}>{zone.name}</span>
-                                </div>
-                              </td>
-                              <td className={`px-3 py-2.5 text-[12px] ${c.textSecondary} tabular-nums`}>{zone.production.planned.toLocaleString()}</td>
-                              <td className="px-3 py-2.5 text-[12px] text-cyan-400 tabular-nums">{zone.production.actual.toLocaleString()}</td>
-                              <td className={`px-3 py-2.5 text-[12px] ${c.textSecondary} tabular-nums`}>{m.remaining.toLocaleString()}</td>
-                              <td className="px-3 py-2.5">
-                                <div className="flex items-center gap-2">
-                                  <div className={`w-16 h-1.5 rounded-full ${c.isDark ? "bg-gray-800" : "bg-gray-200"} overflow-hidden`}>
-                                    <div className={`h-full rounded-full transition-all ${m.progress >= 70 ? "bg-emerald-500" : m.progress >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${m.progress}%` }} />
-                                  </div>
-                                  <span className={`text-[11px] tabular-nums ${m.progress >= 70 ? "text-emerald-400" : m.progress >= 40 ? "text-amber-400" : "text-red-400"}`}>{m.progress}%</span>
-                                </div>
-                              </td>
-                              <td className="px-3 py-2.5 text-[12px] text-violet-400 tabular-nums">{m.totalUph || "—"}</td>
-                              <td className={`px-3 py-2.5 text-[12px] tabular-nums ${m.estimatedEnd === "完了" ? "text-emerald-400" : m.isOverdue ? "text-red-400" : c.textPrimary}`}>{m.estimatedEnd}</td>
-                              <td className="px-3 py-2.5">
-                                <span className={`text-[11px] px-2 py-0.5 rounded-full tabular-nums ${m.recommendedWorkers > m.filled ? "bg-red-500/15 text-red-400" : "bg-emerald-500/15 text-emerald-400"}`}>{m.recommendedWorkers}名</span>
-                              </td>
-                              <td className={`px-3 py-2.5 text-[12px] ${c.textSecondary} tabular-nums`}>
-                                <span className={m.filled < zone.capacity * 0.5 ? "text-amber-400" : ""}>{m.filled}/{zone.capacity}</span>
-                              </td>
-                              <td className="px-3 py-2.5">
-                                <span className={`text-[10px] px-2 py-0.5 rounded-full ${sc.color} flex items-center gap-1 w-fit`}>
-                                  <sc.icon className="w-3 h-3" />{sc.label}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          /* ── Single Area view ── */
-          <div className="px-6 py-4">
-            {(() => {
-              const area = areas.find((a) => a.id === selectedAreaId);
-              if (!area) return null;
-              const ac = processColorClasses[area.color] ?? processColorClasses.cyan;
-              const stats = areaSummary[area.id];
-
-              return (
-                <div className={`${c.bgCard} rounded-xl border ${c.border} overflow-hidden`}>
-                  {/* Area info header */}
-                  <div className={`px-5 py-4 border-b ${c.border}`}>
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className={`w-3 h-3 rounded-full ${ac.bg} border ${ac.border}`} />
-                      <h2 className={`${ac.text} text-[15px]`}>{area.name}</h2>
-                      <span className={`text-[12px] ${c.textMuted}`}>{area.description}</span>
-                    </div>
-                    {/* Area KPI row */}
-                    <div className="grid grid-cols-5 gap-3">
-                      {[
-                        { label: "配置", value: `${stats?.workers ?? 0}/${stats?.capacity ?? 0}`, suffix: "名", color: "text-blue-400" },
-                        { label: "予定", value: (stats?.planned ?? 0).toLocaleString(), suffix: "", color: "text-violet-400" },
-                        { label: "実績", value: (stats?.actual ?? 0).toLocaleString(), suffix: "", color: "text-cyan-400" },
-                        { label: "進捗", value: `${stats?.progress ?? 0}`, suffix: "%", color: (stats?.progress ?? 0) >= 70 ? "text-emerald-400" : (stats?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400" },
-                        { label: "工程数", value: sortedZones.length, suffix: "件", color: "text-cyan-400" },
-                      ].map((k) => (
-                        <div key={k.label} className={`${c.bgSurface} rounded-lg border ${c.border} px-3 py-2.5`}>
-                          <span className={`text-[10px] ${c.textMuted} block mb-0.5`}>{k.label}</span>
-                          <span className={`text-[16px] ${k.color} tabular-nums`}>{k.value}<span className={`text-[10px] ${c.textMuted} ml-0.5`}>{k.suffix}</span></span>
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+        <div className="space-y-5">
+          <section className={`${cardClass} p-4`}>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className={`text-[15px] font-semibold ${c.textPrimary}`}>エリア別サマリー</h2>
+                <p className={`text-[12px] ${c.textSecondary}`}>絞り込み後の進捗と予定数をエリア単位で確認できます</p>
+              </div>
+              <div className={`text-[12px] ${c.textMuted}`}>{areaRows.length} エリア表示</div>
+            </div>
+            {areaRows.length === 0 ? (
+              <div className={`rounded-2xl border border-dashed px-4 py-10 text-center text-[13px] ${c.borderCard} ${c.textSecondary}`}>
+                条件に一致するデータがありません
+              </div>
+            ) : (
+              <div className="grid gap-3 xl:grid-cols-4">
+                {areaRows.map((area) => {
+                  const tone = area.averageProgress >= 70 ? "text-emerald-500" : area.averageProgress >= 40 ? "text-amber-500" : "text-rose-500";
+                  return (
+                    <div key={area.areaId} className={`${c.bgSurface} ${c.borderCard} rounded-2xl border p-4`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className={`text-[14px] font-semibold ${c.textPrimary}`}>{area.areaName}</div>
+                          <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{area.workflowCount}ワークフロー / {area.processCount}工程</div>
                         </div>
-                      ))}
+                        <div className={`text-[18px] font-semibold ${tone}`}>{area.averageProgress}%</div>
+                      </div>
+                      <div className={`mt-3 h-2 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                        <div className={`h-2 rounded-full ${area.averageProgress >= 70 ? "bg-emerald-500" : area.averageProgress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(area.averageProgress, 4)}%` }} />
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
+                        <div><div className={c.textMuted}>予定</div><div className={c.textPrimary}>{area.totalPlanned.toLocaleString("ja-JP")}</div></div>
+                        <div><div className={c.textMuted}>実績</div><div className={c.textPrimary}>{area.totalActual.toLocaleString("ja-JP")}</div></div>
+                        <div><div className={c.textMuted}>遅延</div><div className={area.delayedCount > 0 ? "text-amber-500" : c.textPrimary}>{area.delayedCount}件</div></div>
+                      </div>
                     </div>
-                    {/* Flow */}
-                    <div className="flex items-center gap-1.5 mt-3">
-                      <span className={`text-[10px] ${c.textMuted} mr-1`}>フロー:</span>
-                      {allZones.filter((z) => z.areaId === area.id).map((z, idx, arr) => {
-                        const zc = processColorClasses[z.color];
-                        const m = zoneMetrics.get(z.processId);
-                        return (
-                          <div key={z.processId} className="flex items-center gap-1">
-                            <span className={`text-[10px] px-2 py-0.5 rounded ${zc.bg} ${zc.text} flex items-center gap-1`}>
-                              <z.icon className="w-3 h-3" />{z.name}
-                              <span className={`tabular-nums ${(m?.progress ?? 0) >= 70 ? "text-emerald-400" : (m?.progress ?? 0) >= 40 ? "text-amber-400" : "text-red-400"}`}>{m?.progress ?? 0}%</span>
-                            </span>
-                            {idx < arr.length - 1 && <ArrowRight className={`w-3 h-3 ${c.textDimmed}`} />}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
 
-                  {/* Table */}
-                  <table className="w-full">
-                    <thead>
-                      <tr className={`border-b ${c.border}`}>
-                        <SortHeader label="工程" sortKeyVal="name" />
-                        <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>予定</th>
-                        <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>実績</th>
-                        <SortHeader label="残量" sortKeyVal="remaining" />
-                        <SortHeader label="進捗" sortKeyVal="progress" />
-                        <SortHeader label="UPH" sortKeyVal="uph" />
-                        <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>完了見込</th>
-                        <th className={`text-[11px] ${c.textMuted} px-3 py-2.5 text-left`}>推薦</th>
-                        <SortHeader label="配置" sortKeyVal="workers" />
-                        <SortHeader label="状態" sortKeyVal="status" />
+          <section className={`${cardClass} overflow-hidden`}>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 ${c.border}">
+              <div>
+                <h2 className={`text-[15px] font-semibold ${c.textPrimary}`}>ワークフロー別予定数</h2>
+                <p className={`text-[12px] ${c.textSecondary}`}>ワークフロー単位で予定数を入力すると、工程別へ自動配賦します</p>
+              </div>
+              <div className={`text-[12px] ${c.textMuted}`}>更新時刻 {now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false })}</div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-[1160px] w-full">
+                <thead>
+                  <tr className={`border-b ${c.border}`}>
+                    {[
+                      "ワークフロー",
+                      "荷主",
+                      "エリア",
+                      "工程数",
+                      "予定数",
+                      "実績",
+                      "残数",
+                      "進捗",
+                      "遅延工程",
+                      "推移",
+                      "最終更新",
+                    ].map((header) => (
+                      <th key={header} className={`px-4 py-3 text-left text-[11px] font-medium ${c.textMuted}`}>{header}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {workflowRows.map((workflow) => {
+                    const tone = processColorClasses[workflow.color] ?? processColorClasses.cyan;
+                    const status = statusConfig(workflow.metrics.status);
+                    return (
+                      <tr key={workflow.id} className={`border-b ${c.borderCard} align-top`}>
+                        <td className="px-4 py-3">
+                          <div className="flex items-start gap-3">
+                            <div className={`mt-1 h-3 w-3 rounded-full border ${tone.bg} ${tone.border}`} />
+                            <div>
+                              <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{workflow.workflowName}</div>
+                              <div className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${status.className}`}>
+                                <status.icon className="h-3 w-3" />
+                                {status.label}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{workflow.shipperName}</td>
+                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{workflow.areaName}</td>
+                        <td className={`px-4 py-3 text-[12px] ${c.textPrimary}`}>{workflow.steps.length}工程</td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="number"
+                            min={0}
+                            step={10}
+                            value={workflow.metrics.totalPlanned}
+                            onChange={(event) => handleWorkflowPlannedChange(workflow, Number(event.target.value) || 0)}
+                            className={`${inputClass} max-w-[140px]`}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-[12px] font-semibold text-cyan-500 tabular-nums">{workflow.metrics.totalActual.toLocaleString("ja-JP")}</td>
+                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{workflow.metrics.totalRemaining.toLocaleString("ja-JP")}</td>
+                        <td className="px-4 py-3 min-w-[180px]">
+                          <div className="flex items-center gap-2">
+                            <div className={`h-2 flex-1 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                              <div className={`h-2 rounded-full ${workflow.metrics.averageProgress >= 70 ? "bg-emerald-500" : workflow.metrics.averageProgress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(workflow.metrics.averageProgress, 4)}%` }} />
+                            </div>
+                            <span className={`text-[11px] font-semibold ${workflow.metrics.averageProgress >= 70 ? "text-emerald-500" : workflow.metrics.averageProgress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{workflow.metrics.averageProgress}%</span>
+                          </div>
+                        </td>
+                        <td className={`px-4 py-3 text-[12px] ${workflow.metrics.delayedCount > 0 ? "text-amber-500" : c.textSecondary}`}>{workflow.metrics.delayedCount}件</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedTrend({
+                              title: workflow.workflowName,
+                              subtitle: `${workflow.shipperName} / ${workflow.areaName}`,
+                              points: workflow.metrics.trend,
+                              plannedTotal: workflow.metrics.totalPlanned,
+                              actualTotal: workflow.metrics.totalActual,
+                              statusLabel: status.label,
+                            })}
+                            className={trendButtonClass}
+                            aria-label={`${workflow.workflowName} の推移を拡大表示`}
+                          >
+                            <TrendSparkline points={workflow.metrics.trend} themeColors={c} />
+                          </button>
+                        </td>
+                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{formatTimestamp(workflow.updatedAt)}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {sortedZones.map((zone) => {
-                        const m = zoneMetrics.get(zone.processId)!;
-                        const colors = processColorClasses[zone.color];
-                        const status = getStatus(zone, m);
-                        const sc = statusConfig[status as keyof typeof statusConfig];
-                        return (
-                          <tr key={zone.processId} className={`border-b ${c.border} ${c.bgCardHover} transition-colors`}>
-                            <td className="px-3 py-2.5">
-                              <div className="flex items-center gap-2">
-                                <zone.icon className={`w-3.5 h-3.5 ${colors.text}`} />
-                                <span className={`text-[12px] ${c.textPrimary}`}>{zone.name}</span>
-                              </div>
-                            </td>
-                            <td className={`px-3 py-2.5 text-[12px] ${c.textSecondary} tabular-nums`}>{zone.production.planned.toLocaleString()}</td>
-                            <td className="px-3 py-2.5 text-[12px] text-cyan-400 tabular-nums">{zone.production.actual.toLocaleString()}</td>
-                            <td className={`px-3 py-2.5 text-[12px] ${c.textSecondary} tabular-nums`}>{m.remaining.toLocaleString()}</td>
-                            <td className="px-3 py-2.5">
-                              <div className="flex items-center gap-2">
-                                <div className={`w-16 h-1.5 rounded-full ${c.isDark ? "bg-gray-800" : "bg-gray-200"} overflow-hidden`}>
-                                  <div className={`h-full rounded-full transition-all ${m.progress >= 70 ? "bg-emerald-500" : m.progress >= 40 ? "bg-amber-500" : "bg-red-500"}`} style={{ width: `${m.progress}%` }} />
-                                </div>
-                                <span className={`text-[11px] tabular-nums ${m.progress >= 70 ? "text-emerald-400" : m.progress >= 40 ? "text-amber-400" : "text-red-400"}`}>{m.progress}%</span>
-                              </div>
-                            </td>
-                            <td className="px-3 py-2.5 text-[12px] text-violet-400 tabular-nums">{m.totalUph || "—"}</td>
-                            <td className={`px-3 py-2.5 text-[12px] tabular-nums ${m.estimatedEnd === "完了" ? "text-emerald-400" : m.isOverdue ? "text-red-400" : c.textPrimary}`}>{m.estimatedEnd}</td>
-                            <td className="px-3 py-2.5">
-                              <span className={`text-[11px] px-2 py-0.5 rounded-full tabular-nums ${m.recommendedWorkers > m.filled ? "bg-red-500/15 text-red-400" : "bg-emerald-500/15 text-emerald-400"}`}>{m.recommendedWorkers}名</span>
-                            </td>
-                            <td className={`px-3 py-2.5 text-[12px] ${c.textSecondary} tabular-nums`}>
-                              <span className={m.filled < zone.capacity * 0.5 ? "text-amber-400" : ""}>{m.filled}/{zone.capacity}</span>
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <span className={`text-[10px] px-2 py-0.5 rounded-full ${sc.color} flex items-center gap-1 w-fit`}>
-                                <sc.icon className="w-3 h-3" />{sc.label}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })()}
-          </div>
-        )}
+                    );
+                  })}
+                  {workflowRows.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致するワークフローがありません</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section className={`${cardClass} overflow-hidden`}>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 ${c.border}">
+              <div>
+                <h2 className={`text-[15px] font-semibold ${c.textPrimary}`}>工程別進捗と予定数</h2>
+                <p className={`text-[12px] ${c.textSecondary}`}>工程単位で予定数を微調整し、全体の進捗を把握します</p>
+              </div>
+              <div className={`text-[12px] ${c.textMuted}`}>{processRows.length} 工程表示</div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-[1360px] w-full">
+                <thead>
+                  <tr className={`border-b ${c.border}`}>
+                    {[
+                      "ワークフロー",
+                      "工程",
+                      "人員",
+                      "予定数",
+                      "実績",
+                      "残数",
+                      "進捗",
+                      "UPH",
+                      "推移",
+                      "見込",
+                      "状況",
+                    ].map((header) => (
+                      <th key={header} className={`px-4 py-3 text-left text-[11px] font-medium ${c.textMuted}`}>{header}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {processRows.map((step) => {
+                    const tone = processColorClasses[step.color] ?? processColorClasses.cyan;
+                    const status = statusConfig(step.status);
+                    return (
+                      <tr key={step.id} className={`border-b ${c.borderCard}`}>
+                        <td className="px-4 py-3">
+                          <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{step.workflowName}</div>
+                          <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{step.shipperName} / {step.areaName}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className={`flex h-8 w-8 items-center justify-center rounded-xl ${tone.bg} ${tone.text}`}>
+                              <step.icon className="h-4 w-4" />
+                            </div>
+                            <div>
+                              <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{step.processName}</div>
+                              <div className={`text-[11px] ${c.textSecondary}`}>{step.description}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{step.headcount}名</td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="number"
+                            min={0}
+                            step={10}
+                            value={step.planned}
+                            onChange={(event) => handleProcessPlannedChange(step.id, Number(event.target.value) || 0)}
+                            className={`${inputClass} max-w-[140px]`}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-[12px] font-semibold text-cyan-500 tabular-nums">{step.actual.toLocaleString("ja-JP")}</td>
+                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{step.remaining.toLocaleString("ja-JP")}</td>
+                        <td className="px-4 py-3 min-w-[170px]">
+                          <div className="flex items-center gap-2">
+                            <div className={`h-2 flex-1 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                              <div className={`h-2 rounded-full ${step.progress >= 70 ? "bg-emerald-500" : step.progress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(step.progress, 4)}%` }} />
+                            </div>
+                            <span className={`text-[11px] font-semibold ${step.progress >= 70 ? "text-emerald-500" : step.progress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{step.progress}%</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-[12px] font-semibold text-violet-500 tabular-nums">{step.totalUph.toLocaleString("ja-JP")}</td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => setSelectedTrend({
+                              title: step.processName,
+                              subtitle: `${step.workflowName} / ${step.shipperName} / ${step.areaName}`,
+                              points: step.trend,
+                              plannedTotal: step.planned,
+                              actualTotal: step.actual,
+                              statusLabel: status.label,
+                            })}
+                            className={trendButtonClass}
+                            aria-label={`${step.processName} の推移を拡大表示`}
+                          >
+                            <TrendSparkline points={step.trend} themeColors={c} />
+                          </button>
+                        </td>
+                        <td className={`px-4 py-3 text-[12px] ${step.status === "delayed" ? "text-amber-500" : c.textPrimary}`}>{step.eta}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] ${status.className}`}>
+                            <status.icon className="h-3 w-3" />
+                            {status.label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {processRows.length === 0 && (
+                    <tr>
+                      <td colSpan={11} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致する工程がありません</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       </div>
+      {selectedTrend && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onClick={() => setSelectedTrend(null)}>
+          <div
+            className={`${c.bgCard} ${c.border} w-full max-w-5xl rounded-[28px] border shadow-2xl`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={`flex items-start justify-between gap-4 border-b px-6 py-5 ${c.border}`}>
+              <div>
+                <div className={`text-[20px] font-semibold ${c.textPrimary}`}>{selectedTrend.title}</div>
+                <div className={`mt-1 text-[13px] ${c.textSecondary}`}>{selectedTrend.subtitle}</div>
+                <div className={`mt-2 text-[11px] ${c.textMuted}`}>{selectedDate} の推移</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedTrend(null)}
+                className={`${c.bgSurface} ${c.borderCard} rounded-2xl border p-2 ${c.textSecondary} transition ${c.isDark ? "hover:bg-slate-900" : "hover:bg-slate-100"} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60`}
+                aria-label="閉じる"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-5 px-6 py-6">
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className={`${c.bgSurface} ${c.borderCard} rounded-2xl border px-4 py-3`}>
+                  <div className={`text-[11px] ${c.textMuted}`}>予定合計</div>
+                  <div className={`mt-1 text-[20px] font-semibold text-violet-500 tabular-nums`}>{selectedTrend.plannedTotal.toLocaleString("ja-JP")}</div>
+                </div>
+                <div className={`${c.bgSurface} ${c.borderCard} rounded-2xl border px-4 py-3`}>
+                  <div className={`text-[11px] ${c.textMuted}`}>実績合計</div>
+                  <div className={`mt-1 text-[20px] font-semibold text-cyan-500 tabular-nums`}>{selectedTrend.actualTotal.toLocaleString("ja-JP")}</div>
+                </div>
+                <div className={`${c.bgSurface} ${c.borderCard} rounded-2xl border px-4 py-3`}>
+                  <div className={`text-[11px] ${c.textMuted}`}>差分</div>
+                  <div className={`mt-1 text-[20px] font-semibold tabular-nums ${selectedTrend.plannedTotal - selectedTrend.actualTotal > 0 ? "text-amber-500" : "text-emerald-500"}`}>
+                    {(selectedTrend.plannedTotal - selectedTrend.actualTotal).toLocaleString("ja-JP")}
+                  </div>
+                </div>
+                <div className={`${c.bgSurface} ${c.borderCard} rounded-2xl border px-4 py-3`}>
+                  <div className={`text-[11px] ${c.textMuted}`}>状況</div>
+                  <div className={`mt-1 text-[20px] font-semibold ${c.textPrimary}`}>{selectedTrend.statusLabel}</div>
+                </div>
+              </div>
+              <TrendDetailChart points={selectedTrend.points} themeColors={c} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
