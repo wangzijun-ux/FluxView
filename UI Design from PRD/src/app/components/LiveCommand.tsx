@@ -21,7 +21,7 @@ import {
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import { processColorClasses } from "./processStore";
-import { buildFieldDeploymentStorageKey, buildSiteScope } from "./fieldDeploymentStore";
+import { buildFieldDeploymentStorageKey, buildSiteScope, readFieldDeploymentSnapshots, writeFieldDeploymentSnapshots } from "./fieldDeploymentStore";
 import { buildStepPlanDefaults, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
 import { buildReportedQuantityMap, buildWorkerSubmissionRecords, pushAssignmentChangeNotifications } from "./workerMobileStore";
 import { resolveWorkerShiftForDate } from "./attendanceStore";
@@ -181,8 +181,37 @@ function createTimeSlots(interval: TimelineInterval) {
   return slots;
 }
 
-function buildAdjustmentStorageKey(siteId: string) {
-  return `${ADJUSTMENT_STORAGE_PREFIX}:${siteId || "default"}`;
+function buildAdjustmentStorageKey(siteId: string, dateKey?: string) {
+  const scopeKey = siteId || "default";
+  return dateKey
+    ? `${ADJUSTMENT_STORAGE_PREFIX}:${scopeKey}:${dateKey}`
+    : `${ADJUSTMENT_STORAGE_PREFIX}:${scopeKey}`;
+}
+
+function readAdjustmentStorage(siteId: string, dateKey: string) {
+  if (typeof window === "undefined") return null;
+  try {
+    const datedRaw = window.localStorage.getItem(buildAdjustmentStorageKey(siteId, dateKey));
+    if (datedRaw) return JSON.parse(datedRaw) as { savedAt?: string; items?: AssignmentChangeItem[] };
+
+    if (dateKey === toDateInput(new Date())) {
+      const legacyRaw = window.localStorage.getItem(buildAdjustmentStorageKey(siteId));
+      return legacyRaw ? JSON.parse(legacyRaw) as { savedAt?: string; items?: AssignmentChangeItem[] } : null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function writeAdjustmentStorage(siteId: string, dateKey: string, payload: { savedAt?: string; items?: AssignmentChangeItem[] }) {
+  if (typeof window === "undefined") return;
+  const serialized = JSON.stringify(payload);
+  window.localStorage.setItem(buildAdjustmentStorageKey(siteId, dateKey), serialized);
+  if (dateKey === toDateInput(new Date())) {
+    window.localStorage.setItem(buildAdjustmentStorageKey(siteId), serialized);
+  }
 }
 
 function pickColor(index: number) {
@@ -660,6 +689,7 @@ export function LiveCommand() {
   const [now, setNow] = useState(new Date());
   const [timelineInterval, setTimelineInterval] = useState<TimelineInterval>(30);
   const [selectedPanelId, setSelectedPanelId] = useState<string | "all">("all");
+  const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
   const [filterShipperId, setFilterShipperId] = useState("all");
   const [filterAreaId, setFilterAreaId] = useState("all");
   const [filterProcessId, setFilterProcessId] = useState("all");
@@ -683,11 +713,11 @@ export function LiveCommand() {
   const workerMap = useMemo(() => new Map(MOCK_WORKERS.map((worker) => [worker.id, worker])), []);
   const todayKey = useMemo(() => toDateInput(new Date()), []);
   const planStore = useMemo(() => readProgressPlanStore(), []);
-  const dayPlans = useMemo(() => planStore[todayKey] ?? {}, [planStore, todayKey]);
+  const dayPlans = useMemo(() => planStore[selectedDate] ?? {}, [planStore, selectedDate]);
   const submissionRecords = useMemo(
     () =>
       buildWorkerSubmissionRecords({
-        dateKey: todayKey,
+        dateKey: selectedDate,
         selectedSiteId,
         sites,
         workflows,
@@ -695,7 +725,7 @@ export function LiveCommand() {
         areas,
         processes,
       }),
-    [todayKey, selectedSiteId, sites, workflows, shippers, areas, processes],
+    [selectedDate, selectedSiteId, sites, workflows, shippers, areas, processes],
   );
   const reportedQuantityByStep = useMemo(
     () => buildReportedQuantityMap(submissionRecords),
@@ -704,12 +734,12 @@ export function LiveCommand() {
   const timeSlots = useMemo(() => createTimeSlots(timelineInterval), [timelineInterval]);
   const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
   const deploymentStorageKey = useMemo(
-    () => buildFieldDeploymentStorageKey(siteScope.storageScopeKey),
-    [siteScope.storageScopeKey],
+    () => buildFieldDeploymentStorageKey(siteScope.storageScopeKey, selectedDate),
+    [siteScope.storageScopeKey, selectedDate],
   );
   const adjustmentStorageKey = useMemo(
-    () => buildAdjustmentStorageKey(siteScope.storageScopeKey),
-    [siteScope.storageScopeKey],
+    () => buildAdjustmentStorageKey(siteScope.storageScopeKey, selectedDate),
+    [siteScope.storageScopeKey, selectedDate],
   );
 
   useEffect(() => {
@@ -740,8 +770,8 @@ export function LiveCommand() {
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(deploymentStorageKey);
-      const rawAdjustment = window.localStorage.getItem(adjustmentStorageKey);
+      const stored = readFieldDeploymentSnapshots(siteScope.storageScopeKey, selectedDate);
+      const storedAdjustment = readAdjustmentStorage(siteScope.storageScopeKey, selectedDate);
       const defaultSnapshots = Object.fromEntries(
         timeSlots.map((timeLabel) => [
           timeLabel,
@@ -749,19 +779,16 @@ export function LiveCommand() {
         ]),
       ) as SnapshotsByTime;
 
-      if (!raw) {
+      if (Object.keys(stored).length === 0) {
         setSnapshotsByTime(defaultSnapshots);
         setSavedSnapshotsByTime(defaultSnapshots);
-        if (rawAdjustment) {
-          const storedAdjustment = JSON.parse(rawAdjustment) as { savedAt?: string; items?: AssignmentChangeItem[] };
+        if (storedAdjustment) {
           setSavedAdjustmentItems(storedAdjustment.items ?? []);
         } else {
           setSavedAdjustmentItems([]);
         }
         return;
       }
-
-      const stored = JSON.parse(raw) as Record<string, AssignmentSnapshot>;
       const merged = Object.fromEntries(
         timeSlots.map((timeLabel) => [
           timeLabel,
@@ -770,8 +797,7 @@ export function LiveCommand() {
       ) as SnapshotsByTime;
       setSnapshotsByTime(merged);
       setSavedSnapshotsByTime(merged);
-      if (rawAdjustment) {
-        const storedAdjustment = JSON.parse(rawAdjustment) as { savedAt?: string; items?: AssignmentChangeItem[] };
+      if (storedAdjustment) {
         setSavedAdjustmentItems(storedAdjustment.items ?? []);
       } else {
         setSavedAdjustmentItems([]);
@@ -787,7 +813,7 @@ export function LiveCommand() {
       setSavedSnapshotsByTime(fallbackSnapshots);
       setSavedAdjustmentItems([]);
     }
-  }, [adjustmentStorageKey, deploymentStorageKey, seededSnapshots, timeSlots, baseSnapshot, allSteps]);
+  }, [adjustmentStorageKey, deploymentStorageKey, seededSnapshots, timeSlots, baseSnapshot, allSteps, siteScope.storageScopeKey, selectedDate]);
 
   const normalizedSnapshotsByTime = useMemo(
     () => Object.fromEntries(
@@ -816,7 +842,7 @@ export function LiveCommand() {
   const workerAttendanceLabelMap = useMemo(
     () => new Map(
       MOCK_WORKERS.map((worker) => {
-        const shift = resolveWorkerShiftForDate(worker.name, todayKey);
+        const shift = resolveWorkerShiftForDate(worker.name, selectedDate);
         if (shift?.isOff) {
           return [worker.id, "公休"] as const;
         }
@@ -826,7 +852,7 @@ export function LiveCommand() {
         return [worker.id, workerScheduleLabelMap.get(worker.id) ?? null] as const;
       }),
     ),
-    [todayKey, workerScheduleLabelMap],
+    [selectedDate, workerScheduleLabelMap],
   );
 
   const currentSnapshot = useMemo(
@@ -998,6 +1024,11 @@ export function LiveCommand() {
   const attendanceRate = Math.round((activeCount / MOCK_WORKERS.length) * 100);
   const nowMinutes = systemReferenceMinutes;
   const nowSlot = formatTime(floorTimeToSlot(nowMinutes, timelineInterval));
+  const todayValue = todayKey.replaceAll("-", "");
+  const selectedDateValue = selectedDate.replaceAll("-", "");
+  const isSelectedDateToday = selectedDateValue === todayValue;
+  const isSelectedDatePast = selectedDateValue < todayValue;
+  const isSelectedDateFuture = selectedDateValue > todayValue;
   const hasFilters = filterShipperId !== "all" || filterAreaId !== "all" || filterProcessId !== "all" || filterKeyword.trim().length > 0;
   const unsavedAdjustmentItems = useMemo(
     () => generateAssignmentChanges({
@@ -1066,13 +1097,111 @@ export function LiveCommand() {
     setSelectedTime(timeSlots[nextIndex]);
   };
 
+  const handleAiOptimize = () => {
+    const selectedIndex = timeSlots.indexOf(selectedTime);
+    if (selectedIndex < 0 || allSteps.length === 0) return;
+
+    const activeWorkers = MOCK_WORKERS.filter((worker) => worker.status === "active");
+    if (activeWorkers.length === 0) return;
+
+    const referenceSnapshot = materializeSnapshot(
+      normalizedSnapshotsByTime[selectedTime] ?? seededSnapshots[selectedTime] ?? baseSnapshot,
+      allSteps,
+    );
+    const currentStepByWorker = new Map(activeWorkers.map((worker) => [worker.id, findAssignedStepId(referenceSnapshot, worker.id)] as const));
+    const availableWorkerIds = new Set(activeWorkers.map((worker) => worker.id));
+    const optimizedSnapshot: AssignmentSnapshot = {};
+    const resolveStepMeta = (step: StepTemplate) => {
+      const cached = metricsByStepId.get(step.id);
+      if (cached) return cached;
+
+      const assignedCount = countAssigned(referenceSnapshot, step.id);
+      return calcStepMetrics(
+        { ...step, slots: referenceSnapshot[step.id] ?? [], assignedCount },
+        systemReferenceMinutes,
+        timeSlots,
+        timelineInterval,
+        normalizedSnapshotsByTime,
+        reportedQuantityByStep[step.id] ?? 0,
+      );
+    };
+    const sortedSteps = [...allSteps].sort((left, right) => {
+      const leftMeta = resolveStepMeta(left);
+      const rightMeta = resolveStepMeta(right);
+      const leftRemaining = Math.max(0, left.planned - (leftMeta.actual ?? 0));
+      const rightRemaining = Math.max(0, right.planned - (rightMeta.actual ?? 0));
+
+      return rightMeta.shortage - leftMeta.shortage
+        || rightRemaining - leftRemaining
+        || rightMeta.recommended - leftMeta.recommended
+        || left.workflowName.localeCompare(right.workflowName, "ja")
+        || left.processName.localeCompare(right.processName, "ja");
+    });
+
+    sortedSteps.forEach((step) => {
+      const stepMeta = resolveStepMeta(step);
+      const remaining = Math.max(0, step.planned - stepMeta.actual);
+      const desiredCount = remaining === 0 ? 0 : Math.min(activeWorkers.length, Math.max(1, stepMeta.recommended));
+
+      if (desiredCount === 0) {
+        optimizedSnapshot[step.id] = [];
+        return;
+      }
+
+      const keptWorkerIds = (referenceSnapshot[step.id] ?? [])
+        .filter((workerId): workerId is string => Boolean(workerId) && availableWorkerIds.has(workerId))
+        .sort((left, right) => {
+          const leftWorker = workerMap.get(left);
+          const rightWorker = workerMap.get(right);
+          return (rightWorker ? scoreWorker(rightWorker, step) : 0) - (leftWorker ? scoreWorker(leftWorker, step) : 0);
+        })
+        .slice(0, desiredCount);
+
+      const assignedWorkerIds = [...keptWorkerIds];
+      keptWorkerIds.forEach((workerId) => availableWorkerIds.delete(workerId));
+
+      if (assignedWorkerIds.length < desiredCount) {
+        const needed = desiredCount - assignedWorkerIds.length;
+        const candidates = activeWorkers
+          .filter((worker) => availableWorkerIds.has(worker.id))
+          .map((worker) => ({
+            worker,
+            score: scoreWorker(worker, step),
+            staysOnSameStep: currentStepByWorker.get(worker.id) === step.id ? 1 : 0,
+          }))
+          .sort((left, right) => right.score - left.score
+            || right.staysOnSameStep - left.staysOnSameStep
+            || left.worker.name.localeCompare(right.worker.name, "ja"))
+          .slice(0, needed);
+
+        candidates.forEach(({ worker }) => {
+          assignedWorkerIds.push(worker.id);
+          availableWorkerIds.delete(worker.id);
+        });
+      }
+
+      optimizedSnapshot[step.id] = assignedWorkerIds;
+    });
+
+    setSnapshotsByTime((prev) => {
+      const nextState = { ...prev };
+
+      for (let index = selectedIndex; index < timeSlots.length; index += 1) {
+        nextState[timeSlots[index]] = materializeSnapshot(cloneSnapshot(optimizedSnapshot), allSteps);
+      }
+
+      return nextState;
+    });
+    setRightTab("adjustments");
+  };
+
   const handleSave = () => {
     const savedAt = new Date().toISOString();
     const effectiveTimes = Array.from(new Set(unsavedAdjustmentItems.map((item) => item.effectiveTime)))
       .sort((left, right) => parseTime(left) - parseTime(right));
 
     effectiveTimes.forEach((timeLabel) => {
-      if (!selectedSiteId) return;
+      if (!selectedSiteId || selectedDate !== todayKey) return;
       pushAssignmentChangeNotifications({
         siteId: selectedSiteId,
         effectiveTime: timeLabel,
@@ -1083,8 +1212,8 @@ export function LiveCommand() {
       });
     });
 
-    window.localStorage.setItem(deploymentStorageKey, JSON.stringify(normalizedSnapshotsByTime));
-    window.localStorage.setItem(adjustmentStorageKey, JSON.stringify({ savedAt, items: unsavedAdjustmentItems }));
+    writeFieldDeploymentSnapshots(siteScope.storageScopeKey, selectedDate, normalizedSnapshotsByTime as Record<string, AssignmentSnapshot>);
+    writeAdjustmentStorage(siteScope.storageScopeKey, selectedDate, { savedAt, items: unsavedAdjustmentItems });
     setSavedSnapshotsByTime(normalizedSnapshotsByTime);
     setSavedAdjustmentItems(unsavedAdjustmentItems);
     setRightTab("adjustments");
@@ -1138,17 +1267,27 @@ export function LiveCommand() {
               </span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={handleSave}
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-blue-500"
-          >
-            <Save className="h-3.5 w-3.5" />
-            保存
-            {unsavedAdjustmentItems.length > 0 && (
-              <span className="rounded-full bg-white/15 px-1.5 py-0.5 text-[10px]">{unsavedAdjustmentItems.length}</span>
-            )}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSave}
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white shadow-sm transition hover:bg-blue-500"
+            >
+              <Save className="h-3.5 w-3.5" />
+              保存
+              {unsavedAdjustmentItems.length > 0 && (
+                <span className="rounded-full bg-white/15 px-1.5 py-0.5 text-[10px]">{unsavedAdjustmentItems.length}</span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={handleAiOptimize}
+              className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-semibold shadow-sm transition ${c.bgSurface} ${c.borderCard} ${c.textPrimary} hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 dark:hover:border-emerald-500/40 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-200`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              AI最適化
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1195,6 +1334,12 @@ export function LiveCommand() {
 
       <div className={`${c.bgCard} border-b ${c.border} px-5 py-3`}>
         <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(event) => setSelectedDate(event.target.value)}
+            className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} h-10 rounded-xl border px-3 text-[12px] outline-none`}
+          />
           <button type="button" onClick={() => moveTimeline(-1)} className={`rounded-xl border p-2 ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
             <ChevronLeft className="h-4 w-4" />
           </button>
@@ -1204,9 +1349,10 @@ export function LiveCommand() {
               {timeSlots.map((timeLabel) => {
                 const slotMinutes = parseTime(timeLabel);
                 const isSelected = selectedTime === timeLabel;
-                const isCurrent = nowSlot === timeLabel;
-                const isPast = slotMinutes < nowMinutes && !isCurrent;
-                const isChangedFuture = changedTimeSlots.has(timeLabel) && slotMinutes > nowMinutes;
+                const isCurrent = isSelectedDateToday && nowSlot === timeLabel;
+                const isPast = isSelectedDatePast || (isSelectedDateToday && slotMinutes < nowMinutes && !isCurrent);
+                const isFuture = isSelectedDateFuture || (isSelectedDateToday && slotMinutes > nowMinutes);
+                const isChangedFuture = changedTimeSlots.has(timeLabel) && isFuture;
 
                 const dotClass = isCurrent
                   ? "bg-blue-500"

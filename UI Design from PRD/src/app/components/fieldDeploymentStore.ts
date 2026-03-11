@@ -13,6 +13,13 @@ import type { AreaMaster, ProcessMaster, Shipper, Site, WorkflowDefinition } fro
 export const FIELD_DEPLOYMENT_STORAGE_PREFIX = "fluxview-field-deployment-v1";
 const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
 
+function toDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export type DeploymentWorkerStatus = "active" | "break" | "absent";
 export type AssignmentSnapshot = Record<string, string[]>;
 
@@ -78,8 +85,44 @@ export const DEPLOYMENT_WORKERS: DeploymentWorker[] = [
   { id: "worker-16", name: "中村 敏", initials: "中", color: "bg-gray-400", qualificationIds: ["qual-1"], skillIds: ["skill-3"], status: "absent", note: "離席" },
 ];
 
-export function buildFieldDeploymentStorageKey(siteId: string) {
-  return `${FIELD_DEPLOYMENT_STORAGE_PREFIX}:${siteId || "default"}`;
+export function buildFieldDeploymentStorageKey(siteId: string, dateKey?: string) {
+  const scopeKey = siteId || "default";
+  return dateKey
+    ? `${FIELD_DEPLOYMENT_STORAGE_PREFIX}:${scopeKey}:${dateKey}`
+    : `${FIELD_DEPLOYMENT_STORAGE_PREFIX}:${scopeKey}`;
+}
+
+function readJsonStorage<T>(storageKey: string) {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readFieldDeploymentSnapshots(siteId: string, dateKey?: string) {
+  const dated = readJsonStorage<Record<string, AssignmentSnapshot>>(buildFieldDeploymentStorageKey(siteId, dateKey));
+  if (dated) return dated;
+
+  if (dateKey && dateKey === toDateInput(new Date())) {
+    return readJsonStorage<Record<string, AssignmentSnapshot>>(buildFieldDeploymentStorageKey(siteId)) ?? {};
+  }
+
+  return {};
+}
+
+export function writeFieldDeploymentSnapshots(siteId: string, dateKey: string, snapshots: Record<string, AssignmentSnapshot>) {
+  if (typeof window === "undefined") return;
+  const payload = JSON.stringify(snapshots);
+  window.localStorage.setItem(buildFieldDeploymentStorageKey(siteId, dateKey), payload);
+
+  if (dateKey === toDateInput(new Date())) {
+    window.localStorage.setItem(buildFieldDeploymentStorageKey(siteId), payload);
+  }
 }
 
 export function buildSiteScope(sites: Site[], selectedSiteId: string) {

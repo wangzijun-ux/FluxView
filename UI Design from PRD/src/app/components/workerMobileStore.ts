@@ -2,12 +2,12 @@ import {
   DEPLOYMENT_WORKERS,
   buildBaseDeploymentSnapshot,
   buildDeploymentWorkflows,
-  buildFieldDeploymentStorageKey,
   buildSiteScope,
   createSeededDeploymentSnapshots,
   createTimeSlots,
   materializeSnapshot,
   parseTimeLabel,
+  readFieldDeploymentSnapshots,
   type AssignmentSnapshot,
   type DeploymentStep,
   type DeploymentWorkflow,
@@ -111,6 +111,13 @@ export interface WorkerSiteDeploymentData {
   steps: DeploymentStep[];
   timeLabels: string[];
   snapshotsByTime: Record<string, AssignmentSnapshot>;
+}
+
+function toDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function readStorage<T>(key: string, fallback: T): T {
@@ -281,8 +288,7 @@ export function buildWorkerSiteDeploymentData(
     processes,
   );
   const steps = workflowViews.flatMap((workflow) => workflow.steps);
-  const storageKey = buildFieldDeploymentStorageKey(siteScope.storageScopeKey);
-  const storedSnapshots = readStorage<Record<string, AssignmentSnapshot>>(storageKey, {});
+  const storedSnapshots = readFieldDeploymentSnapshots(siteScope.storageScopeKey, toDateInput(new Date()));
   const defaultTimeLabels = createTimeSlots(30);
   const timeLabels = (() => {
     const storedLabels = sortTimeLabels(Object.keys(storedSnapshots).filter((label) => /^\d{2}:\d{2}$/.test(label)));

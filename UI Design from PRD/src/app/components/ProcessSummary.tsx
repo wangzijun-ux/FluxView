@@ -32,11 +32,11 @@ import { processColorClasses } from "./processStore";
 import {
   DEPLOYMENT_WORKERS,
   buildBaseDeploymentSnapshot,
-  buildFieldDeploymentStorageKey,
   buildSiteScope,
   createSeededDeploymentSnapshots,
   createTimeSlots,
   materializeSnapshot,
+  readFieldDeploymentSnapshots,
   type AssignmentSnapshot,
 } from "./fieldDeploymentStore";
 import {
@@ -185,18 +185,6 @@ function calculateRequiredHeadcount(
 
 function pickColor(index: number) {
   return COLORS[index % COLORS.length];
-}
-
-function readDeploymentSnapshots(storageKey: string): Record<string, AssignmentSnapshot> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed as Record<string, AssignmentSnapshot> : {};
-  } catch {
-    return {};
-  }
 }
 
 function sortTimeLabels(labels: string[]) {
@@ -655,13 +643,9 @@ export function ProcessSummary() {
   const today = toDateInput(now);
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
-  const deploymentStorageKey = useMemo(
-    () => buildFieldDeploymentStorageKey(siteScope.storageScopeKey),
-    [siteScope.storageScopeKey],
-  );
   const storedDeploymentSnapshots = useMemo(
-    () => readDeploymentSnapshots(deploymentStorageKey),
-    [deploymentStorageKey],
+    () => readFieldDeploymentSnapshots(siteScope.storageScopeKey, selectedDate),
+    [siteScope.storageScopeKey, selectedDate],
   );
 
   const workflowViews = useMemo(

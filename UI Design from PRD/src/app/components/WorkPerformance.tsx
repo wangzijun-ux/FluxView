@@ -15,12 +15,12 @@ import {
   DEPLOYMENT_WORKERS,
   buildBaseDeploymentSnapshot,
   buildDeploymentWorkflows,
-  buildFieldDeploymentStorageKey,
   buildSiteScope,
   createSeededDeploymentSnapshots,
   createTimeSlots,
   materializeSnapshot,
   parseTimeLabel,
+  readFieldDeploymentSnapshots,
   type AssignmentSnapshot,
   type DeploymentStep,
   type DeploymentWorkflow,
@@ -83,16 +83,11 @@ function getIntervalMinutes(scale: TimeScale) {
   }
 }
 
-function readStoredSnapshots(storageKey: string) {
-  if (typeof window === "undefined") return {} as Record<string, AssignmentSnapshot>;
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, AssignmentSnapshot>) : {};
-  } catch {
-    return {};
-  }
+function toDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function detectSnapshotInterval(labels: string[]) {
@@ -240,7 +235,7 @@ export function WorkPerformance() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
-  const storageKey = useMemo(() => buildFieldDeploymentStorageKey(siteScope.storageScopeKey), [siteScope.storageScopeKey]);
+  const selectedDate = useMemo(() => toDateInput(new Date()), []);
   const workerMap = useMemo(() => new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker])), []);
 
   const workflowViews = useMemo(
@@ -294,7 +289,10 @@ export function WorkPerformance() {
   const visibleStepIds = useMemo(() => new Set(allSteps.map((step) => step.id)), [allSteps]);
 
   const defaultTimeLabels = useMemo(() => createTimeSlots(30), []);
-  const storedSnapshots = useMemo(() => readStoredSnapshots(storageKey), [storageKey]);
+  const storedSnapshots = useMemo(
+    () => readFieldDeploymentSnapshots(siteScope.storageScopeKey, selectedDate),
+    [siteScope.storageScopeKey, selectedDate],
+  );
   const snapshotLabels = useMemo(() => {
     const storedLabels = sortTimeLabels(Object.keys(storedSnapshots).filter((label) => /^\d{2}:\d{2}$/.test(label)));
     return sortTimeLabels(Array.from(new Set([...defaultTimeLabels, ...storedLabels])));
