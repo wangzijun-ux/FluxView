@@ -15,6 +15,7 @@ import {
 import type { AreaMaster, ProcessMaster, Shipper, Site, WorkflowDefinition } from "./masterStore";
 
 export const WORKER_SESSION_STORAGE_KEY = "fluxview-worker-session-v1";
+export const WORKER_AUTH_STORAGE_KEY = "fluxview-worker-auth-v1";
 export const WORKER_PROGRESS_STORAGE_KEY = "fluxview-worker-progress-v1";
 export const WORKER_NOTIFICATION_STORAGE_KEY = "fluxview-worker-notifications-v1";
 
@@ -26,6 +27,15 @@ type SnapshotLike = Record<string, Array<string | null>>;
 export interface WorkerSession {
   workerId: string;
   siteId: string;
+}
+
+export interface WorkerAuthSession {
+  userId: string;
+  userName: string;
+  userEmail: string;
+  workerId: string;
+  siteId: string;
+  loggedInAt: string;
 }
 
 export interface WorkerNotificationRecord {
@@ -197,6 +207,27 @@ export function getDefaultWorkerSession(defaultSiteId: string, fallbackWorkerId:
 
 export function saveWorkerSession(session: WorkerSession) {
   writeStorage(WORKER_SESSION_STORAGE_KEY, session);
+}
+
+export function readWorkerAuthSession() {
+  return readStorage<WorkerAuthSession | null>(WORKER_AUTH_STORAGE_KEY, null);
+}
+
+export function saveWorkerAuthSession(session: WorkerAuthSession) {
+  writeStorage(WORKER_AUTH_STORAGE_KEY, session);
+}
+
+export function clearWorkerAuthSession() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(WORKER_AUTH_STORAGE_KEY);
+}
+
+export function resolveDemoWorkerId(userId: string) {
+  const candidateWorkers = DEPLOYMENT_WORKERS.filter((worker) => worker.status === "active");
+  const workers = candidateWorkers.length > 0 ? candidateWorkers : DEPLOYMENT_WORKERS;
+  const fallbackWorkerId = workers[0]?.id ?? "worker-1";
+  if (!userId) return fallbackWorkerId;
+  return workers[hashString(userId) % workers.length]?.id ?? fallbackWorkerId;
 }
 
 export function readWorkerProgress(dateKey: string, workerId: string) {

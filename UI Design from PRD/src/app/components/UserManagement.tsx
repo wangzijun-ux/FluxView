@@ -199,7 +199,7 @@ const initialRoles: Role[] = [
   },
 ];
 
-const initialUsers: User[] = [
+export const initialUsers: User[] = [
   { id: "U001", name: "管理者 太郎", email: "admin@fluxview.jp", avatar: "管", roleIds: ["role-admin"], status: "active", lastLogin: "2026-03-04 09:45", createdAt: "2025-04-01", mfaEnabled: true, employmentType: "正社員", skills: [{ name: "検品", level: 5 }], certifications: [], performance: { uph: 168, attendanceRate: 98 } },
   { id: "U002", name: "山田 花子", email: "yamada@fluxview.jp", avatar: "山", roleIds: ["role-admin"], status: "active", lastLogin: "2026-03-04 08:30", createdAt: "2025-04-01", mfaEnabled: true, employmentType: "正社員", skills: [{ name: "梱包", level: 5 }], certifications: [], performance: { uph: 155, attendanceRate: 96 } },
   { id: "U003", name: "田中 一郎", email: "tanaka@fluxview.jp", avatar: "田", roleIds: ["role-manager"], status: "active", lastLogin: "2026-03-04 10:00", createdAt: "2025-05-15", mfaEnabled: true, employmentType: "正社員", skills: [{ name: "仕分け", level: 4 }], certifications: [{ name: "フォークリフト免許", expiry: "2027-06-15", status: "valid" }], performance: { uph: 145, attendanceRate: 95 } },

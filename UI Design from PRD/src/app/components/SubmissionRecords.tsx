@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Clock3, PauseOctagon, RotateCcw, Search, Send, Users } from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
@@ -45,7 +45,7 @@ function statusMeta(status: WorkerSubmissionRecord["status"]) {
     case "working":
       return { label: "作業中", className: "bg-cyan-500/15 text-cyan-500" };
     default:
-      return { label: "未開始", className: "bg-slate-500/15 text-slate-500" };
+      return { label: "未着手", className: "bg-slate-500/15 text-slate-500" };
   }
 }
 
@@ -62,6 +62,7 @@ export function SubmissionRecords() {
   const { selectedSiteId, sites, workflows, shippers, areas, processes } = useMasterData();
 
   const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
+  const [activeTab, setActiveTab] = useState<"summary" | "log">("summary");
   const [filterShipperId, setFilterShipperId] = useState("all");
   const [filterAreaId, setFilterAreaId] = useState("all");
   const [filterProcessId, setFilterProcessId] = useState("all");
@@ -86,18 +87,13 @@ export function SubmissionRecords() {
   );
 
   const shipperOptions = useMemo(
-    () =>
-      Array.from(
-        new Map(records.map((record) => [record.shipperName, { id: record.shipperName, label: record.shipperName }])).values(),
-      ),
+    () => Array.from(new Map(records.map((record) => [record.shipperName, { id: record.shipperName, label: record.shipperName }])).values()),
     [records],
   );
 
   const areaOptions = useMemo(() => {
     const candidates = filterShipperId === "all" ? records : records.filter((record) => record.shipperName === filterShipperId);
-    return Array.from(
-      new Map(candidates.map((record) => [record.areaName, { id: record.areaName, label: record.areaName }])).values(),
-    );
+    return Array.from(new Map(candidates.map((record) => [record.areaName, { id: record.areaName, label: record.areaName }])).values());
   }, [records, filterShipperId]);
 
   const processOptions = useMemo(() => {
@@ -106,9 +102,7 @@ export function SubmissionRecords() {
       if (filterAreaId !== "all" && record.areaName !== filterAreaId) return false;
       return true;
     });
-    return Array.from(
-      new Map(candidates.map((record) => [record.processName, { id: record.processName, label: record.processName }])).values(),
-    );
+    return Array.from(new Map(candidates.map((record) => [record.processName, { id: record.processName, label: record.processName }])).values());
   }, [records, filterShipperId, filterAreaId]);
 
   const aggregateRecords = useMemo(
@@ -123,10 +117,7 @@ export function SubmissionRecords() {
   );
 
   const workerOptions = useMemo(
-    () =>
-      Array.from(
-        new Map(aggregateRecords.map((record) => [record.workerId, { id: record.workerId, label: record.workerName }])).values(),
-      ),
+    () => Array.from(new Map(aggregateRecords.map((record) => [record.workerId, { id: record.workerId, label: record.workerName }])).values()),
     [aggregateRecords],
   );
 
@@ -243,15 +234,15 @@ export function SubmissionRecords() {
             icon: Send,
             label: "送信件数",
             value: `${totals.recordCount.toLocaleString("ja-JP")}件`,
-            sub: "進捗管理と同じ送信データを集計",
+            sub: "送信記録として登録された件数",
             color: "text-cyan-500",
             bg: "bg-cyan-500/10",
           },
           {
             icon: CheckCircle2,
-            label: "実績数量合計",
+            label: "処理数量実績",
             value: `${totals.totalQuantity.toLocaleString("ja-JP")}個`,
-            sub: "工程別実績数と一致",
+            sub: "送信済み数量の合計",
             color: "text-emerald-500",
             bg: "bg-emerald-500/10",
           },
@@ -265,7 +256,7 @@ export function SubmissionRecords() {
           },
           {
             icon: Users,
-            label: "対象作業者",
+            label: "対象作業者数",
             value: `${totals.uniqueWorkers.toLocaleString("ja-JP")}名`,
             sub: `完了 ${totals.completedCount.toLocaleString("ja-JP")} 件`,
             color: "text-violet-500",
@@ -290,7 +281,7 @@ export function SubmissionRecords() {
           <div>
             <div className={`text-[14px] font-semibold ${c.textPrimary}`}>送信実績の絞り込み</div>
             <div className={`mt-1 text-[12px] ${c.textSecondary}`}>
-              上段 KPI と工程別集計は、作業日・荷主・エリア・工程の条件で集計します。
+              上段で集計条件、下段で明細条件を指定します。
             </div>
           </div>
           <button
@@ -344,7 +335,7 @@ export function SubmissionRecords() {
         </div>
 
         <div className={`mt-4 border-t pt-4 ${c.borderCard}`}>
-          <div className={`mb-3 text-[12px] font-medium ${c.textSecondary}`}>一覧絞り込み</div>
+          <div className={`mb-3 text-[12px] font-medium ${c.textSecondary}`}>明細条件</div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_220px_minmax(0,1fr)]">
             <label className="block">
               <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>作業者</div>
@@ -359,7 +350,11 @@ export function SubmissionRecords() {
             </label>
             <label className="block">
               <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>状態</div>
-              <select value={filterStatus} onChange={(event) => setFilterStatus(event.target.value as WorkerSubmissionRecord["status"] | "all")} className={inputClass}>
+              <select
+                value={filterStatus}
+                onChange={(event) => setFilterStatus(event.target.value as WorkerSubmissionRecord["status"] | "all")}
+                className={inputClass}
+              >
                 <option value="all">すべて</option>
                 <option value="working">作業中</option>
                 <option value="paused">中断中</option>
@@ -373,7 +368,7 @@ export function SubmissionRecords() {
                 <input
                   value={keyword}
                   onChange={(event) => setKeyword(event.target.value)}
-                  placeholder="作業者名・荷主・エリア・工程で検索"
+                  placeholder="作業者、荷主、エリア、工程で検索"
                   className={`${inputClass} pl-9`}
                 />
               </div>
@@ -382,17 +377,48 @@ export function SubmissionRecords() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        <div className={`${cardClass} overflow-hidden`}>
-          <div className={`border-b px-4 py-3 ${c.borderCard}`}>
-            <div className={`text-[14px] font-semibold ${c.textPrimary}`}>工程別送信集計</div>
-            <div className={`mt-1 text-[12px] ${c.textSecondary}`}>この集計の実績数量を、進捗管理の実績数と同じ値で参照します。</div>
+      <div className={`${cardClass} overflow-hidden`}>
+        <div className={`border-b px-4 py-3 ${c.borderCard}`}>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className={`text-[14px] font-semibold ${c.textPrimary}`}>
+                {activeTab === "summary" ? "工程別送信集計" : "送信ログ一覧"}
+              </div>
+              <div className={`mt-1 text-[12px] ${c.textSecondary}`}>
+                {activeTab === "summary"
+                  ? "工程ごとの送信件数、数量、人数、停止時間を集計します。"
+                  : "作業者ごとの開始・終了・数量・停止時間を時系列で確認します。"}
+              </div>
+            </div>
+            <div className={`inline-flex rounded-xl border p-1 ${c.borderCard} ${c.bgSurface}`}>
+              <button
+                type="button"
+                onClick={() => setActiveTab("summary")}
+                className={`rounded-lg px-3 py-2 text-[12px] font-medium transition ${
+                  activeTab === "summary" ? "bg-cyan-500 text-white" : `${c.textSecondary}`
+                }`}
+              >
+                工程別送信集計
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("log")}
+                className={`rounded-lg px-3 py-2 text-[12px] font-medium transition ${
+                  activeTab === "log" ? "bg-cyan-500 text-white" : `${c.textSecondary}`
+                }`}
+              >
+                送信ログ一覧
+              </button>
+            </div>
           </div>
+        </div>
+
+        {activeTab === "summary" ? (
           <div className="overflow-auto">
             <table className="w-full min-w-[760px]">
               <thead className={c.bgCard}>
                 <tr className={`border-b ${c.borderCard}`}>
-                  {["荷主", "エリア", "工程", "実績数量", "送信件数", "作業者数", "中断時間", "最終送信"].map((header) => (
+                  {["荷主", "エリア", "工程", "実績数量", "送信件数", "作業者数", "中断時間", "最新送信"].map((header) => (
                     <th key={header} className={`px-4 py-3 text-left text-[12px] font-medium ${c.textMuted}`}>
                       {header}
                     </th>
@@ -408,30 +434,30 @@ export function SubmissionRecords() {
                       <div className={`text-[13px] ${c.textPrimary}`}>{row.processName}</div>
                       <div className={`mt-0.5 text-[11px] ${c.textSecondary}`}>{row.workflowName}</div>
                     </td>
-                    <td className={`px-4 py-3 text-[13px] font-semibold text-cyan-500 tabular-nums`}>{row.totalQuantity.toLocaleString("ja-JP")}個</td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>{row.recordCount.toLocaleString("ja-JP")}件</td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>{row.workerCount.toLocaleString("ja-JP")}名</td>
+                    <td className={`px-4 py-3 text-[13px] font-semibold text-cyan-500 tabular-nums`}>
+                      {row.totalQuantity.toLocaleString("ja-JP")}個
+                    </td>
+                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>
+                      {row.recordCount.toLocaleString("ja-JP")}件
+                    </td>
+                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>
+                      {row.workerCount.toLocaleString("ja-JP")}名
+                    </td>
                     <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>{formatMinutes(row.pausedMinutes)}</td>
                     <td className={`px-4 py-3 text-[13px] ${c.textSecondary}`}>{formatDateTime(row.latestReportedAt)}</td>
                   </tr>
                 ))}
-                {stepSummaries.length === 0 && (
+                {stepSummaries.length === 0 ? (
                   <tr>
                     <td colSpan={8} className={`px-4 py-12 text-center text-[13px] ${c.textMuted}`}>
-                      条件に一致する送信実績がありません。
+                      条件に一致する工程別送信集計がありません。
                     </td>
                   </tr>
-                )}
+                ) : null}
               </tbody>
             </table>
           </div>
-        </div>
-
-        <div className={`${cardClass} overflow-hidden`}>
-          <div className={`border-b px-4 py-3 ${c.borderCard}`}>
-            <div className={`text-[14px] font-semibold ${c.textPrimary}`}>送信ログ一覧</div>
-            <div className={`mt-1 text-[12px] ${c.textSecondary}`}>詳細一覧は作業者・状態・キーワードでさらに絞り込めます。</div>
-          </div>
+        ) : (
           <div className="overflow-auto">
             <table className="w-full min-w-[880px]">
               <thead className={c.bgCard}>
@@ -454,7 +480,9 @@ export function SubmissionRecords() {
                       </td>
                       <td className="px-4 py-3">
                         <div className={`text-[13px] ${c.textPrimary}`}>{record.processName}</div>
-                        <div className={`mt-0.5 text-[11px] ${c.textSecondary}`}>{record.shipperName} / {record.areaName}</div>
+                        <div className={`mt-0.5 text-[11px] ${c.textSecondary}`}>
+                          {record.shipperName} / {record.areaName}
+                        </div>
                         <div className={`mt-0.5 text-[11px] ${c.textMuted}`}>{record.workflowName}</div>
                       </td>
                       <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>
@@ -463,7 +491,9 @@ export function SubmissionRecords() {
                       <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>
                         {record.completedAt ? formatDateTime(record.completedAt) : `${record.scheduledEndTime} 予定`}
                       </td>
-                      <td className={`px-4 py-3 text-[13px] font-semibold text-cyan-500 tabular-nums`}>{record.reportedQuantity.toLocaleString("ja-JP")}個</td>
+                      <td className={`px-4 py-3 text-[13px] font-semibold text-cyan-500 tabular-nums`}>
+                        {record.reportedQuantity.toLocaleString("ja-JP")}個
+                      </td>
                       <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>{formatMinutes(record.pausedMinutes)}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${meta.className}`}>
@@ -474,17 +504,17 @@ export function SubmissionRecords() {
                     </tr>
                   );
                 })}
-                {detailRecords.length === 0 && (
+                {detailRecords.length === 0 ? (
                   <tr>
                     <td colSpan={8} className={`px-4 py-12 text-center text-[13px] ${c.textMuted}`}>
-                      詳細条件に一致する送信ログがありません。
+                      条件に一致する送信ログがありません。
                     </td>
                   </tr>
-                )}
+                ) : null}
               </tbody>
             </table>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

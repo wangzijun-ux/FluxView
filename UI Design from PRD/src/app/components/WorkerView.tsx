@@ -7,31 +7,67 @@ import {
   ChevronRight,
   Clock3,
   Delete,
+  KeyRound,
+  LogIn,
+  LogOut,
   Megaphone,
   Minus,
   Pause,
   Play,
   Plus,
   ShieldAlert,
+  UserRound,
   X,
 } from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import { DEPLOYMENT_WORKERS } from "./fieldDeploymentStore";
 import { processColorClasses } from "./processStore";
+import { initialUsers } from "./UserManagement";
 import {
   buildWorkerDayTasks,
   buildWorkerSiteDeploymentData,
+  clearWorkerAuthSession,
   getPausedMinutes,
-  getDefaultWorkerSession,
   getTodayKey,
   getVisibleWorkerNotifications,
   pickFallbackWorkerId,
+  readWorkerAuthSession,
   readWorkerProgress,
+  resolveDemoWorkerId,
+  saveWorkerAuthSession,
   saveWorkerProgress,
   saveWorkerSession,
+  type WorkerAuthSession,
   type WorkerTaskProgressEntry,
 } from "./workerMobileStore";
+
+const USER_STORAGE_KEY = "fluxview-users-v1";
+const DEMO_PASSWORD = "1234";
+
+interface WorkerLoginUser {
+  id: string;
+  name: string;
+  email: string;
+  avatar: string;
+  status: "active" | "inactive" | "locked";
+}
+
+function readWorkerLoginUsers() {
+  if (typeof window === "undefined") {
+    return initialUsers.filter((user) => user.status !== "locked");
+  }
+
+  try {
+    const raw = window.localStorage.getItem(USER_STORAGE_KEY);
+    if (!raw) return initialUsers.filter((user) => user.status !== "locked");
+    const parsed = JSON.parse(raw) as WorkerLoginUser[];
+    if (!Array.isArray(parsed) || parsed.length === 0) return initialUsers.filter((user) => user.status !== "locked");
+    return parsed.filter((user) => user?.id && user?.name && user?.email && user.status !== "locked");
+  } catch {
+    return initialUsers.filter((user) => user.status !== "locked");
+  }
+}
 
 function formatTimeRange(startTime: string, endTime: string) {
   return `${startTime} - ${endTime}`;
@@ -71,8 +107,13 @@ export function WorkerView() {
   const [searchParams] = useSearchParams();
   const c = useThemeColors();
   const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
+  const loginUsers = useMemo(() => readWorkerLoginUsers(), []);
   const [now, setNow] = useState(new Date());
+  const [authSession, setAuthSession] = useState<WorkerAuthSession | null>(null);
   const [workerId, setWorkerId] = useState("");
+  const [loginUserId, setLoginUserId] = useState("");
+  const [loginPassword, setLoginPassword] = useState(DEMO_PASSWORD);
+  const [loginError, setLoginError] = useState("");
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [dismissedAnnouncementId, setDismissedAnnouncementId] = useState("");
   const [taskProgress, setTaskProgress] = useState<Record<string, WorkerTaskProgressEntry>>({});
@@ -95,17 +136,31 @@ export function WorkerView() {
   const requestedWorkerId = searchParams.get("workerId");
 
   useEffect(() => {
-    const session = getDefaultWorkerSession(selectedSiteId, fallbackWorkerId);
-    const candidate = requestedWorkerId && workerMap.has(requestedWorkerId)
-      ? requestedWorkerId
-      : workerMap.has(session.workerId)
-        ? session.workerId
-        : fallbackWorkerId;
-    setWorkerId(candidate);
-    saveWorkerSession({ workerId: candidate, siteId: selectedSiteId });
-  }, [selectedSiteId, fallbackWorkerId, requestedWorkerId, workerMap]);
+    const stored = readWorkerAuthSession();
+    if (stored && workerMap.has(stored.workerId)) {
+      setAuthSession(stored);
+      setWorkerId(stored.workerId);
+      setLoginUserId(stored.userId);
+      setLoginPassword(DEMO_PASSWORD);
+      return;
+    }
+    setAuthSession(null);
+    setWorkerId("");
+    setLoginUserId((prev) => prev || loginUsers[0]?.id || "");
+    setLoginPassword(DEMO_PASSWORD);
+  }, [loginUsers, workerMap]);
 
-  const currentWorker = workerMap.get(workerId) ?? workerMap.get(fallbackWorkerId);
+  useEffect(() => {
+    if (!authSession || authSession.siteId === selectedSiteId) return;
+    const nextSession = { ...authSession, siteId: selectedSiteId };
+    setAuthSession(nextSession);
+    saveWorkerAuthSession(nextSession);
+    saveWorkerSession({ workerId: nextSession.workerId, siteId: selectedSiteId });
+  }, [authSession, selectedSiteId]);
+
+  const currentWorker = authSession
+    ? workerMap.get(workerId) ?? workerMap.get(authSession.workerId) ?? workerMap.get(fallbackWorkerId) ?? null
+    : null;
   const todayKey = getTodayKey(now);
 
   const tasks = useMemo(
@@ -114,19 +169,19 @@ export function WorkerView() {
   );
 
   useEffect(() => {
-    if (!currentWorker) return;
+    if (!authSession || !currentWorker) return;
     const stored = readWorkerProgress(todayKey, currentWorker.id);
     const normalized = Object.fromEntries(
       tasks.map((task) => [task.id, stored[task.id] ?? { status: "pending" as const }]),
     );
     setTaskProgress(normalized);
     setProgressKey(`${todayKey}:${currentWorker.id}`);
-  }, [todayKey, currentWorker, tasks]);
+  }, [authSession, todayKey, currentWorker, tasks]);
 
   useEffect(() => {
-    if (!currentWorker || progressKey !== `${todayKey}:${currentWorker.id}`) return;
+    if (!authSession || !currentWorker || progressKey !== `${todayKey}:${currentWorker.id}`) return;
     saveWorkerProgress(todayKey, currentWorker.id, taskProgress);
-  }, [taskProgress, todayKey, currentWorker, progressKey]);
+  }, [authSession, taskProgress, todayKey, currentWorker, progressKey]);
 
   useEffect(() => {
     if (!selectedTaskId) return;
@@ -251,6 +306,128 @@ export function WorkerView() {
   const activeInputUpdatedAt = displayInputTask ? taskProgress[displayInputTask.id]?.lastReportedAt : undefined;
   const quickQuantityButtons = [1, 5, 10, 50];
   const keypadButtons = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0", "backspace"] as const;
+  const currentLoginUser = authSession ? loginUsers.find((user) => user.id === authSession.userId) ?? null : null;
+
+  const handleWorkerLogin = (event: React.FormEvent) => {
+    event.preventDefault();
+    const selectedUser = loginUsers.find((user) => user.id === loginUserId);
+    if (!selectedUser) {
+      setLoginError("ログインするユーザーを選択してください。");
+      return;
+    }
+    if (loginPassword !== DEMO_PASSWORD) {
+      setLoginError("パスワードが正しくありません。");
+      return;
+    }
+
+    const resolvedWorkerId =
+      requestedWorkerId && workerMap.has(requestedWorkerId) ? requestedWorkerId : resolveDemoWorkerId(selectedUser.id);
+    const nextSession = {
+      userId: selectedUser.id,
+      userName: selectedUser.name,
+      userEmail: selectedUser.email,
+      workerId: resolvedWorkerId,
+      siteId: selectedSiteId,
+      loggedInAt: new Date().toISOString(),
+    } satisfies WorkerAuthSession;
+
+    setLoginError("");
+    setAuthSession(nextSession);
+    setWorkerId(resolvedWorkerId);
+    setCurrentScreen("list");
+    setSelectedTaskId(null);
+    setDismissedAnnouncementId("");
+    saveWorkerAuthSession(nextSession);
+    saveWorkerSession({ workerId: resolvedWorkerId, siteId: selectedSiteId });
+  };
+
+  const handleWorkerLogout = () => {
+    clearWorkerAuthSession();
+    setAuthSession(null);
+    setWorkerId("");
+    setTaskProgress({});
+    setProgressKey("");
+    setNotificationOpen(false);
+    setDismissedAnnouncementId("");
+    setSelectedTaskId(null);
+    setCurrentScreen("list");
+    setLoginPassword(DEMO_PASSWORD);
+    setLoginError("");
+  };
+
+  if (!authSession) {
+    return (
+      <div className={`min-h-screen ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-100"}`}>
+        <div className="mx-auto flex min-h-screen w-full max-w-md items-center px-5 py-8">
+          <div className={`w-full rounded-[28px] border px-5 py-6 shadow-xl ${c.bgCard} ${c.borderCard}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className={`text-[12px] font-semibold ${c.textMuted}`}>WORKER DEMO LOGIN</div>
+                <div className={`mt-1 text-[24px] font-semibold ${c.textPrimary}`}>作業員ログイン</div>
+                <div className={`mt-2 text-[13px] leading-6 ${c.textSecondary}`}>
+                  現在のユーザー情報でログインできます。パスワードは固定で <span className="font-semibold text-cyan-500">{DEMO_PASSWORD}</span> です。
+                </div>
+              </div>
+              <div className={`rounded-full px-3 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>
+                {siteName}
+              </div>
+            </div>
+
+            <form onSubmit={handleWorkerLogin} className="mt-6 space-y-4">
+              <label className="block">
+                <div className={`mb-1.5 text-[12px] font-medium ${c.textSecondary}`}>ユーザー</div>
+                <div className="relative">
+                  <UserRound className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${c.textMuted}`} />
+                  <select
+                    value={loginUserId}
+                    onChange={(event) => setLoginUserId(event.target.value)}
+                    className={`h-12 w-full rounded-2xl border pl-10 pr-3 text-[14px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`}
+                  >
+                    {loginUsers.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.name} / {user.email}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </label>
+
+              <label className="block">
+                <div className={`mb-1.5 text-[12px] font-medium ${c.textSecondary}`}>パスワード</div>
+                <div className="relative">
+                  <KeyRound className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${c.textMuted}`} />
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                    placeholder="1234"
+                    className={`h-12 w-full rounded-2xl border pl-10 pr-3 text-[14px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`}
+                  />
+                </div>
+              </label>
+
+              {loginError ? <div className="text-[12px] font-medium text-rose-500">{loginError}</div> : null}
+
+              <div className={`rounded-2xl border px-4 py-3 ${c.bgSurface} ${c.borderCard}`}>
+                <div className={`text-[12px] font-medium ${c.textSecondary}`}>ログイン後の挙動</div>
+                <div className={`mt-2 text-[12px] leading-6 ${c.textMuted}`}>
+                  選択したユーザーをデモ用作業員プロフィールに紐付けて、本日の工程一覧と作業数入力画面を表示します。
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 text-[14px] font-semibold text-white"
+              >
+                <LogIn className="h-4 w-4" />
+                ログインして作業開始
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-100"}`}>
@@ -259,14 +436,14 @@ export function WorkerView() {
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
-              onClick={() => navigate("/")}
+              onClick={handleWorkerLogout}
               className={`inline-flex h-10 w-10 items-center justify-center rounded-full border ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
             >
-              <ArrowLeft className="h-5 w-5" />
+              <LogOut className="h-5 w-5" />
             </button>
 
             <div className="min-w-0 flex-1 text-center">
-              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentWorker?.name ?? "作業員"}</div>
+              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentLoginUser?.name ?? currentWorker?.name ?? "作業員"}</div>
               <div className={`truncate text-[12px] ${c.textSecondary}`}>{siteName}</div>
             </div>
 
