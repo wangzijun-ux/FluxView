@@ -384,37 +384,37 @@ export function NotificationManagement() {
           })}
         </div>
 
-        <div className={`hidden w-[360px] shrink-0 rounded-2xl border p-5 lg:flex lg:flex-col ${c.bgCard} ${c.border}`}>
+        <div className={`hidden w-[360px] min-w-0 shrink-0 rounded-2xl border p-5 lg:flex lg:flex-col ${c.bgCard} ${c.border}`}>
           {selected ? (
             <>
               <div className="flex items-start justify-between gap-3">
-                <div>
+                <div className="min-w-0">
                   <div className={`text-[18px] font-semibold ${c.textPrimary}`}>通知詳細</div>
                   <div className={`mt-1 text-[12px] ${c.textMuted}`}>作成内容、対象、送信状態を確認できます。</div>
                 </div>
                 <button type="button" onClick={() => setSelectedNotificationId(null)} className={`text-[18px] ${c.textMuted}`}>×</button>
               </div>
 
-              <div className="mt-5 space-y-4">
+              <div className="mt-5 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
                 <div className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 ${typeConfig[selected.type].bg}`}>
                   {(() => { const Icon = typeConfig[selected.type].icon; return <Icon className={`h-4 w-4 ${typeConfig[selected.type].text}`} />; })()}
                   <span className={`text-[13px] font-medium ${typeConfig[selected.type].text}`}>{typeConfig[selected.type].label}</span>
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className={`text-[12px] ${c.textMuted}`}>タイトル</div>
-                  <div className={`mt-1 text-[15px] font-semibold ${c.textPrimary}`}>{selected.title}</div>
+                  <div className={`mt-1 break-words text-[15px] font-semibold ${c.textPrimary}`}>{selected.title}</div>
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className={`text-[12px] ${c.textMuted}`}>本文</div>
-                  <div className={`mt-1 rounded-xl p-3 text-[13px] leading-6 ${c.bgSurface} ${c.textSecondary}`}>{selected.message}</div>
+                  <div className={`mt-1 rounded-xl p-3 text-[13px] leading-6 break-words whitespace-pre-wrap ${c.bgSurface} ${c.textSecondary}`}>{selected.message}</div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className={`rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>対象拠点</div><div className={`mt-1 text-[13px] ${c.textPrimary}`}>{sitesById.get(selected.targetSiteId)?.name ?? "全拠点"}</div></div>
-                  <div className={`rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>配信対象</div><div className={`mt-1 text-[13px] ${c.textPrimary}`}>{resolveTargetLabel(selected, usersById, sitesById.get(selected.targetSiteId)?.name ?? "")}</div></div>
+                  <div className={`min-w-0 rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>対象拠点</div><div className={`mt-1 break-words text-[13px] ${c.textPrimary}`}>{sitesById.get(selected.targetSiteId)?.name ?? "全拠点"}</div></div>
+                  <div className={`min-w-0 rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>配信対象</div><div className={`mt-1 break-words text-[13px] ${c.textPrimary}`}>{resolveTargetLabel(selected, usersById, sitesById.get(selected.targetSiteId)?.name ?? "")}</div></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className={`rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>作成日時</div><div className={`mt-1 text-[13px] ${c.textPrimary}`}>{formatDateTime(selected.createdAt)}</div></div>
-                  <div className={`rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>{selected.status === "scheduled" ? "送信予定" : "送信日時"}</div><div className={`mt-1 text-[13px] ${c.textPrimary}`}>{formatDateTime(selected.status === "scheduled" ? selected.scheduledAt : selected.sentAt ?? selected.createdAt)}</div></div>
+                  <div className={`min-w-0 rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>作成日時</div><div className={`mt-1 break-words text-[13px] ${c.textPrimary}`}>{formatDateTime(selected.createdAt)}</div></div>
+                  <div className={`min-w-0 rounded-xl border px-3 py-3 ${c.bgSurface} ${c.borderCard}`}><div className={`text-[11px] ${c.textMuted}`}>{selected.status === "scheduled" ? "送信予定" : "送信日時"}</div><div className={`mt-1 break-words text-[13px] ${c.textPrimary}`}>{formatDateTime(selected.status === "scheduled" ? selected.scheduledAt : selected.sentAt ?? selected.createdAt)}</div></div>
                 </div>
                 {selected.readRate !== undefined && (
                   <div>
@@ -422,12 +422,12 @@ export function NotificationManagement() {
                     <div className="mt-2 flex items-center gap-3"><div className={`h-2 flex-1 overflow-hidden rounded-full ${c.bgSurface}`}><div className="h-full rounded-full bg-emerald-500" style={{ width: `${selected.readRate}%` }} /></div><span className="text-[13px] font-medium text-emerald-400">{selected.readRate}%</span></div>
                   </div>
                 )}
-                <div>
+                <div className="min-w-0">
                   <div className={`text-[12px] ${c.textMuted}`}>作業員端末プレビュー</div>
-                  <div className="mt-2 rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="mt-2 min-w-0 rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="flex items-center gap-2">{(() => { const Icon = typeConfig[selected.type].icon; return <Icon className="h-5 w-5 text-slate-700" />; })()}<span className="text-[13px] font-medium text-slate-700">{typeConfig[selected.type].label}</span></div>
-                    <div className="mt-2 text-[16px] font-semibold text-slate-900">{selected.title}</div>
-                    <div className="mt-1 text-[14px] leading-6 text-slate-600">{selected.message}</div>
+                    <div className="mt-2 break-words text-[16px] font-semibold text-slate-900">{selected.title}</div>
+                    <div className="mt-1 break-words whitespace-pre-wrap text-[14px] leading-6 text-slate-600">{selected.message}</div>
                   </div>
                 </div>
               </div>
