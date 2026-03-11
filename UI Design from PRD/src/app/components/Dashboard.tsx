@@ -800,8 +800,8 @@ export function Dashboard() {
         {[
           { name: "WMS連携", status: "connected", lastSync: formatTime(nowMinutes), direction: "In" },
           { name: "TMS連携", status: "connected", lastSync: formatTime(Math.max(6 * 60, nowMinutes - 5)), direction: "Out" },
-          { name: "在庫連携", status: "connected", lastSync: formatTime(Math.max(6 * 60, nowMinutes - 2)), direction: "In" },
-          { name: "勤怠連携", status: "scheduled", lastSync: "06:00", direction: "Out" },
+          { name: "勤怠連携", status: "connected", lastSync: formatTime(Math.max(6 * 60, nowMinutes - 2)), direction: "In" },
+          { name: "会計連携", status: "scheduled", lastSync: "06:00", direction: "Out" },
         ].map((integration) => (
           <div key={integration.name} className={`flex items-center gap-3 rounded-xl border p-4 ${c.bgCard} ${c.border}`}>
             <div className={`h-2 w-2 rounded-full ${integration.status === "connected" ? "bg-emerald-400" : "bg-gray-500"}`} />
