@@ -132,6 +132,27 @@ function toDateTimeIso(date: Date, timeLabel: string) {
   return result.toISOString();
 }
 
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function hashString(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
+}
+
+function toDateTimeIsoFromMinutes(date: Date, totalMinutes: number, seconds = 0) {
+  const safeMinutes = clampNumber(Math.floor(totalMinutes), 0, 24 * 60 - 1);
+  const safeSeconds = clampNumber(Math.floor(seconds), 0, 59);
+  const result = new Date(date);
+  result.setHours(0, 0, 0, 0);
+  result.setMinutes(safeMinutes, safeSeconds, 0);
+  return result.toISOString();
+}
+
 function formatTimeLabel(totalMinutes: number) {
   const safe = Math.max(0, totalMinutes);
   const hours = Math.floor(safe / 60);
@@ -402,6 +423,133 @@ export function buildReportedQuantityMap(records: WorkerSubmissionRecord[]) {
     map.set(record.stepId, (map.get(record.stepId) ?? 0) + record.reportedQuantity);
   });
   return map;
+}
+
+export function seedDemoWorkerSubmissionData(params: {
+  selectedSiteId: string;
+  sites: Site[];
+  workflows: WorkflowDefinition[];
+  shippers: Shipper[];
+  areas: AreaMaster[];
+  processes: ProcessMaster[];
+  date?: Date;
+}) {
+  const { selectedSiteId, sites, workflows, shippers, areas, processes, date = new Date() } = params;
+  const dateKey = formatLocalDateKey(date);
+  const siteData = buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, areas, processes);
+  const stepMap = new Map(siteData.steps.map((step) => [step.id, step]));
+
+  if (siteData.steps.length === 0) {
+    return { dateKey, workerCount: 0, taskCount: 0, recordCount: 0 };
+  }
+
+  const current = new Date();
+  const nowMinutes = clampNumber(current.getHours() * 60 + current.getMinutes(), 20, 23 * 60 + 55);
+  const stored = readStorage<Record<string, Record<string, Record<string, WorkerTaskProgressEntry>>>>(
+    WORKER_PROGRESS_STORAGE_KEY,
+    {},
+  );
+  const nextDateStore = { ...(stored[dateKey] ?? {}) };
+
+  let workerCount = 0;
+  let taskCount = 0;
+
+  DEPLOYMENT_WORKERS.forEach((worker, workerIndex) => {
+    const tasks = buildWorkerDayTasks(siteData, worker.id);
+    if (tasks.length === 0) return;
+
+    const siteTaskIds = new Set(tasks.map((task) => task.id));
+    const preservedEntries = Object.fromEntries(
+      Object.entries(nextDateStore[worker.id] ?? {}).filter(([taskId]) => !siteTaskIds.has(taskId)),
+    );
+
+    const targetTasks = tasks.slice(0, Math.min(tasks.length, 3));
+    let cursorMinutes = clampNumber(20 + workerIndex * 7, 5, Math.max(5, nowMinutes - 70));
+    let seededForWorker = 0;
+    const generatedEntries: Record<string, WorkerTaskProgressEntry> = {};
+
+    targetTasks.forEach((task, taskIndex) => {
+      const step = stepMap.get(task.stepId);
+      if (!step || cursorMinutes >= nowMinutes - 2) return;
+
+      const seed = hashString(`${dateKey}:${worker.id}:${task.id}`);
+      const remainingTasks = targetTasks.length - taskIndex - 1;
+      const latestEndLimit = Math.max(cursorMinutes + 10, nowMinutes - Math.max(4, remainingTasks * 16));
+      const executionMinutes = clampNumber(
+        Math.min(task.durationMinutes, 60 + (seed % 45)),
+        12,
+        Math.max(12, latestEndLimit - cursorMinutes),
+      );
+      const endMinutes = clampNumber(cursorMinutes + executionMinutes, cursorMinutes + 10, latestEndLimit);
+      const perWorkerUph = Math.max(20, Math.round((step.uph || 120) / Math.max(step.headcount || 1, 1)));
+      const quantityFactor = 0.74 + ((seed % 23) / 100);
+      const reportedQuantity = Math.max(
+        1,
+        Math.round(((Math.max(endMinutes - cursorMinutes, 10) / 60) * perWorkerUph) * quantityFactor),
+      );
+      const startSeconds = seed % 60;
+      const endSeconds = (seed * 7) % 60;
+      const shouldStayInProgress = taskIndex === targetTasks.length - 1 && nowMinutes - cursorMinutes >= 18;
+
+      if (shouldStayInProgress) {
+        const isPaused = worker.status === "break" || seed % 5 === 0;
+        const lastReportedMinutes = clampNumber(nowMinutes - (isPaused ? 12 : 4), cursorMinutes + 5, nowMinutes - 1);
+        generatedEntries[task.id] = {
+          status: isPaused ? "paused" : "working",
+          startedAt: toDateTimeIsoFromMinutes(date, cursorMinutes, startSeconds),
+          lastReportedAt: toDateTimeIsoFromMinutes(date, lastReportedMinutes, endSeconds),
+          reportedQuantity: Math.max(1, Math.round(reportedQuantity * (isPaused ? 0.82 : 0.92))),
+          totalPausedMinutes: isPaused ? 6 + (seed % 12) : 0,
+          pauseStartedAt: isPaused
+            ? toDateTimeIsoFromMinutes(date, clampNumber(nowMinutes - 8, cursorMinutes + 6, nowMinutes - 1))
+            : undefined,
+        };
+      } else {
+        const completedMinutes = clampNumber(endMinutes, cursorMinutes + 10, nowMinutes - 4);
+        generatedEntries[task.id] = {
+          status: "completed",
+          startedAt: toDateTimeIsoFromMinutes(date, cursorMinutes, startSeconds),
+          completedAt: toDateTimeIsoFromMinutes(date, completedMinutes, endSeconds),
+          lastReportedAt: toDateTimeIsoFromMinutes(
+            date,
+            clampNumber(completedMinutes - 3, cursorMinutes + 5, completedMinutes),
+            (endSeconds + 11) % 60,
+          ),
+          reportedQuantity,
+          totalPausedMinutes: seed % 4 === 0 ? 4 + (seed % 9) : 0,
+        };
+      }
+
+      taskCount += 1;
+      seededForWorker += 1;
+      cursorMinutes = clampNumber(endMinutes + 10 + (seed % 6), cursorMinutes + 12, nowMinutes - 1);
+    });
+
+    if (seededForWorker === 0) return;
+    workerCount += 1;
+    nextDateStore[worker.id] = {
+      ...preservedEntries,
+      ...generatedEntries,
+    };
+  });
+
+  writeStorage(WORKER_PROGRESS_STORAGE_KEY, {
+    ...stored,
+    [dateKey]: nextDateStore,
+  });
+
+  const recordCount = buildWorkerSubmissionRecords({
+    dateKey,
+    selectedSiteId,
+    sites,
+    workflows,
+    shippers,
+    areas,
+    processes,
+    now: current,
+  }).length;
+
+  return { dateKey, workerCount, taskCount, recordCount };
 }
 
 export function buildDefaultAnnouncements(siteName: string, date = new Date()) {

@@ -1,4 +1,4 @@
-﻿import { Bell, ChevronDown, Moon, RotateCcw, Sun } from "lucide-react";
+﻿import { Bell, ChevronDown, Moon, RotateCcw, Send, Sun } from "lucide-react";
 import {
   AppBar,
   Avatar,
@@ -17,6 +17,7 @@ import { alpha } from "@mui/material/styles";
 import { useLocation, useNavigate } from "react-router";
 import { useMasterData } from "./MasterDataContext";
 import { useTheme } from "./ThemeContext";
+import { seedDemoWorkerSubmissionData } from "./workerMobileStore";
 
 const pageLabels: Record<string, string> = {
   "/": "ダッシュボード",
@@ -54,7 +55,7 @@ export function TopBar() {
   const location = useLocation();
   const navigate = useNavigate();
   const { toggleTheme, isDark } = useTheme();
-  const { sites, workflows, selectedSiteId, setSelectedSiteId } = useMasterData();
+  const { sites, workflows, shippers, areas, processes, selectedSiteId, setSelectedSiteId } = useMasterData();
 
   const activeSite = sites.find((site) => site.id === selectedSiteId) ?? sites[0];
   const workflowCount = activeSite ? workflows.filter((workflow) => workflow.siteId === activeSite.id).length : workflows.length;
@@ -72,6 +73,32 @@ export function TopBar() {
       }
     });
 
+    window.location.reload();
+  };
+
+  const handleSeedSubmissionRecords = () => {
+    const confirmed = window.confirm(
+      `選択中拠点「${activeSite?.name ?? "未選択"}」の本日分送信実績を生成します。既存の同拠点データは上書きされます。続行しますか？`,
+    );
+    if (!confirmed) return;
+
+    const result = seedDemoWorkerSubmissionData({
+      selectedSiteId,
+      sites,
+      workflows,
+      shippers,
+      areas,
+      processes,
+    });
+
+    if (result.recordCount <= 0) {
+      window.alert("送信実績を生成できませんでした。選択中拠点にワークフローが登録されているか確認してください。");
+      return;
+    }
+
+    window.alert(
+      `${result.dateKey} の送信実績を生成しました。\n作業者 ${result.workerCount} 名 / 作業 ${result.taskCount} 件 / 送信実績 ${result.recordCount} 件`,
+    );
     window.location.reload();
   };
 
@@ -130,6 +157,21 @@ export function TopBar() {
               </Select>
             </FormControl>
           </Box>
+
+          <Button
+            onClick={handleSeedSubmissionRecords}
+            startIcon={<Send size={15} />}
+            variant="text"
+            color="inherit"
+            sx={{
+              minHeight: 40,
+              px: 1.25,
+              color: "text.secondary",
+              display: { xs: "none", lg: "inline-flex" },
+            }}
+          >
+            送信実績生成
+          </Button>
 
           <Button
             onClick={handleDemoReset}

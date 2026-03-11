@@ -285,35 +285,37 @@ export function WorkerView() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto px-5 py-5">
-          <div className={`rounded-3xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className={`text-[12px] ${c.textMuted}`}>本日の工程サマリー</div>
-                <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>今日の担当工程を順番に進めます</div>
+        <main className={`flex flex-1 flex-col overflow-y-auto px-5 ${currentScreen === "input" ? "py-4" : "py-5"}`}>
+          {currentScreen === "list" ? (
+            <div className={`rounded-3xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className={`text-[12px] ${c.textMuted}`}>本日の工程サマリー</div>
+                  <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>今日の担当工程を順番に進めます</div>
+                </div>
+                <div className={`rounded-full px-3 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
+                  {now.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", weekday: "short" })}
+                </div>
               </div>
-              <div className={`rounded-full px-3 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
-                {now.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", weekday: "short" })}
+
+              <div className="mt-4 grid grid-cols-3 gap-3">
+                <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[11px] ${c.textMuted}`}>総工程数</div>
+                  <div className={`mt-2 text-[22px] font-semibold ${c.textPrimary}`}>{tasks.length}</div>
+                </div>
+                <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[11px] ${c.textMuted}`}>完了</div>
+                  <div className="mt-2 text-[22px] font-semibold text-emerald-500">{completedCount}</div>
+                </div>
+                <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[11px] ${c.textMuted}`}>完了時間</div>
+                  <div className={`mt-2 text-[18px] font-semibold ${c.textPrimary}`}>{formatDuration(completedMinutes)}</div>
+                </div>
               </div>
             </div>
+          ) : null}
 
-            <div className="mt-4 grid grid-cols-3 gap-3">
-              <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
-                <div className={`text-[11px] ${c.textMuted}`}>総工程数</div>
-                <div className={`mt-2 text-[22px] font-semibold ${c.textPrimary}`}>{tasks.length}</div>
-              </div>
-              <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
-                <div className={`text-[11px] ${c.textMuted}`}>完了</div>
-                <div className="mt-2 text-[22px] font-semibold text-emerald-500">{completedCount}</div>
-              </div>
-              <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
-                <div className={`text-[11px] ${c.textMuted}`}>完了時間</div>
-                <div className={`mt-2 text-[18px] font-semibold ${c.textPrimary}`}>{formatDuration(completedMinutes)}</div>
-              </div>
-            </div>
-          </div>
-
-          {!showAnnouncement && latestChangeNotification ? (
+          {!showAnnouncement && latestChangeNotification && currentScreen === "list" ? (
             <section className="mt-4">
               <div className={`rounded-3xl border px-4 py-4 ${c.bgCard} ${c.borderCard}`}>
                 <div className="flex items-start gap-3">
@@ -333,7 +335,7 @@ export function WorkerView() {
           ) : null}
 
           {currentScreen === "input" && displayInputTask ? (
-            <section className="mt-5">
+            <section className="flex min-h-0 flex-1 flex-col">
               <div className="mb-3 flex items-center justify-between">
                 <button
                   type="button"
@@ -344,7 +346,7 @@ export function WorkerView() {
                   工程一覧へ戻る
                 </button>
               </div>
-              <div className={`overflow-hidden rounded-[28px] border ${c.borderCard} ${c.bgCard} shadow-xl`}>
+              <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] border ${c.borderCard} ${c.bgCard} shadow-xl`}>
                 <div className={`border-b px-4 py-4 ${c.isDark ? "bg-cyan-500/10" : "bg-cyan-50"} ${c.borderCard}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -367,7 +369,7 @@ export function WorkerView() {
                   </div>
                 </div>
 
-                <div className="px-4 py-5">
+                <div className="flex min-h-0 flex-1 flex-col px-4 py-5">
                   <div className={`rounded-[24px] border px-4 py-4 text-center ${c.bgSurface} ${c.borderCard}`}>
                     <div className={`text-[12px] ${c.textMuted}`}>現在の入力数</div>
                     <div className={`mt-3 text-[46px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
@@ -379,7 +381,7 @@ export function WorkerView() {
                     </div>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-4 gap-2">
+                  <div className="mt-4 grid grid-cols-4 gap-2.5">
                     {quickQuantityButtons.map((value) => (
                       <button
                         key={value}
@@ -397,12 +399,13 @@ export function WorkerView() {
                     ))}
                   </div>
 
-                  <div className="mt-4 flex items-center gap-2">
+                  <div className="mt-4 grid w-full grid-cols-[52px_minmax(0,1fr)_52px] gap-2">
                     <button
                       type="button"
+                      aria-label="1件減らす"
                       disabled={activeInputStatus !== "working"}
                       onClick={() => changeTaskQuantity(displayInputTask.id, -1)}
-                      className={`inline-flex min-h-[52px] w-[56px] items-center justify-center rounded-2xl border transition ${
+                      className={`inline-flex min-h-[56px] w-[52px] items-center justify-center rounded-2xl border transition ${
                         activeInputStatus === "working"
                           ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                           : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -417,7 +420,7 @@ export function WorkerView() {
                       value={activeInputQuantity}
                       disabled={activeInputStatus !== "working"}
                       onChange={(event) => updateTaskQuantity(displayInputTask.id, Number(event.target.value || 0))}
-                      className={`min-h-[52px] flex-1 rounded-2xl border px-4 text-center text-[24px] font-semibold tabular-nums outline-none ${
+                      className={`min-h-[56px] min-w-0 w-full rounded-2xl border px-3 text-center text-[24px] font-semibold tabular-nums outline-none ${
                         activeInputStatus === "working"
                           ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                           : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -425,9 +428,10 @@ export function WorkerView() {
                     />
                     <button
                       type="button"
+                      aria-label="1件増やす"
                       disabled={activeInputStatus !== "working"}
                       onClick={() => changeTaskQuantity(displayInputTask.id, 1)}
-                      className={`inline-flex min-h-[52px] w-[56px] items-center justify-center rounded-2xl border transition ${
+                      className={`inline-flex min-h-[56px] w-[52px] items-center justify-center rounded-2xl border transition ${
                         activeInputStatus === "working"
                           ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                           : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -437,11 +441,12 @@ export function WorkerView() {
                     </button>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-3 gap-2">
+                  <div className="mt-4 grid grid-cols-3 gap-2.5">
                     {keypadButtons.map((buttonKey) => (
                       <button
                         key={buttonKey}
                         type="button"
+                        aria-label={buttonKey === "backspace" ? "1桁削除" : `${buttonKey} を入力`}
                         disabled={activeInputStatus !== "working"}
                         onClick={() => {
                           if (buttonKey === "backspace") {
@@ -450,7 +455,7 @@ export function WorkerView() {
                           }
                           appendTaskQuantityDigit(displayInputTask.id, buttonKey);
                         }}
-                        className={`min-h-[58px] rounded-2xl border text-[22px] font-semibold transition ${
+                        className={`min-h-[64px] rounded-[20px] border text-[24px] font-semibold transition ${
                           activeInputStatus === "working"
                             ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                             : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -461,12 +466,12 @@ export function WorkerView() {
                     ))}
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 gap-2">
+                  <div className="mt-auto grid grid-cols-2 gap-2.5 pt-4">
                     {activeInputStatus === "working" ? (
                       <button
                         type="button"
                         onClick={() => updateTaskStatus(displayInputTask.id, "paused")}
-                        className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 text-[14px] font-semibold text-white"
+                        className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 text-[14px] font-semibold text-white"
                       >
                         <Pause className="h-4 w-4" />
                         作業を中断
@@ -475,7 +480,7 @@ export function WorkerView() {
                       <button
                         type="button"
                         onClick={() => updateTaskStatus(displayInputTask.id, "working")}
-                        className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 text-[14px] font-semibold text-white"
+                        className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 text-[14px] font-semibold text-white"
                       >
                         <Play className="h-4 w-4" />
                         作業を再開
@@ -488,7 +493,7 @@ export function WorkerView() {
                         setSelectedTaskId(null);
                         setCurrentScreen("list");
                       }}
-                      className="inline-flex min-h-[54px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 text-[14px] font-semibold text-white"
+                      className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 text-[14px] font-semibold text-white"
                     >
                       <CheckCircle2 className="h-4 w-4" />
                       入力して完了
