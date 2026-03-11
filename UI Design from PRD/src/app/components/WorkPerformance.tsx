@@ -126,6 +126,11 @@ function buildSegments(
     Object.entries(snapshot).forEach(([stepId, workerIds]) => {
       const step = stepMap.get(stepId);
       if (!step) return;
+      const stepStartMinutes = parseTimeLabel(step.startTime);
+      const stepEndMinutes = parseTimeLabel(step.targetEndTime);
+      const clippedStartMinutes = Math.max(startMinutes, stepStartMinutes);
+      const clippedEndMinutes = Math.min(endMinutes, stepEndMinutes);
+      if (clippedEndMinutes <= clippedStartMinutes) return;
 
       workerIds.forEach((workerId) => {
         const worker = workerMap.get(workerId);
@@ -145,8 +150,8 @@ function buildSegments(
           processId: step.processId,
           processName: step.processName,
           color: step.color,
-          startMinutes,
-          endMinutes,
+          startMinutes: clippedStartMinutes,
+          endMinutes: clippedEndMinutes,
         });
       });
     });

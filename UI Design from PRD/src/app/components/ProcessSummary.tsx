@@ -160,6 +160,29 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function calculateRequiredHeadcount(
+  planned: number,
+  uph: number,
+  startTime: string,
+  targetEndTime: string,
+  fallbackHeadcount: number,
+) {
+  const safePlanned = Math.max(0, planned);
+  if (safePlanned === 0) return 0;
+
+  const effectiveUph = Math.max(uph, 1);
+  const startMinutes = parseTime(startTime);
+  const endMinutes = parseTime(targetEndTime);
+  const durationMinutes = endMinutes - startMinutes;
+
+  if (durationMinutes <= 0) {
+    return Math.max(1, fallbackHeadcount);
+  }
+
+  const durationHours = durationMinutes / 60;
+  return Math.max(1, Math.ceil(safePlanned / (effectiveUph * durationHours)));
+}
+
 function pickColor(index: number) {
   return COLORS[index % COLORS.length];
 }
@@ -430,7 +453,7 @@ function getStepMetrics(
   const actual = Math.max(0, actualReported);
   const remaining = Math.max(0, planned - actual);
   const progress = planned > 0 ? Math.min(100, Math.round((actual / planned) * 100)) : 0;
-  const totalUph = Math.max(step.headcount * step.uph, step.uph);
+  const totalUph = step.headcount > 0 ? step.headcount * step.uph : 0;
 
   let eta = "--:--";
   if (planned === 0) {
@@ -603,6 +626,7 @@ export function ProcessSummary() {
   const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
   const [now, setNow] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
+  const [activeTableTab, setActiveTableTab] = useState<"workflow" | "process">("workflow");
   const [filterShipperId, setFilterShipperId] = useState("all");
   const [filterAreaId, setFilterAreaId] = useState("all");
   const [filterProcessId, setFilterProcessId] = useState("all");
@@ -747,8 +771,16 @@ export function ProcessSummary() {
           startTime: step.startTime,
           targetEndTime: step.targetEndTime,
         });
+        const calculatedHeadcount = calculateRequiredHeadcount(
+          planValues.planned,
+          step.uph,
+          planValues.startTime,
+          planValues.targetEndTime,
+          step.headcount,
+        );
         const stepWithPlan = {
           ...step,
+          headcount: calculatedHeadcount,
           planned: planValues.planned,
           startTime: planValues.startTime,
           targetEndTime: planValues.targetEndTime,
@@ -1027,230 +1059,256 @@ export function ProcessSummary() {
           <section className={`${cardClass} overflow-hidden`}>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 ${c.border}">
               <div>
-                <h2 className={`text-[15px] font-semibold ${c.textPrimary}`}>ワークフロー別予定数</h2>
-                <p className={`text-[12px] ${c.textSecondary}`}>ワークフロー単位で予定数を入力すると、工程別へ自動配賦します</p>
+                <h2 className={`text-[15px] font-semibold ${c.textPrimary}`}>
+                  {activeTableTab === "workflow" ? "ワークフロー別予定数" : "工程別進捗と予定数"}
+                </h2>
+                <p className={`text-[12px] ${c.textSecondary}`}>
+                  {activeTableTab === "workflow"
+                    ? "ワークフロー別タブでは予定数を入力し、工程別タブへ自動配賦します"
+                    : "工程別タブでは予定数・開始予定・終了予定を調整し、現場配置と同じ前提で進捗を確認します"}
+                </p>
               </div>
-              <div className={`text-[12px] ${c.textMuted}`}>更新時刻 {now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false })}</div>
+              <div className="flex items-center gap-3">
+                <div className={`inline-flex rounded-xl border p-1 ${c.borderCard} ${c.bgSurface}`}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTableTab("workflow")}
+                    className={`rounded-lg px-3 py-2 text-[12px] font-medium transition ${
+                      activeTableTab === "workflow" ? "bg-cyan-500 text-white" : `${c.textSecondary}`
+                    }`}
+                  >
+                    ワークフロー別
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTableTab("process")}
+                    className={`rounded-lg px-3 py-2 text-[12px] font-medium transition ${
+                      activeTableTab === "process" ? "bg-cyan-500 text-white" : `${c.textSecondary}`
+                    }`}
+                  >
+                    工程別
+                  </button>
+                </div>
+                <div className={`text-[12px] ${c.textMuted}`}>
+                  {activeTableTab === "workflow"
+                    ? `更新時刻 ${now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", hour12: false })}`
+                    : `${processRows.length} 工程表示`}
+                </div>
+              </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-[1160px] w-full">
-                <thead>
-                  <tr className={`border-b ${c.border}`}>
-                    {[
-                      "ワークフロー",
-                      "荷主",
-                      "エリア",
-                      "工程数",
-                      "予定数",
-                      "実績",
-                      "残数",
-                      "進捗",
-                      "遅延工程",
-                      "推移",
-                      "最終更新",
-                    ].map((header) => (
-                      <th key={header} className={`px-4 py-3 text-left text-[11px] font-medium ${c.textMuted}`}>{header}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {workflowRows.map((workflow) => {
-                    const tone = processColorClasses[workflow.color] ?? processColorClasses.cyan;
-                    const status = statusConfig(workflow.metrics.status);
-                    return (
-                      <tr key={workflow.id} className={`border-b ${c.borderCard} align-top`}>
-                        <td className="px-4 py-3">
-                          <div className="flex items-start gap-3">
-                            <div className={`mt-1 h-3 w-3 rounded-full border ${tone.bg} ${tone.border}`} />
-                            <div>
-                              <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{workflow.workflowName}</div>
-                              <div className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${status.className}`}>
-                                <status.icon className="h-3 w-3" />
-                                {status.label}
+
+            {activeTableTab === "workflow" ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-[1160px] w-full">
+                  <thead>
+                    <tr className={`border-b ${c.border}`}>
+                      {[
+                        "ワークフロー",
+                        "荷主",
+                        "エリア",
+                        "工程数",
+                        "予定数",
+                        "実績",
+                        "残数",
+                        "進捗",
+                        "遅延工程",
+                        "推移",
+                        "最終更新",
+                      ].map((header) => (
+                        <th key={header} className={`px-4 py-3 text-left text-[11px] font-medium ${c.textMuted}`}>{header}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workflowRows.map((workflow) => {
+                      const tone = processColorClasses[workflow.color] ?? processColorClasses.cyan;
+                      const status = statusConfig(workflow.metrics.status);
+                      return (
+                        <tr key={workflow.id} className={`border-b ${c.borderCard} align-top`}>
+                          <td className="px-4 py-3">
+                            <div className="flex items-start gap-3">
+                              <div className={`mt-1 h-3 w-3 rounded-full border ${tone.bg} ${tone.border}`} />
+                              <div>
+                                <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{workflow.workflowName}</div>
+                                <div className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] ${status.className}`}>
+                                  <status.icon className="h-3 w-3" />
+                                  {status.label}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{workflow.shipperName}</td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{workflow.areaName}</td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textPrimary}`}>{workflow.steps.length}工程</td>
-                        <td className="px-4 py-3">
-                          <input
-                            type="number"
-                            min={0}
-                            step={10}
-                            value={workflow.metrics.totalPlanned}
-                            onChange={(event) => handleWorkflowPlannedChange(workflow, Number(event.target.value) || 0)}
-                            className={`${inputClass} max-w-[140px]`}
-                          />
-                        </td>
-                        <td className="px-4 py-3 text-[12px] font-semibold text-cyan-500 tabular-nums">{workflow.metrics.totalActual.toLocaleString("ja-JP")}</td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{workflow.metrics.totalRemaining.toLocaleString("ja-JP")}</td>
-                        <td className="px-4 py-3 min-w-[180px]">
-                          <div className="flex items-center gap-2">
-                            <div className={`h-2 flex-1 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
-                              <div className={`h-2 rounded-full ${workflow.metrics.averageProgress >= 70 ? "bg-emerald-500" : workflow.metrics.averageProgress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(workflow.metrics.averageProgress, 4)}%` }} />
+                          </td>
+                          <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{workflow.shipperName}</td>
+                          <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{workflow.areaName}</td>
+                          <td className={`px-4 py-3 text-[12px] ${c.textPrimary}`}>{workflow.steps.length}工程</td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="number"
+                              min={0}
+                              step={10}
+                              value={workflow.metrics.totalPlanned}
+                              onChange={(event) => handleWorkflowPlannedChange(workflow, Number(event.target.value) || 0)}
+                              className={`${inputClass} max-w-[140px]`}
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-[12px] font-semibold text-cyan-500 tabular-nums">{workflow.metrics.totalActual.toLocaleString("ja-JP")}</td>
+                          <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{workflow.metrics.totalRemaining.toLocaleString("ja-JP")}</td>
+                          <td className="px-4 py-3 min-w-[180px]">
+                            <div className="flex items-center gap-2">
+                              <div className={`h-2 flex-1 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                                <div className={`h-2 rounded-full ${workflow.metrics.averageProgress >= 70 ? "bg-emerald-500" : workflow.metrics.averageProgress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(workflow.metrics.averageProgress, 4)}%` }} />
+                              </div>
+                              <span className={`text-[11px] font-semibold ${workflow.metrics.averageProgress >= 70 ? "text-emerald-500" : workflow.metrics.averageProgress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{workflow.metrics.averageProgress}%</span>
                             </div>
-                            <span className={`text-[11px] font-semibold ${workflow.metrics.averageProgress >= 70 ? "text-emerald-500" : workflow.metrics.averageProgress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{workflow.metrics.averageProgress}%</span>
-                          </div>
-                        </td>
-                        <td className={`px-4 py-3 text-[12px] ${workflow.metrics.delayedCount > 0 ? "text-amber-500" : c.textSecondary}`}>{workflow.metrics.delayedCount}件</td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedTrend({
-                              title: workflow.workflowName,
-                              subtitle: `${workflow.shipperName} / ${workflow.areaName}`,
-                              points: workflow.metrics.trend,
-                              plannedTotal: workflow.metrics.totalPlanned,
-                              actualTotal: workflow.metrics.totalActual,
-                              statusLabel: status.label,
-                            })}
-                            className={trendButtonClass}
-                            aria-label={`${workflow.workflowName} の推移を拡大表示`}
-                          >
-                            <TrendSparkline points={workflow.metrics.trend} themeColors={c} />
-                          </button>
-                        </td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{formatTimestamp(workflow.updatedAt)}</td>
+                          </td>
+                          <td className={`px-4 py-3 text-[12px] ${workflow.metrics.delayedCount > 0 ? "text-amber-500" : c.textSecondary}`}>{workflow.metrics.delayedCount}件</td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTrend({
+                                title: workflow.workflowName,
+                                subtitle: `${workflow.shipperName} / ${workflow.areaName}`,
+                                points: workflow.metrics.trend,
+                                plannedTotal: workflow.metrics.totalPlanned,
+                                actualTotal: workflow.metrics.totalActual,
+                                statusLabel: status.label,
+                              })}
+                              className={trendButtonClass}
+                              aria-label={`${workflow.workflowName} の推移を拡大表示`}
+                            >
+                              <TrendSparkline points={workflow.metrics.trend} themeColors={c} />
+                            </button>
+                          </td>
+                          <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{formatTimestamp(workflow.updatedAt)}</td>
+                        </tr>
+                      );
+                    })}
+                    {workflowRows.length === 0 && (
+                      <tr>
+                        <td colSpan={11} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致するワークフローがありません</td>
                       </tr>
-                    );
-                  })}
-                  {workflowRows.length === 0 && (
-                    <tr>
-                      <td colSpan={11} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致するワークフローがありません</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section className={`${cardClass} overflow-hidden`}>
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-4 ${c.border}">
-              <div>
-                <h2 className={`text-[15px] font-semibold ${c.textPrimary}`}>工程別進捗と予定数</h2>
-                <p className={`text-[12px] ${c.textSecondary}`}>工程単位で予定数・開始予定・終了予定を調整し、現場配置と同じ前提で進捗を把握します</p>
+                    )}
+                  </tbody>
+                </table>
               </div>
-              <div className={`text-[12px] ${c.textMuted}`}>{processRows.length} 工程表示</div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-[1520px] w-full">
-                <thead>
-                  <tr className={`border-b ${c.border}`}>
-                    {[
-                      "ワークフロー",
-                      "工程",
-                      "人員",
-                      "予定数",
-                      "開始予定",
-                      "終了予定",
-                      "実績",
-                      "残数",
-                      "進捗",
-                      "UPH",
-                      "推移",
-                      "見込",
-                      "状況",
-                    ].map((header) => (
-                      <th key={header} className={`px-4 py-3 text-left text-[11px] font-medium ${c.textMuted}`}>{header}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {processRows.map((step) => {
-                    const tone = processColorClasses[step.color] ?? processColorClasses.cyan;
-                    const status = statusConfig(step.status);
-                    return (
-                      <tr key={step.id} className={`border-b ${c.borderCard}`}>
-                        <td className="px-4 py-3">
-                          <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{step.workflowName}</div>
-                          <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{step.shipperName} / {step.areaName}</div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className={`flex h-8 w-8 items-center justify-center rounded-xl ${tone.bg} ${tone.text}`}>
-                              <step.icon className="h-4 w-4" />
-                            </div>
-                            <div>
-                              <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{step.processName}</div>
-                              <div className={`text-[11px] ${c.textSecondary}`}>{step.description}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{step.headcount}名</td>
-                        <td className="px-4 py-3">
-                          <input
-                            type="number"
-                            min={0}
-                            step={10}
-                            value={step.planned}
-                            onChange={(event) => handleProcessPlannedChange(step.id, Number(event.target.value) || 0)}
-                            className={`${inputClass} max-w-[140px]`}
-                          />
-                        </td>
-                        <td className="px-4 py-3">
-                          <input
-                            type="time"
-                            value={step.startTime}
-                            onChange={(event) => handleProcessTimeChange(step.id, "startTime", event.target.value)}
-                            className={`${inputClass} max-w-[132px]`}
-                          />
-                        </td>
-                        <td className="px-4 py-3">
-                          <input
-                            type="time"
-                            value={step.targetEndTime}
-                            onChange={(event) => handleProcessTimeChange(step.id, "targetEndTime", event.target.value)}
-                            className={`${inputClass} max-w-[132px]`}
-                          />
-                        </td>
-                        <td className="px-4 py-3 text-[12px] font-semibold text-cyan-500 tabular-nums">{step.actual.toLocaleString("ja-JP")}</td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{step.remaining.toLocaleString("ja-JP")}</td>
-                        <td className="px-4 py-3 min-w-[170px]">
-                          <div className="flex items-center gap-2">
-                            <div className={`h-2 flex-1 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
-                              <div className={`h-2 rounded-full ${step.progress >= 70 ? "bg-emerald-500" : step.progress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(step.progress, 4)}%` }} />
-                            </div>
-                            <span className={`text-[11px] font-semibold ${step.progress >= 70 ? "text-emerald-500" : step.progress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{step.progress}%</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-[12px] font-semibold text-violet-500 tabular-nums">{step.totalUph.toLocaleString("ja-JP")}</td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => setSelectedTrend({
-                              title: step.processName,
-                              subtitle: `${step.workflowName} / ${step.shipperName} / ${step.areaName}`,
-                              points: step.trend,
-                              plannedTotal: step.planned,
-                              actualTotal: step.actual,
-                              statusLabel: status.label,
-                            })}
-                            className={trendButtonClass}
-                            aria-label={`${step.processName} の推移を拡大表示`}
-                          >
-                            <TrendSparkline points={step.trend} themeColors={c} />
-                          </button>
-                        </td>
-                        <td className={`px-4 py-3 text-[12px] ${step.status === "delayed" ? "text-amber-500" : c.textPrimary}`}>{step.eta}</td>
-                        <td className="px-4 py-3">
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] ${status.className}`}>
-                            <status.icon className="h-3 w-3" />
-                            {status.label}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {processRows.length === 0 && (
-                    <tr>
-                      <td colSpan={13} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致する工程がありません</td>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-[1520px] w-full">
+                  <thead>
+                    <tr className={`border-b ${c.border}`}>
+                      {[
+                        "ワークフロー",
+                        "工程",
+                        "予定数",
+                        "開始予定",
+                        "終了予定",
+                        "実績",
+                        "残数",
+                        "所要人数",
+                        "進捗",
+                        "UPH",
+                        "推移",
+                        "見込",
+                        "状況",
+                      ].map((header) => (
+                        <th key={header} className={`px-4 py-3 text-left text-[11px] font-medium ${c.textMuted}`}>{header}</th>
+                      ))}
                     </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {processRows.map((step) => {
+                      const tone = processColorClasses[step.color] ?? processColorClasses.cyan;
+                      const status = statusConfig(step.status);
+                      return (
+                        <tr key={step.id} className={`border-b ${c.borderCard}`}>
+                          <td className="px-4 py-3">
+                            <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{step.workflowName}</div>
+                            <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{step.shipperName} / {step.areaName}</div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className={`flex h-8 w-8 items-center justify-center rounded-xl ${tone.bg} ${tone.text}`}>
+                                <step.icon className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{step.processName}</div>
+                                <div className={`text-[11px] ${c.textSecondary}`}>{step.description}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="number"
+                              min={0}
+                              step={10}
+                              value={step.planned}
+                              onChange={(event) => handleProcessPlannedChange(step.id, Number(event.target.value) || 0)}
+                              className={`${inputClass} max-w-[140px]`}
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="time"
+                              value={step.startTime}
+                              onChange={(event) => handleProcessTimeChange(step.id, "startTime", event.target.value)}
+                              className={`${inputClass} max-w-[132px]`}
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="time"
+                              value={step.targetEndTime}
+                              onChange={(event) => handleProcessTimeChange(step.id, "targetEndTime", event.target.value)}
+                              className={`${inputClass} max-w-[132px]`}
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-[12px] font-semibold text-cyan-500 tabular-nums">{step.actual.toLocaleString("ja-JP")}</td>
+                          <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{step.remaining.toLocaleString("ja-JP")}</td>
+                          <td className={`px-4 py-3 text-[12px] ${c.textSecondary}`}>{step.headcount}名</td>
+                          <td className="px-4 py-3 min-w-[170px]">
+                            <div className="flex items-center gap-2">
+                              <div className={`h-2 flex-1 rounded-full ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`}>
+                                <div className={`h-2 rounded-full ${step.progress >= 70 ? "bg-emerald-500" : step.progress >= 40 ? "bg-amber-500" : "bg-rose-500"}`} style={{ width: `${Math.max(step.progress, 4)}%` }} />
+                              </div>
+                              <span className={`text-[11px] font-semibold ${step.progress >= 70 ? "text-emerald-500" : step.progress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{step.progress}%</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-[12px] font-semibold text-violet-500 tabular-nums">{step.totalUph.toLocaleString("ja-JP")}</td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTrend({
+                                title: step.processName,
+                                subtitle: `${step.workflowName} / ${step.shipperName} / ${step.areaName}`,
+                                points: step.trend,
+                                plannedTotal: step.planned,
+                                actualTotal: step.actual,
+                                statusLabel: status.label,
+                              })}
+                              className={trendButtonClass}
+                              aria-label={`${step.processName} の推移を拡大表示`}
+                            >
+                              <TrendSparkline points={step.trend} themeColors={c} />
+                            </button>
+                          </td>
+                          <td className={`px-4 py-3 text-[12px] ${step.status === "delayed" ? "text-amber-500" : c.textPrimary}`}>{step.eta}</td>
+                          <td className="px-4 py-3">
+                            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] ${status.className}`}>
+                              <status.icon className="h-3 w-3" />
+                              {status.label}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {processRows.length === 0 && (
+                      <tr>
+                        <td colSpan={13} className={`px-4 py-10 text-center text-[13px] ${c.textSecondary}`}>条件に一致する工程がありません</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         </div>
       </div>

@@ -2,6 +2,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  Pencil,
   Filter,
   Plus,
   Route,
@@ -142,6 +143,8 @@ export function WorkflowManagement() {
   const [newShipperId, setNewShipperId] = useState("");
   const [newSiteId, setNewSiteId] = useState("");
   const [newAreaId, setNewAreaId] = useState("");
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
 
   const [addStepDialogOpen, setAddStepDialogOpen] = useState(false);
   const [newStepProcessId, setNewStepProcessId] = useState("");
@@ -353,6 +356,20 @@ export function WorkflowManagement() {
     setSelectedWorkflowId(workflow.id);
     setCreateDialogOpen(false);
     setNewName("");
+  };
+
+  const openRenameDialog = () => {
+    if (!selectedWorkflow) return;
+    setRenameValue(selectedWorkflow.name);
+    setRenameDialogOpen(true);
+  };
+
+  const renameWorkflow = () => {
+    if (!selectedWorkflow) return;
+    const nextName = renameValue.trim();
+    if (!nextName) return;
+    updateWorkflowMeta(selectedWorkflow.id, "name", nextName);
+    setRenameDialogOpen(false);
   };
 
   const deleteWorkflow = (workflowId: string) => {
@@ -760,6 +777,14 @@ export function WorkflowManagement() {
                   <Stack direction="row" spacing={1}>
                     <Button
                       variant="outlined"
+                      startIcon={<Pencil size={16} />}
+                      onClick={openRenameDialog}
+                      sx={outlinedButtonSx}
+                    >
+                      名称変更
+                    </Button>
+                    <Button
+                      variant="outlined"
                       startIcon={<Plus size={16} />}
                       onClick={() => setAddStepDialogOpen(true)}
                       sx={outlinedButtonSx}
@@ -841,10 +866,6 @@ export function WorkflowManagement() {
                 <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.75 }}>
                   <Chip label={`${selectedWorkflow.steps.length} 工程`} color="primary" variant="outlined" />
                   <Chip
-                    label={`標準人数 ${selectedWorkflow.steps.reduce((sum, step) => sum + step.standardHeadcount, 0)} 名`}
-                    variant="outlined"
-                  />
-                  <Chip
                     label={`合計UPH ${selectedWorkflow.steps.reduce((sum, step) => sum + step.uph, 0).toLocaleString("ja-JP")}`}
                     variant="outlined"
                   />
@@ -915,7 +936,7 @@ export function WorkflowManagement() {
                             mt: 2,
                             display: "grid",
                             gap: 1.25,
-                            gridTemplateColumns: { xs: "1fr", md: "minmax(0, 2fr) repeat(2, minmax(0, 1fr))" },
+                            gridTemplateColumns: { xs: "1fr", md: "minmax(0, 2fr) minmax(0, 1fr)" },
                           }}
                         >
                           <TextField
@@ -942,19 +963,6 @@ export function WorkflowManagement() {
                               </MenuItem>
                             ))}
                           </TextField>
-                          <TextField
-                            type="number"
-                            size="small"
-                            label="標準人数"
-                            value={step.standardHeadcount}
-                            onChange={(event) =>
-                              updateStep(step.id, (source) => ({
-                                ...source,
-                                standardHeadcount: Number(event.target.value) || 1,
-                              }))
-                            }
-                            sx={fieldSx}
-                          />
                           <TextField
                             type="number"
                             size="small"
@@ -1119,6 +1127,44 @@ export function WorkflowManagement() {
           </Button>
           <Button variant="contained" onClick={createWorkflow} sx={primaryButtonSx}>
             作成
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={renameDialogOpen}
+        onClose={() => setRenameDialogOpen(false)}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{ sx: { ...panelSx } }}
+      >
+        <DialogTitle sx={dialogTitleSx}>
+          <Typography variant="h6">ワークフロー名を変更</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            現在選択中のワークフロー名称を更新します。
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={dialogContentSx}>
+          <Box sx={dialogFieldGroupSx}>
+            <Typography variant="caption" color="text.secondary" fontWeight={700}>
+              ワークフロー名
+            </Typography>
+            <TextField
+              size="small"
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+              placeholder="ワークフロー名を入力"
+              sx={fieldSx}
+              autoFocus
+            />
+          </Box>
+        </DialogContent>
+        <DialogActions sx={dialogActionsSx}>
+          <Button onClick={() => setRenameDialogOpen(false)} sx={outlinedButtonSx}>
+            キャンセル
+          </Button>
+          <Button variant="contained" onClick={renameWorkflow} sx={primaryButtonSx} disabled={!renameValue.trim()}>
+            更新
           </Button>
         </DialogActions>
       </Dialog>

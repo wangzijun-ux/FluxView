@@ -41,13 +41,12 @@ import {
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import { processColorClasses } from "./processStore";
+import { DEFAULT_SHIFT_END_MINUTES, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
 import type { AreaMaster, ProcessMaster, Shipper, WorkflowDefinition } from "./masterStore";
 
-const PLAN_STORAGE_KEY = "fluxview-progress-plans-v1";
 const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
 
 type StatusTone = "on_track" | "delayed" | "not_started" | "done";
-type PlanStore = Record<string, Record<string, number>>;
 
 interface StepView {
   id: string;
@@ -161,18 +160,6 @@ function pickColor(index: number) {
   return COLORS[index % COLORS.length];
 }
 
-function readPlanStore(): PlanStore {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(PLAN_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[], areas: AreaMaster[], processes: ProcessMaster[]) {
   const shipperMap = new Map(shippers.map((item) => [item.id, item]));
   const areaMap = new Map(areas.map((item) => [item.id, item]));
@@ -196,7 +183,7 @@ function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[]
         const weight = Math.max(headcount * uph, 1);
         const defaultPlanned = Math.max(400, Math.round((weight * (1.4 + ((workflowIndex + stepIndex) % 3) * 0.25)) / 10) * 10);
         const startMinutes = 6 * 60 + stepIndex * 70 + (workflowIndex % 2) * 15;
-        const endMinutes = Math.min(startMinutes + 210 - stepIndex * 10, 20 * 60 + 30);
+        const endMinutes = DEFAULT_SHIFT_END_MINUTES;
 
         return {
           id: `${workflow.id}:${step.id}`,
@@ -304,7 +291,7 @@ export function Dashboard() {
   const today = toDateInput(now);
   const nowMinutes = now.getHours() * 60 + now.getMinutes();
   const siteName = sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択";
-  const planStore = useMemo(() => readPlanStore(), []);
+  const planStore = useMemo(() => readProgressPlanStore(), []);
   const dayPlans = planStore[selectedDate] ?? {};
 
   const workflowViews = useMemo(
@@ -315,7 +302,11 @@ export function Dashboard() {
   const workflowSummaries = useMemo<WorkflowSummary[]>(() => {
     return workflowViews.map((workflow) => {
       const stepMetrics = workflow.steps.map((step) => {
-        const planned = dayPlans[step.id] ?? step.defaultPlanned;
+        const planned = resolveStepPlanValues(dayPlans, step.id, {
+          planned: step.defaultPlanned,
+          startTime: step.startTime,
+          targetEndTime: step.targetEndTime,
+        }).planned;
         return { step, metrics: getStepMetrics(step, planned, selectedDate, today, nowMinutes) };
       });
 
@@ -387,7 +378,11 @@ export function Dashboard() {
 
     workflowViews.forEach((workflow) => {
       workflow.steps.forEach((step) => {
-        const planned = dayPlans[step.id] ?? step.defaultPlanned;
+        const planned = resolveStepPlanValues(dayPlans, step.id, {
+          planned: step.defaultPlanned,
+          startTime: step.startTime,
+          targetEndTime: step.targetEndTime,
+        }).planned;
         const metrics = getStepMetrics(step, planned, selectedDate, today, nowMinutes);
         const current = grouped.get(step.processId) ?? {
           processName: step.processName,

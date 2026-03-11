@@ -1,5 +1,6 @@
 const DAY_START_MINUTES = 6 * 60;
 const DAY_END_MINUTES = 20 * 60 + 30;
+export const DEFAULT_SHIFT_END_MINUTES = DAY_END_MINUTES;
 
 export const PLAN_STORAGE_KEY = "fluxview-progress-plans-v1";
 
@@ -34,13 +35,12 @@ function sanitizeTime(value: string | undefined, fallback: string) {
 
 export function buildStepPlanDefaults(workflowIndex: number, stepIndex: number, headcount: number, uph: number): StepPlanDefaults {
   const startMinutes = Math.min(DAY_START_MINUTES + stepIndex * 90 + (workflowIndex % 2) * 15, DAY_END_MINUTES - 90);
-  const targetEndMinutes = Math.min(startMinutes + 210 - stepIndex * 10, DAY_END_MINUTES + 120);
   const planned = Math.max(480, Math.round((headcount * uph * (1.7 + ((workflowIndex + stepIndex) % 3) * 0.35)) / 10) * 10);
 
   return {
     planned,
     startTime: formatTime(startMinutes),
-    targetEndTime: formatTime(targetEndMinutes),
+    targetEndTime: formatTime(DEFAULT_SHIFT_END_MINUTES),
   };
 }
 

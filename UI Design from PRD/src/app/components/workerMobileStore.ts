@@ -12,6 +12,7 @@ import {
   type DeploymentStep,
   type DeploymentWorkflow,
 } from "./fieldDeploymentStore";
+import { buildStepPlanDefaults, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
 import type { AreaMaster, ProcessMaster, Shipper, Site, WorkflowDefinition } from "./masterStore";
 
 export const WORKER_SESSION_STORAGE_KEY = "fluxview-worker-session-v1";
@@ -168,6 +169,10 @@ function formatTimeLabel(totalMinutes: number) {
   const hours = Math.floor(safe / 60);
   const minutes = safe % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function roundToNearestTen(value: number) {
+  return Math.round(value / 10) * 10;
 }
 
 function sortTimeLabels(labels: string[]) {
@@ -330,6 +335,11 @@ export function buildWorkerDayTasks(siteData: WorkerSiteDeploymentData, workerId
       if (!workerIds.includes(workerId)) return;
       const step = stepMap.get(stepId);
       if (!step) return;
+      const stepStartMinutes = parseTimeLabel(step.startTime);
+      const stepEndMinutes = parseTimeLabel(step.targetEndTime);
+      const clippedStartMinutes = Math.max(startMinutes, stepStartMinutes);
+      const clippedEndMinutes = Math.min(endMinutes, stepEndMinutes);
+      if (clippedEndMinutes <= clippedStartMinutes) return;
 
       rawTasks.push({
         stepId,
@@ -342,10 +352,10 @@ export function buildWorkerDayTasks(siteData: WorkerSiteDeploymentData, workerId
         areaName: step.areaName,
         processName: step.processName,
         color: step.color,
-        startTime: formatTimeLabel(startMinutes),
-        endTime: formatTimeLabel(endMinutes),
-        startMinutes,
-        endMinutes,
+        startTime: formatTimeLabel(clippedStartMinutes),
+        endTime: formatTimeLabel(clippedEndMinutes),
+        startMinutes: clippedStartMinutes,
+        endMinutes: clippedEndMinutes,
       });
     });
   });
@@ -456,6 +466,25 @@ export function buildReportedQuantityMap(records: WorkerSubmissionRecord[]) {
   return map;
 }
 
+function buildStepPlanMap(siteData: WorkerSiteDeploymentData, dateKey: string) {
+  const dayPlans = readProgressPlanStore()[dateKey] ?? {};
+  const stepPlanMap = new Map<string, { planned: number; startTime: string; targetEndTime: string }>();
+
+  siteData.workflowViews.forEach((workflow, workflowIndex) => {
+    workflow.steps.forEach((step, stepIndex) => {
+      const defaults = buildStepPlanDefaults(workflowIndex, stepIndex, step.headcount, step.uph);
+      const resolved = resolveStepPlanValues(dayPlans, step.id, {
+        planned: defaults.planned,
+        startTime: step.startTime,
+        targetEndTime: step.targetEndTime,
+      });
+      stepPlanMap.set(step.id, resolved);
+    });
+  });
+
+  return stepPlanMap;
+}
+
 export function seedDemoWorkerSubmissionData(params: {
   selectedSiteId: string;
   sites: Site[];
@@ -469,6 +498,7 @@ export function seedDemoWorkerSubmissionData(params: {
   const dateKey = formatLocalDateKey(date);
   const siteData = buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, areas, processes);
   const stepMap = new Map(siteData.steps.map((step) => [step.id, step]));
+  const stepPlanMap = buildStepPlanMap(siteData, dateKey);
 
   if (siteData.steps.length === 0) {
     return { dateKey, workerCount: 0, taskCount: 0, recordCount: 0 };
@@ -484,8 +514,24 @@ export function seedDemoWorkerSubmissionData(params: {
 
   let workerCount = 0;
   let taskCount = 0;
+  const currentSiteTaskIds = new Set<string>();
 
-  DEPLOYMENT_WORKERS.forEach((worker, workerIndex) => {
+  type SeedTask = {
+    workerId: string;
+    task: WorkerTaskRecord;
+    step: DeploymentStep;
+    startedMinutes: number;
+    finishedMinutes: number;
+    potentialQuantity: number;
+    seed: number;
+    isInProgress: boolean;
+    isPaused: boolean;
+  };
+
+  const generatedByWorker = new Map<string, Record<string, WorkerTaskProgressEntry>>();
+  const tasksByStep = new Map<string, SeedTask[]>();
+
+  DEPLOYMENT_WORKERS.forEach((worker) => {
     const tasks = buildWorkerDayTasks(siteData, worker.id);
     if (tasks.length === 0) return;
 
@@ -494,74 +540,133 @@ export function seedDemoWorkerSubmissionData(params: {
       Object.entries(nextDateStore[worker.id] ?? {}).filter(([taskId]) => !siteTaskIds.has(taskId)),
     );
 
-    const targetTasks = tasks.slice(0, Math.min(tasks.length, 3));
-    let cursorMinutes = clampNumber(20 + workerIndex * 7, 5, Math.max(5, nowMinutes - 70));
-    let seededForWorker = 0;
-    const generatedEntries: Record<string, WorkerTaskProgressEntry> = {};
+    generatedByWorker.set(worker.id, preservedEntries);
 
-    targetTasks.forEach((task, taskIndex) => {
+    tasks.forEach((task) => {
       const step = stepMap.get(task.stepId);
-      if (!step || cursorMinutes >= nowMinutes - 2) return;
+      if (!step) return;
+
+      const startedMinutes = task.startMinutes;
+      const finishedMinutes = Math.min(task.endMinutes, nowMinutes);
+      if (finishedMinutes <= startedMinutes) return;
 
       const seed = hashString(`${dateKey}:${worker.id}:${task.id}`);
-      const remainingTasks = targetTasks.length - taskIndex - 1;
-      const latestEndLimit = Math.max(cursorMinutes + 10, nowMinutes - Math.max(4, remainingTasks * 16));
-      const executionMinutes = clampNumber(
-        Math.min(task.durationMinutes, 60 + (seed % 45)),
-        12,
-        Math.max(12, latestEndLimit - cursorMinutes),
+      const productivityFactor = 0.84 + ((seed % 11) / 100);
+      const potentialQuantity = Math.max(
+        0,
+        Math.round((((finishedMinutes - startedMinutes) / 60) * Math.max(step.uph, 1)) * productivityFactor),
       );
-      const endMinutes = clampNumber(cursorMinutes + executionMinutes, cursorMinutes + 10, latestEndLimit);
-      const perWorkerUph = Math.max(20, Math.round((step.uph || 120) / Math.max(step.headcount || 1, 1)));
-      const quantityFactor = 0.74 + ((seed % 23) / 100);
-      const reportedQuantity = Math.max(
-        1,
-        Math.round(((Math.max(endMinutes - cursorMinutes, 10) / 60) * perWorkerUph) * quantityFactor),
-      );
-      const startSeconds = seed % 60;
-      const endSeconds = (seed * 7) % 60;
-      const shouldStayInProgress = taskIndex === targetTasks.length - 1 && nowMinutes - cursorMinutes >= 18;
+      const isInProgress = nowMinutes > task.startMinutes && nowMinutes < task.endMinutes;
+      const isPaused = isInProgress && (worker.status === "break" || seed % 7 === 0);
 
-      if (shouldStayInProgress) {
-        const isPaused = worker.status === "break" || seed % 5 === 0;
-        const lastReportedMinutes = clampNumber(nowMinutes - (isPaused ? 12 : 4), cursorMinutes + 5, nowMinutes - 1);
-        generatedEntries[task.id] = {
-          status: isPaused ? "paused" : "working",
-          startedAt: toDateTimeIsoFromMinutes(date, cursorMinutes, startSeconds),
-          lastReportedAt: toDateTimeIsoFromMinutes(date, lastReportedMinutes, endSeconds),
-          reportedQuantity: Math.max(1, Math.round(reportedQuantity * (isPaused ? 0.82 : 0.92))),
-          totalPausedMinutes: isPaused ? 6 + (seed % 12) : 0,
-          pauseStartedAt: isPaused
-            ? toDateTimeIsoFromMinutes(date, clampNumber(nowMinutes - 8, cursorMinutes + 6, nowMinutes - 1))
-            : undefined,
-        };
-      } else {
-        const completedMinutes = clampNumber(endMinutes, cursorMinutes + 10, nowMinutes - 4);
-        generatedEntries[task.id] = {
-          status: "completed",
-          startedAt: toDateTimeIsoFromMinutes(date, cursorMinutes, startSeconds),
-          completedAt: toDateTimeIsoFromMinutes(date, completedMinutes, endSeconds),
-          lastReportedAt: toDateTimeIsoFromMinutes(
-            date,
-            clampNumber(completedMinutes - 3, cursorMinutes + 5, completedMinutes),
-            (endSeconds + 11) % 60,
-          ),
-          reportedQuantity,
-          totalPausedMinutes: seed % 4 === 0 ? 4 + (seed % 9) : 0,
-        };
-      }
-
-      taskCount += 1;
-      seededForWorker += 1;
-      cursorMinutes = clampNumber(endMinutes + 10 + (seed % 6), cursorMinutes + 12, nowMinutes - 1);
+      const stepTasks = tasksByStep.get(task.stepId) ?? [];
+      stepTasks.push({
+        workerId: worker.id,
+        task,
+        step,
+        startedMinutes,
+        finishedMinutes,
+        potentialQuantity,
+        seed,
+        isInProgress,
+        isPaused,
+      });
+      tasksByStep.set(task.stepId, stepTasks);
+      currentSiteTaskIds.add(task.id);
     });
+  });
 
-    if (seededForWorker === 0) return;
-    workerCount += 1;
-    nextDateStore[worker.id] = {
-      ...preservedEntries,
-      ...generatedEntries,
+  tasksByStep.forEach((stepTasks, stepId) => {
+    const step = stepMap.get(stepId);
+    if (!step) return;
+
+    const planValues = stepPlanMap.get(stepId) ?? {
+      planned: roundToNearestTen(step.headcount * step.uph * Math.max((parseTimeLabel(step.targetEndTime) - parseTimeLabel(step.startTime)) / 60, 1)),
+      startTime: step.startTime,
+      targetEndTime: step.targetEndTime,
     };
+    const scheduleStartMinutes = parseTimeLabel(planValues.startTime);
+    const scheduleEndMinutes = Math.max(scheduleStartMinutes + 30, parseTimeLabel(planValues.targetEndTime));
+    const scheduleProgress = clampNumber((nowMinutes - scheduleStartMinutes) / Math.max(scheduleEndMinutes - scheduleStartMinutes, 30), 0, 1);
+    const plannedUntilNow = planValues.planned * scheduleProgress;
+    const capacityUntilNow = stepTasks.reduce((sum, task) => sum + task.potentialQuantity, 0);
+    const targetActual = Math.max(
+      0,
+      Math.min(
+        planValues.planned,
+        roundToNearestTen(Math.min(capacityUntilNow, plannedUntilNow * (0.94 + ((hashString(`${dateKey}:${stepId}`) % 7) / 100)))),
+      ),
+    );
+
+    if (targetActual <= 0) return;
+
+    const totalPotential = Math.max(stepTasks.reduce((sum, task) => sum + task.potentialQuantity, 0), 1);
+    let distributed = 0;
+
+    stepTasks
+      .slice()
+      .sort((left, right) => left.startedMinutes - right.startedMinutes || left.workerId.localeCompare(right.workerId, "ja"))
+      .forEach((taskSeed, index, array) => {
+        const generatedEntries = generatedByWorker.get(taskSeed.workerId) ?? {};
+        const isLast = index === array.length - 1;
+        const baseQuantity = isLast
+          ? Math.max(0, targetActual - distributed)
+          : Math.max(0, Math.round((targetActual * taskSeed.potentialQuantity) / totalPotential));
+        const reportedQuantity = Math.min(
+          Math.max(0, baseQuantity),
+          Math.max(taskSeed.potentialQuantity, isLast ? targetActual - distributed : baseQuantity),
+        );
+        distributed += reportedQuantity;
+
+        const startSeconds = taskSeed.seed % 60;
+        const endSeconds = (taskSeed.seed * 7) % 60;
+        const startedAt = toDateTimeIsoFromMinutes(date, taskSeed.startedMinutes, startSeconds);
+
+        generatedEntries[taskSeed.task.id] = taskSeed.isInProgress
+          ? {
+              status: taskSeed.isPaused ? "paused" : "working",
+              startedAt,
+              lastReportedAt: toDateTimeIsoFromMinutes(
+                date,
+                clampNumber(nowMinutes - (taskSeed.isPaused ? 11 : 4), taskSeed.startedMinutes + 3, nowMinutes - 1),
+                endSeconds,
+              ),
+              reportedQuantity,
+              totalPausedMinutes: taskSeed.isPaused ? 5 + (taskSeed.seed % 14) : 0,
+              pauseStartedAt: taskSeed.isPaused
+                ? toDateTimeIsoFromMinutes(date, clampNumber(nowMinutes - 9, taskSeed.startedMinutes + 4, nowMinutes - 1))
+                : undefined,
+            }
+          : {
+              status: "completed",
+              startedAt,
+              completedAt: toDateTimeIsoFromMinutes(date, taskSeed.finishedMinutes, endSeconds),
+              lastReportedAt: toDateTimeIsoFromMinutes(
+                date,
+                clampNumber(taskSeed.finishedMinutes - 2, taskSeed.startedMinutes + 2, taskSeed.finishedMinutes),
+                (endSeconds + 11) % 60,
+              ),
+              reportedQuantity,
+              totalPausedMinutes: taskSeed.seed % 6 === 0 ? 3 + (taskSeed.seed % 10) : 0,
+            };
+
+        generatedByWorker.set(taskSeed.workerId, generatedEntries);
+      });
+  });
+
+  generatedByWorker.forEach((generatedEntries, workerId) => {
+    const generatedTaskIds = Object.keys(generatedEntries);
+    const activityCount = generatedTaskIds.filter((taskId) => {
+      if (!currentSiteTaskIds.has(taskId)) return false;
+      const entry = generatedEntries[taskId];
+      return Boolean(entry.startedAt) || Boolean(entry.completedAt) || Boolean(entry.lastReportedAt) || (entry.reportedQuantity ?? 0) > 0;
+    }).length;
+
+    if (activityCount === 0) return;
+
+    workerCount += 1;
+    taskCount += activityCount;
+    nextDateStore[workerId] = generatedEntries;
   });
 
   writeStorage(WORKER_PROGRESS_STORAGE_KEY, {

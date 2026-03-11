@@ -25,6 +25,7 @@ import {
     INITIAL_WORKERS,
     type Worker
 } from "./processStore";
+import { readAttendanceMonthShifts, writeAttendanceMonthShifts, type ShiftData } from "./attendanceStore";
 
 /** 月の日数を取得 */
 const getDaysInMonth = (year: number, month: number) => {
@@ -44,12 +45,6 @@ const calculateHours = (start: string, end: string) => {
     const diff = (eH * 60 + eM) - (sH * 60 + sM);
     return Math.max(0, diff / 60);
 };
-
-interface ShiftData {
-    start: string;
-    end: string;
-    isOff: boolean;
-}
 
 export function AttendanceManagement() {
     const [viewYear, setViewYear] = useState(2026);
@@ -109,21 +104,17 @@ export function AttendanceManagement() {
         });
     }, [searchTerm, filterCategory]);
 
-    const [monthlyShifts, setMonthlyShifts] = useState<Record<string, Record<number, ShiftData>>>(() => {
-        const initial: Record<string, Record<number, ShiftData>> = {};
-        INITIAL_WORKERS.forEach(w => {
-            initial[w.id] = {};
-            for (let i = 1; i <= 31; i++) {
-                const dow = getDayOfWeek(2026, 2, i);
-                const isWeekend = (dow === 0 || dow === 6);
-                let start = "08:00", end = "17:00", isOff = isWeekend;
-                if (w.category === "派遣") if (dow !== 1 && dow !== 3 && dow !== 5) isOff = true;
-                if (w.category === "パートナー") { start = "09:00"; end = "15:00"; }
-                initial[w.id][i] = { start, end, isOff };
-            }
-        });
-        return initial;
-    });
+    const [monthlyShifts, setMonthlyShifts] = useState<Record<string, Record<number, ShiftData>>>(() =>
+        readAttendanceMonthShifts(2026, 2, INITIAL_WORKERS)
+    );
+
+    useEffect(() => {
+        setMonthlyShifts(readAttendanceMonthShifts(viewYear, viewMonth, INITIAL_WORKERS));
+    }, [viewYear, viewMonth]);
+
+    useEffect(() => {
+        writeAttendanceMonthShifts(viewYear, viewMonth, monthlyShifts);
+    }, [viewYear, viewMonth, monthlyShifts]);
 
     const groupedWorkers = useMemo(() => {
         const groups: Record<string, Worker[]> = { "正社員": [], "パートナー": [], "派遣": [] };

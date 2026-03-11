@@ -106,7 +106,7 @@ export function WorkerView() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const c = useThemeColors();
-  const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
+  const { shippers, sites, areas, processes, workflows, selectedSiteId, setSelectedSiteId } = useMasterData();
   const loginUsers = useMemo(() => readWorkerLoginUsers(), []);
   const [now, setNow] = useState(new Date());
   const [authSession, setAuthSession] = useState<WorkerAuthSession | null>(null);
@@ -128,6 +128,16 @@ export function WorkerView() {
 
   const workerMap = useMemo(() => new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker])), []);
   const siteName = sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択";
+  const loginSiteOptions = useMemo(
+    () =>
+      Array.from(
+        sites.reduce((map, site) => {
+          if (!map.has(site.name)) map.set(site.name, { id: site.id, name: site.name });
+          return map;
+        }, new Map<string, { id: string; name: string }>()),
+      ).map(([, site]) => site),
+    [sites],
+  );
   const siteData = useMemo(
     () => buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, areas, processes),
     [selectedSiteId, sites, workflows, shippers, areas, processes],
@@ -360,20 +370,37 @@ export function WorkerView() {
       <div className={`min-h-screen ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-100"}`}>
         <div className="mx-auto flex min-h-screen w-full max-w-md items-center px-5 py-8">
           <div className={`w-full rounded-[28px] border px-5 py-6 shadow-xl ${c.bgCard} ${c.borderCard}`}>
+            <div className="mb-5 flex justify-center">
+              <img
+                src={c.isDark ? "/logo-dark.png" : "/logo-light.png"}
+                alt="FluxView Logo"
+                className="h-9 w-auto"
+              />
+            </div>
+
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className={`text-[12px] font-semibold ${c.textMuted}`}>WORKER DEMO LOGIN</div>
                 <div className={`mt-1 text-[24px] font-semibold ${c.textPrimary}`}>作業員ログイン</div>
-                <div className={`mt-2 text-[13px] leading-6 ${c.textSecondary}`}>
-                  現在のユーザー情報でログインできます。パスワードは固定で <span className="font-semibold text-cyan-500">{DEMO_PASSWORD}</span> です。
-                </div>
-              </div>
-              <div className={`rounded-full px-3 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>
-                {siteName}
               </div>
             </div>
 
             <form onSubmit={handleWorkerLogin} className="mt-6 space-y-4">
+              <label className="block">
+                <div className={`mb-1.5 text-[12px] font-medium ${c.textSecondary}`}>拠点</div>
+                <select
+                  value={selectedSiteId}
+                  onChange={(event) => setSelectedSiteId(event.target.value)}
+                  className={`h-12 w-full rounded-2xl border px-4 pr-3 text-[14px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`}
+                >
+                  {loginSiteOptions.map((site) => (
+                    <option key={site.id} value={site.id}>
+                      {site.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
               <label className="block">
                 <div className={`mb-1.5 text-[12px] font-medium ${c.textSecondary}`}>ユーザー</div>
                 <div className="relative">
@@ -407,13 +434,6 @@ export function WorkerView() {
               </label>
 
               {loginError ? <div className="text-[12px] font-medium text-rose-500">{loginError}</div> : null}
-
-              <div className={`rounded-2xl border px-4 py-3 ${c.bgSurface} ${c.borderCard}`}>
-                <div className={`text-[12px] font-medium ${c.textSecondary}`}>ログイン後の挙動</div>
-                <div className={`mt-2 text-[12px] leading-6 ${c.textMuted}`}>
-                  選択したユーザーをデモ用作業員プロフィールに紐付けて、本日の工程一覧と作業数入力画面を表示します。
-                </div>
-              </div>
 
               <button
                 type="submit"

@@ -7,6 +7,7 @@ import {
   Warehouse,
   type LucideIcon,
 } from "lucide-react";
+import { DEFAULT_SHIFT_END_MINUTES } from "./progressPlanStore";
 import type { AreaMaster, ProcessMaster, Shipper, Site, WorkflowDefinition } from "./masterStore";
 
 export const FIELD_DEPLOYMENT_STORAGE_PREFIX = "fluxview-field-deployment-v1";
@@ -171,7 +172,7 @@ export function buildDeploymentWorkflows(
         const headcount = Math.max(step.standardHeadcount || process?.defaultHeadcount || 1, 1);
         const uph = step.uph || process?.defaultUph || 100;
         const startMinutes = Math.min(6 * 60 + stepIndex * 90 + (workflowIndex % 2) * 15, 20 * 60);
-        const targetEndMinutes = Math.min(startMinutes + 210 - stepIndex * 10, 23 * 60 + 30);
+        const targetEndMinutes = DEFAULT_SHIFT_END_MINUTES;
 
         return {
           id: `${workflow.id}:${step.id}`,

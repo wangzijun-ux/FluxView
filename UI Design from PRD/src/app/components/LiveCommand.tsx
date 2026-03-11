@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState, type DragEvent } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   AlertTriangle,
   Box,
@@ -8,14 +8,14 @@ import {
   Clock3,
   Filter,
   Layers,
-  MapPin,
   Package,
-  RotateCcw,
   Save,
   Search,
+  ShieldCheck,
   Truck,
   Users,
   Warehouse,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
@@ -24,6 +24,7 @@ import { processColorClasses } from "./processStore";
 import { buildFieldDeploymentStorageKey, buildSiteScope } from "./fieldDeploymentStore";
 import { buildStepPlanDefaults, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
 import { buildReportedQuantityMap, buildWorkerSubmissionRecords, pushAssignmentChangeNotifications } from "./workerMobileStore";
+import { resolveWorkerShiftForDate } from "./attendanceStore";
 import type {
   AreaMaster,
   ProcessMaster,
@@ -510,31 +511,94 @@ function statusLabel(status: WorkerStatus) {
   }
 }
 
+function buildWorkerScheduleLabelMap(
+  workers: Worker[],
+  steps: StepTemplate[],
+  timeSlots: string[],
+  intervalMinutes: TimelineInterval,
+  snapshotsByTime: SnapshotsByTime,
+) {
+  const stepMap = new Map(steps.map((step) => [step.id, step] as const));
+  const rangeMap = new Map<string, { start: number; end: number }>();
+
+  timeSlots.forEach((timeLabel, index) => {
+    const slotStart = parseTime(timeLabel);
+    const slotEnd = index < timeSlots.length - 1
+      ? parseTime(timeSlots[index + 1])
+      : Math.min(TIMELINE_END, slotStart + intervalMinutes);
+    const snapshot = snapshotsByTime[timeLabel] ?? {};
+
+    Object.entries(snapshot).forEach(([stepId, workerIds]) => {
+      const step = stepMap.get(stepId);
+      if (!step) return;
+
+      const effectiveStart = Math.max(slotStart, parseTime(step.startTime));
+      const effectiveEnd = Math.min(slotEnd, parseTime(step.targetEndTime));
+      if (effectiveEnd <= effectiveStart) return;
+
+      workerIds.forEach((workerId) => {
+        if (!workerId) return;
+        const current = rangeMap.get(workerId);
+        if (!current) {
+          rangeMap.set(workerId, { start: effectiveStart, end: effectiveEnd });
+          return;
+        }
+
+        current.start = Math.min(current.start, effectiveStart);
+        current.end = Math.max(current.end, effectiveEnd);
+      });
+    });
+  });
+
+  return new Map(
+    workers.map((worker) => {
+      const range = rangeMap.get(worker.id);
+      return [worker.id, range ? `${formatTime(range.start)} - ${formatTime(range.end)}` : null] as const;
+    }),
+  );
+}
+
 function StaffCard({
   worker,
+  subtitle,
   themeColors,
   qualificationMap,
   skillMap,
   muted = false,
   compact = false,
+  dense = false,
   draggable = false,
   onDragStart,
   onDragEnd,
 }: {
   worker: Worker;
+  subtitle?: string | null;
   themeColors: ThemeColors;
   qualificationMap: Map<string, QualificationMaster>;
   skillMap: Map<string, SkillMaster>;
   muted?: boolean;
   compact?: boolean;
+  dense?: boolean;
   draggable?: boolean;
   onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnd?: () => void;
 }) {
-  const tagNames = [
-    ...worker.skillIds.map((id) => skillMap.get(id)?.name ?? ""),
-    ...worker.qualificationIds.map((id) => qualificationMap.get(id)?.name ?? ""),
-  ].filter(Boolean).slice(0, compact ? 1 : 2);
+  const skillNames = worker.skillIds
+    .map((id) => skillMap.get(id)?.name ?? "")
+    .filter(Boolean);
+  const qualificationNames = worker.qualificationIds
+    .map((id) => qualificationMap.get(id)?.name ?? "")
+    .filter(Boolean);
+  const iconBadgeClass = dense
+    ? "h-5 w-5"
+    : compact
+      ? "h-5.5 w-5.5"
+      : "h-6 w-6";
+  const iconClass = dense
+    ? "h-2.5 w-2.5"
+    : compact
+      ? "h-3 w-3"
+      : "h-3.5 w-3.5";
 
   return (
     <div
@@ -542,30 +606,46 @@ function StaffCard({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       className={[
-        compact ? "rounded-lg border px-2.5 py-2 transition-all" : "rounded-xl border p-3 transition-all",
+        dense
+          ? "rounded-xl border px-2 py-1.5 transition-all"
+          : compact
+            ? "rounded-lg border px-2.5 py-2 transition-all"
+            : "rounded-xl border p-3 transition-all",
         muted ? `${themeColors.borderCard} ${themeColors.bgSurface} opacity-70 grayscale` : `${themeColors.borderCard} ${themeColors.bgCard}`,
         draggable ? "cursor-grab active:cursor-grabbing hover:-translate-y-0.5 hover:shadow-md" : "",
       ].join(" ")}
     >
-      <div className={`flex items-center ${compact ? "gap-2" : "gap-3"}`}>
-        <div className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${compact ? "h-7 w-7 text-[11px]" : "h-9 w-9 text-[13px]"} ${muted ? "bg-slate-400" : worker.color}`}>
+      <div className={`flex items-center ${dense ? "gap-1.5" : compact ? "gap-2" : "gap-3"}`}>
+        <div className={`flex shrink-0 items-center justify-center rounded-full font-semibold text-white ${dense ? "h-6 w-6 text-[10px]" : compact ? "h-7 w-7 text-[11px]" : "h-9 w-9 text-[13px]"} ${muted ? "bg-slate-400" : worker.color}`}>
           {worker.initials}
         </div>
         <div className="min-w-0 flex-1">
-          <div className={`truncate font-semibold ${compact ? "text-[12px]" : "text-[13px]"} ${themeColors.textPrimary}`}>{worker.name}</div>
-          <div className={`${compact ? "text-[10px]" : "text-[11px]"} ${muted ? themeColors.textMuted : themeColors.textSecondary}`}>
-            {worker.note ?? statusLabel(worker.status)}
+          <div className={`truncate font-semibold ${dense ? "text-[11px] leading-4" : compact ? "text-[12px]" : "text-[13px]"} ${themeColors.textPrimary}`}>{worker.name}</div>
+          <div className={`${dense ? "text-[9px] leading-3.5" : compact ? "text-[10px]" : "text-[11px]"} ${muted ? themeColors.textMuted : themeColors.textSecondary}`}>
+            {subtitle ?? worker.note ?? statusLabel(worker.status)}
           </div>
         </div>
       </div>
-      {tagNames.length > 0 && (
-        <div className={`flex flex-wrap gap-1 ${compact ? "mt-1" : "mt-2"}`}>
-          {tagNames.map((tag) => (
+      {(skillNames.length > 0 || qualificationNames.length > 0) && (
+        <div className={`flex flex-wrap gap-1 ${dense || compact ? "mt-1" : "mt-2"}`}>
+          {skillNames.map((skillName) => (
             <span
-              key={`${worker.id}-${tag}`}
-              className={`rounded-full px-2 py-0.5 ${compact ? "text-[9px]" : "text-[10px]"} ${muted ? "bg-slate-500/10 text-slate-400" : "bg-slate-500/10 text-slate-500 dark:text-slate-300"}`}
+              key={`${worker.id}-skill-${skillName}`}
+              title={skillName}
+              aria-label={`スキル: ${skillName}`}
+              className={`inline-flex items-center justify-center rounded-full border cursor-help ${iconBadgeClass} ${muted ? "border-slate-300/70 bg-slate-200/70 text-slate-400" : "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300"}`}
             >
-              {tag}
+              <Wrench className={iconClass} />
+            </span>
+          ))}
+          {qualificationNames.map((qualificationName) => (
+            <span
+              key={`${worker.id}-qualification-${qualificationName}`}
+              title={qualificationName}
+              aria-label={`資格: ${qualificationName}`}
+              className={`inline-flex items-center justify-center rounded-full border cursor-help ${iconBadgeClass} ${muted ? "border-slate-300/70 bg-slate-200/70 text-slate-400" : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"}`}
+            >
+              <ShieldCheck className={iconClass} />
             </span>
           ))}
         </div>
@@ -591,7 +671,7 @@ export function LiveCommand() {
   const [snapshotsByTime, setSnapshotsByTime] = useState<SnapshotsByTime>({});
   const [savedSnapshotsByTime, setSavedSnapshotsByTime] = useState<SnapshotsByTime>({});
   const [savedAdjustmentItems, setSavedAdjustmentItems] = useState<AssignmentChangeItem[]>([]);
-  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const timerId = window.setInterval(() => setNow(new Date()), 1000);
@@ -638,7 +718,17 @@ export function LiveCommand() {
     setSelectedTime(timeSlots.includes(currentSlot) ? currentSlot : (timeSlots[0] ?? currentSlot));
   }, [timeSlots, selectedTime, timelineInterval]);
 
-  const siteName = siteScope.siteName;
+  useEffect(() => {
+    const container = timelineScrollRef.current;
+    if (!container) return;
+
+    const target = container.querySelector<HTMLElement>(`[data-time-label="${selectedTime}"]`);
+    if (!target) return;
+
+    const nextLeft = Math.max(0, target.offsetLeft - (container.clientWidth / 2) + (target.clientWidth / 2));
+    container.scrollTo({ left: nextLeft, behavior: "auto" });
+  }, [selectedTime, timeSlots, timelineInterval]);
+
   const panels = useMemo(
     () => buildPanels(workflows.filter((workflow) => siteScope.siteIds.includes(workflow.siteId)), shippers, areas, processes, dayPlans),
     [workflows, siteScope.siteIds, shippers, areas, processes, dayPlans],
@@ -665,10 +755,8 @@ export function LiveCommand() {
         if (rawAdjustment) {
           const storedAdjustment = JSON.parse(rawAdjustment) as { savedAt?: string; items?: AssignmentChangeItem[] };
           setSavedAdjustmentItems(storedAdjustment.items ?? []);
-          setLastSavedAt(storedAdjustment.savedAt ?? null);
         } else {
           setSavedAdjustmentItems([]);
-          setLastSavedAt(null);
         }
         return;
       }
@@ -685,10 +773,8 @@ export function LiveCommand() {
       if (rawAdjustment) {
         const storedAdjustment = JSON.parse(rawAdjustment) as { savedAt?: string; items?: AssignmentChangeItem[] };
         setSavedAdjustmentItems(storedAdjustment.items ?? []);
-        setLastSavedAt(storedAdjustment.savedAt ?? null);
       } else {
         setSavedAdjustmentItems([]);
-        setLastSavedAt(null);
       }
     } catch {
       const fallbackSnapshots = Object.fromEntries(
@@ -700,7 +786,6 @@ export function LiveCommand() {
       setSnapshotsByTime(fallbackSnapshots);
       setSavedSnapshotsByTime(fallbackSnapshots);
       setSavedAdjustmentItems([]);
-      setLastSavedAt(null);
     }
   }, [adjustmentStorageKey, deploymentStorageKey, seededSnapshots, timeSlots, baseSnapshot, allSteps]);
 
@@ -722,6 +807,26 @@ export function LiveCommand() {
       ]),
     ) as SnapshotsByTime,
     [savedSnapshotsByTime, timeSlots, seededSnapshots, baseSnapshot, allSteps],
+  );
+
+  const workerScheduleLabelMap = useMemo(
+    () => buildWorkerScheduleLabelMap(MOCK_WORKERS, allSteps, timeSlots, timelineInterval, normalizedSnapshotsByTime),
+    [allSteps, timeSlots, timelineInterval, normalizedSnapshotsByTime],
+  );
+  const workerAttendanceLabelMap = useMemo(
+    () => new Map(
+      MOCK_WORKERS.map((worker) => {
+        const shift = resolveWorkerShiftForDate(worker.name, todayKey);
+        if (shift?.isOff) {
+          return [worker.id, "公休"] as const;
+        }
+        if (shift) {
+          return [worker.id, `${shift.start} - ${shift.end}`] as const;
+        }
+        return [worker.id, workerScheduleLabelMap.get(worker.id) ?? null] as const;
+      }),
+    ),
+    [todayKey, workerScheduleLabelMap],
   );
 
   const currentSnapshot = useMemo(
@@ -872,24 +977,6 @@ export function LiveCommand() {
     }))),
     [displayPanels, metricsByStepId, normalizedSnapshotsByTime, systemReferenceMinutes, timeSlots, timelineInterval, reportedQuantityByStep],
   );
-  const adjustmentItems = useMemo(
-    () => visibleSteps
-      .filter(({ meta }) => meta.shortage > 0 || meta.overdue || meta.progress < 50)
-      .map(({ panel, step, meta }) => ({
-        id: `${panel.id}:${step.id}`,
-        panelId: panel.id,
-        areaName: panel.areaName,
-        processName: step.processName,
-        shortage: meta.shortage,
-        recommended: meta.recommended,
-        progress: meta.progress,
-        eta: meta.eta,
-        overdue: meta.overdue,
-      }))
-      .sort((left, right) => (Number(right.overdue) - Number(left.overdue)) || (right.shortage - left.shortage) || (left.progress - right.progress)),
-    [visibleSteps],
-  );
-
   const assignedWorkerIds = useMemo(
     () => new Set(Object.values(currentSnapshot).flat().filter((value): value is string => Boolean(value))),
     [currentSnapshot],
@@ -923,8 +1010,8 @@ export function LiveCommand() {
     [timeSlots, normalizedSnapshotsByTime, savedNormalizedSnapshotsByTime, workerMap, stepMap],
   );
   const changedTimeSlots = useMemo(
-    () => new Set(unsavedAdjustmentItems.map((item) => item.effectiveTime)),
-    [unsavedAdjustmentItems],
+    () => new Set([...savedAdjustmentItems, ...unsavedAdjustmentItems].map((item) => item.effectiveTime)),
+    [savedAdjustmentItems, unsavedAdjustmentItems],
   );
 
   const updateFutureSnapshots = (workerId: string, targetStepId: string | null, targetIndex: number) => {
@@ -979,24 +1066,6 @@ export function LiveCommand() {
     setSelectedTime(timeSlots[nextIndex]);
   };
 
-  const resetSelectedTime = () => {
-    const selectedIndex = timeSlots.indexOf(selectedTime);
-    if (selectedIndex < 0) return;
-
-    setSnapshotsByTime((prev) => {
-      const nextState = { ...prev };
-
-      for (let index = selectedIndex; index < timeSlots.length; index += 1) {
-        const timeLabel = timeSlots[index];
-        const resetSnapshot = seededSnapshots[timeLabel];
-        if (!resetSnapshot) continue;
-        nextState[timeLabel] = materializeSnapshot(resetSnapshot, allSteps);
-      }
-
-      return nextState;
-    });
-  };
-
   const handleSave = () => {
     const savedAt = new Date().toISOString();
     const effectiveTimes = Array.from(new Set(unsavedAdjustmentItems.map((item) => item.effectiveTime)))
@@ -1018,7 +1087,6 @@ export function LiveCommand() {
     window.localStorage.setItem(adjustmentStorageKey, JSON.stringify({ savedAt, items: unsavedAdjustmentItems }));
     setSavedSnapshotsByTime(normalizedSnapshotsByTime);
     setSavedAdjustmentItems(unsavedAdjustmentItems);
-    setLastSavedAt(savedAt);
     setRightTab("adjustments");
   };
 
@@ -1059,21 +1127,17 @@ export function LiveCommand() {
             </div>
           </div>
 
-          <div className={`flex min-w-[280px] flex-1 items-center gap-2 rounded-2xl border px-4 py-3 ${c.isDark ? "border-amber-500/30 bg-amber-500/10" : "border-amber-200 bg-amber-50"}`}>
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-            <span className={`text-[12px] ${c.isDark ? "text-amber-200" : "text-amber-900"}`}>
-              {adjustmentItems.length > 0 ? `注意工程 ${adjustmentItems.slice(0, 3).map((item) => item.processName).join(" / ")}` : "調整が必要な工程はありません"}
-            </span>
+          <div className="ml-auto">
+            {unsavedAdjustmentItems.length > 0 ? (
+              <span className="inline-flex items-center rounded-xl bg-amber-500/10 px-3 py-2 text-[12px] font-medium text-amber-500">
+                未保存の配置変更 {unsavedAdjustmentItems.length}件
+              </span>
+            ) : (
+              <span className={`inline-flex items-center rounded-xl border px-3 py-2 text-[12px] ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
+                保存済みの配置変更はありません
+              </span>
+            )}
           </div>
-
-          <button
-            type="button"
-            onClick={resetSelectedTime}
-            className={`ml-auto inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-medium ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            この時点以降を初期配置へ戻す
-          </button>
           <button
             type="button"
             onClick={handleSave}
@@ -1086,28 +1150,10 @@ export function LiveCommand() {
             )}
           </button>
         </div>
-        <div className={`mt-3 flex items-center justify-end gap-2 text-[11px] ${c.textSecondary}`}>
-          {unsavedAdjustmentItems.length > 0 ? (
-            <span className="rounded-full bg-amber-500/10 px-2.5 py-1 text-amber-500">
-              未保存の配置変更 {unsavedAdjustmentItems.length}件
-            </span>
-          ) : lastSavedAt ? (
-            <span>最終保存 {new Date(lastSavedAt).toLocaleString("ja-JP")}</span>
-          ) : (
-            <span>保存済みの配置変更はありません</span>
-          )}
-        </div>
       </div>
 
       <div className={`${c.bgCard} border-b ${c.border} px-5 py-3`}>
         <div className="flex flex-wrap items-center gap-2">
-          <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${c.bgSurface} ${c.borderCard}`}>
-            <MapPin className={`h-4 w-4 ${c.textMuted}`} />
-            <div>
-              <div className={`text-[12px] font-semibold ${c.textPrimary}`}>{siteName}</div>
-              <div className={`text-[10px] ${c.textMuted}`}>ワークフロー {panelsWithSlots.length}件</div>
-            </div>
-          </div>
           <select value={filterShipperId} onChange={(event) => setFilterShipperId(event.target.value)} className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} rounded-xl border px-3 py-2 text-[12px] outline-none`}>
             <option value="all">荷主: すべて</option>
             {shipperOptions.map((shipper) => <option key={shipper.id} value={shipper.id}>{shipper.name}</option>)}
@@ -1152,34 +1198,64 @@ export function LiveCommand() {
           <button type="button" onClick={() => moveTimeline(-1)} className={`rounded-xl border p-2 ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
             <ChevronLeft className="h-4 w-4" />
           </button>
-          <div className="flex flex-1 items-center gap-2 overflow-x-auto pb-1">
-            {timeSlots.map((timeLabel) => {
-              const isSelected = selectedTime === timeLabel;
-              const isCurrent = nowSlot === timeLabel;
-              const isChanged = changedTimeSlots.has(timeLabel);
-              return (
-                <button
-                  key={timeLabel}
-                  type="button"
-                  onClick={() => setSelectedTime(timeLabel)}
-                  className={[
-                    "shrink-0 rounded-xl border px-3 py-2 text-left transition-all",
-                    isSelected
-                      ? isChanged
-                        ? (c.isDark ? "border-amber-500/50 bg-amber-500/20 text-amber-100" : "border-amber-400 bg-amber-100 text-amber-800")
-                        : (c.isDark ? "border-cyan-500/40 bg-cyan-500/15 text-cyan-200" : "border-cyan-300 bg-cyan-50 text-cyan-700")
-                      : isChanged
-                        ? (c.isDark ? "border-amber-500/40 bg-amber-500/15 text-amber-200" : "border-amber-300 bg-amber-50 text-amber-700")
-                      : `${c.bgSurface} ${c.borderCard} ${c.textSecondary}`,
-                  ].join(" ")}
-                >
-                  <div className="text-[12px] font-semibold tabular-nums">{timeLabel}</div>
-                  <div className={`text-[10px] ${isChanged || isCurrent ? "text-amber-500" : c.textMuted}`}>
-                    {isChanged ? "変更" : isCurrent ? "現在" : "時点"}
-                  </div>
-                </button>
-              );
-            })}
+          <div ref={timelineScrollRef} className="flex-1 overflow-x-auto pb-1">
+            <div className="relative flex min-w-max items-start px-1">
+              <div className={`absolute left-7 right-7 top-[33px] h-px ${c.isDark ? "bg-slate-800" : "bg-slate-200"}`} />
+              {timeSlots.map((timeLabel) => {
+                const slotMinutes = parseTime(timeLabel);
+                const isSelected = selectedTime === timeLabel;
+                const isCurrent = nowSlot === timeLabel;
+                const isPast = slotMinutes < nowMinutes && !isCurrent;
+                const isChangedFuture = changedTimeSlots.has(timeLabel) && slotMinutes > nowMinutes;
+
+                const dotClass = isCurrent
+                  ? "bg-blue-500"
+                  : isChangedFuture
+                    ? "bg-orange-500"
+                    : isPast
+                      ? (c.isDark ? "bg-slate-500" : "bg-slate-300")
+                      : (c.isDark ? "bg-slate-700" : "bg-slate-500");
+
+                const labelClass = isCurrent
+                  ? "text-blue-500"
+                  : isChangedFuture
+                    ? "text-orange-500"
+                    : isPast
+                      ? (c.isDark ? "text-slate-500" : "text-slate-400")
+                      : c.textMuted;
+
+                return (
+                  <button
+                    key={timeLabel}
+                    type="button"
+                    onClick={() => setSelectedTime(timeLabel)}
+                    data-time-label={timeLabel}
+                    className="relative z-10 shrink-0 px-3 py-1 text-center transition-transform hover:-translate-y-0.5"
+                    aria-pressed={isSelected}
+                  >
+                    <div className={`h-4 text-[11px] font-semibold leading-4 tabular-nums ${labelClass}`}>{timeLabel}</div>
+                    <div className="mt-2 flex h-5 items-center justify-center">
+                      <span
+                        className={[
+                          "flex h-5 w-5 items-center justify-center rounded-full transition-all",
+                          isSelected
+                            ? (isCurrent
+                              ? "ring-2 ring-blue-500/25"
+                              : isChangedFuture
+                                ? "ring-2 ring-orange-500/25"
+                                : c.isDark
+                                  ? "ring-2 ring-slate-600"
+                                  : "ring-2 ring-slate-300")
+                            : "",
+                        ].join(" ")}
+                      >
+                        <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
           <button type="button" onClick={() => moveTimeline(1)} className={`rounded-xl border p-2 ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
             <ChevronRight className="h-4 w-4" />
@@ -1240,7 +1316,6 @@ export function LiveCommand() {
           ) : (
             <div className="space-y-6">
               {displayPanels.map((panel) => {
-                const totalRequired = panel.steps.reduce((sum, step) => sum + step.headcount, 0);
                 const totalAssigned = panel.steps.reduce((sum, step) => sum + step.assignedCount, 0);
                 const averageProgress = panel.steps.length > 0
                   ? Math.round(panel.steps.reduce((sum, step) => sum + (metricsByStepId.get(step.id)?.progress ?? 0), 0) / panel.steps.length)
@@ -1260,7 +1335,7 @@ export function LiveCommand() {
                         </div>
                       </div>
                       <div className="flex items-center gap-4">
-                        <div className={`text-[12px] ${c.textSecondary}`}><Users className="mr-1 inline h-3.5 w-3.5" />{totalAssigned}/{totalRequired}名</div>
+                        <div className={`text-[12px] ${c.textSecondary}`}><Users className="mr-1 inline h-3.5 w-3.5" />配置 {totalAssigned}名</div>
                         <div className={`text-[12px] font-semibold ${averageProgress >= 70 ? "text-emerald-500" : averageProgress >= 40 ? "text-amber-500" : "text-rose-500"}`}>{averageProgress}%</div>
                       </div>
                     </div>
@@ -1290,10 +1365,7 @@ export function LiveCommand() {
                                 </div>
                               </div>
                               <div className="text-right">
-                                <div className={`text-[12px] ${c.textSecondary}`}>{step.assignedCount}/{step.headcount}名</div>
-                                <div className={`text-[12px] font-semibold ${meta.shortage > 0 ? "text-rose-500" : "text-emerald-500"}`}>
-                                  {meta.shortage > 0 ? `不足 ${meta.shortage}名` : "配置充足"}
-                                </div>
+                                <div className={`text-[12px] ${c.textSecondary}`}>配置 {step.assignedCount}名</div>
                               </div>
                             </div>
 
@@ -1341,61 +1413,49 @@ export function LiveCommand() {
                               </div>
                             </div>
 
-                            <div
-                              className={`mt-3 rounded-2xl border p-2.5 ${dragState ? "border-cyan-400/60" : c.borderCard}`}
-                              onDragOver={(event) => event.preventDefault()}
-                              onDrop={() => handleDropToSlot(step.id, step.slots.length)}
-                            >
-                              <div className="mb-2 flex items-center justify-between">
-                                <div className={`text-[12px] font-semibold ${c.textPrimary}`}>作業員カード</div>
-                                <div className={`text-[10px] ${c.textMuted}`}>時点 {selectedTime} / 以降へ反映</div>
-                              </div>
-                              <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
-                                {step.slots.map((workerId, slotIndex) => {
-                                  const worker = workerId ? workerMap.get(workerId) : undefined;
-                                  if (!worker) return null;
-                                  return (
-                                    <div
-                                      key={`${step.id}-slot-${slotIndex}`}
-                                      onDragOver={(event) => event.preventDefault()}
-                                      onDrop={(event) => {
-                                        event.preventDefault();
-                                        handleDropToSlot(step.id, slotIndex);
+                            <div className="mt-2.5 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+                              {step.slots.map((workerId, slotIndex) => {
+                                const worker = workerId ? workerMap.get(workerId) : undefined;
+                                if (!worker) return null;
+
+                                return (
+                                  <div
+                                    key={`${step.id}-slot-${slotIndex}`}
+                                    onDragOver={(event) => event.preventDefault()}
+                                    onDrop={(event) => {
+                                      event.preventDefault();
+                                      handleDropToSlot(step.id, slotIndex);
+                                    }}
+                                    className="min-h-[60px]"
+                                  >
+                                    <StaffCard
+                                      worker={worker}
+                                      subtitle={workerAttendanceLabelMap.get(worker.id)}
+                                      themeColors={c}
+                                      qualificationMap={qualificationMap}
+                                      skillMap={skillMap}
+                                      muted={worker.status !== "active"}
+                                      dense
+                                      draggable
+                                      onDragStart={(event) => {
+                                        event.dataTransfer.effectAllowed = "move";
+                                        event.dataTransfer.setData("text/plain", worker.id);
+                                        setDragState({ workerId: worker.id, fromStepId: step.id, fromSlotIndex: slotIndex });
                                       }}
-                                      className={worker ? "min-h-[84px]" : `min-h-[84px] rounded-xl border p-1.5 ${c.borderCard} ${c.bgSurface}`}
-                                    >
-                                      <div className={`mb-1 text-[9px] ${c.textMuted}`}>枠 {slotIndex + 1}</div>
-                                      <StaffCard
-                                        worker={worker}
-                                        themeColors={c}
-                                        qualificationMap={qualificationMap}
-                                        skillMap={skillMap}
-                                        muted={worker.status !== "active"}
-                                        compact
-                                        draggable
-                                        onDragStart={(event) => {
-                                          event.dataTransfer.effectAllowed = "move";
-                                          event.dataTransfer.setData("text/plain", worker.id);
-                                          setDragState({ workerId: worker.id, fromStepId: step.id, fromSlotIndex: slotIndex });
-                                        }}
-                                        onDragEnd={() => setDragState(null)}
-                                      />
-                                    </div>
-                                  );
-                                })}
-                                <div
-                                  onDragOver={(event) => event.preventDefault()}
-                                  onDrop={(event) => {
-                                    event.preventDefault();
-                                    handleDropToSlot(step.id, step.slots.length);
-                                  }}
-                                  className={`min-h-[84px] rounded-xl border p-1.5 ${c.borderCard} ${c.bgSurface}`}
-                                >
-                                  <div className={`mb-1 text-[9px] ${c.textMuted}`}>追加枠</div>
-                                  <div className={`flex h-[52px] items-center justify-center rounded-lg ${c.bgCard} text-[11px] ${c.textMuted}`}>
-                                    ここへ配置
+                                      onDragEnd={() => setDragState(null)}
+                                    />
                                   </div>
-                                </div>
+                                );
+                              })}
+                              <div
+                                onDragOver={(event) => event.preventDefault()}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  handleDropToSlot(step.id, step.slots.length);
+                                }}
+                                className={`flex min-h-[60px] items-center justify-center rounded-xl border border-dashed px-3 text-[11px] ${dragState ? "border-cyan-400/60 text-cyan-500" : `${c.borderCard} ${c.textMuted}`}`}
+                              >
+                                追加
                               </div>
                             </div>
                           </article>
@@ -1467,6 +1527,7 @@ export function LiveCommand() {
                     <StaffCard
                       key={worker.id}
                       worker={worker}
+                      subtitle={workerAttendanceLabelMap.get(worker.id)}
                       themeColors={c}
                       qualificationMap={qualificationMap}
                       skillMap={skillMap}
@@ -1493,6 +1554,7 @@ export function LiveCommand() {
                     <StaffCard
                       key={worker.id}
                       worker={worker}
+                      subtitle={workerAttendanceLabelMap.get(worker.id)}
                       themeColors={c}
                       qualificationMap={qualificationMap}
                       skillMap={skillMap}
@@ -1553,3 +1615,4 @@ export function LiveCommand() {
     </div>
   );
 }
+
