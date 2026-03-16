@@ -92,9 +92,10 @@ export function Login() {
                 {/* Logo Section */}
                 <div className="flex flex-col items-center justify-center mb-8">
                     <img
-                        src={isDark ? "/logo-dark.png" : "/logo-light.png"}
+                        src="/logo-light.png"
                         alt="FluxView Logo"
                         className="h-10 sm:h-12 object-contain mb-6"
+                        style={{ filter: isDark ? "brightness(0) invert(1)" : "none" }}
                     />
                     <h2 className={`text-2xl font-semibold tracking-tight ${c.textPrimary}`}>
                         {t.welcome}

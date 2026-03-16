@@ -10,6 +10,7 @@ import { NotificationManagement } from "./components/NotificationManagement";
 import { SettingsPage } from "./components/SettingsPage";
 import { UserManagement } from "./components/UserManagement";
 import { WorkerView } from "./components/WorkerView";
+import { WorkerBandView } from "./components/WorkerBandView";
 import { LiveCommand } from "./components/LiveCommand";
 import { SubmissionRecords } from "./components/SubmissionRecords";
 import { ProcessSummary } from "./components/ProcessSummary";
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
       { path: "user-management", Component: UserManagement },
       { path: "settings", Component: SettingsPage },
       { path: "worker", Component: WorkerView },
+      { path: "worker-band", Component: WorkerBandView },
     ],
   },
 ]);

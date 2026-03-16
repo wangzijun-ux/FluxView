@@ -694,6 +694,60 @@ export function seedDemoWorkerSubmissionData(params: {
   return { dateKey, workerCount, taskCount, recordCount };
 }
 
+export function ensureDemoWorkerSubmissionData(params: {
+  sites: Site[];
+  workflows: WorkflowDefinition[];
+  shippers: Shipper[];
+  areas: AreaMaster[];
+  processes: ProcessMaster[];
+  date?: Date;
+}) {
+  const { sites, workflows, shippers, areas, processes, date = new Date() } = params;
+  const dateKey = formatLocalDateKey(date);
+  const targetSiteIds = Array.from(new Set(workflows.map((workflow) => workflow.siteId).filter(Boolean)));
+
+  let seededSiteCount = 0;
+  let workerCount = 0;
+  let taskCount = 0;
+  let recordCount = 0;
+
+  targetSiteIds.forEach((siteId) => {
+    const existingRecords = buildWorkerSubmissionRecords({
+      dateKey,
+      selectedSiteId: siteId,
+      sites,
+      workflows,
+      shippers,
+      areas,
+      processes,
+      now: date,
+    });
+
+    if (existingRecords.some((record) => (record.reportedQuantity ?? 0) > 0)) {
+      return;
+    }
+
+    const seeded = seedDemoWorkerSubmissionData({
+      selectedSiteId: siteId,
+      sites,
+      workflows,
+      shippers,
+      areas,
+      processes,
+      date,
+    });
+
+    if (seeded.recordCount <= 0) return;
+
+    seededSiteCount += 1;
+    workerCount += seeded.workerCount;
+    taskCount += seeded.taskCount;
+    recordCount += seeded.recordCount;
+  });
+
+  return { dateKey, seededSiteCount, workerCount, taskCount, recordCount };
+}
+
 export function buildDefaultAnnouncements(siteName: string, date = new Date()) {
   const dateKey = formatLocalDateKey(date);
   return [

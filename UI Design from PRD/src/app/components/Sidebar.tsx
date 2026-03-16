@@ -102,7 +102,16 @@ export function Sidebar() {
               <Activity size={18} />
             </Avatar>
           ) : (
-            <Box component="img" src={isDark ? "/logo-dark.png" : "/logo-light.png"} alt="FluxView Logo" sx={{ height: 30, width: "auto" }} />
+            <Box
+              component="img"
+              src="/logo-light.png"
+              alt="FluxView Logo"
+              sx={{
+                height: 30,
+                width: "auto",
+                filter: isDark ? "brightness(0) invert(1)" : "none",
+              }}
+            />
           )}
 
           {!collapsed && (
@@ -236,6 +245,24 @@ export function Sidebar() {
                   <HardHat size={18} />
                 </ListItemIcon>
                 {!collapsed && <ListItemText primary="作業者ビュー" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />}
+              </ListItemButton>
+            </Tooltip>
+
+            <Tooltip title={collapsed ? "作業者ビュー（バンド）" : ""} placement="right">
+              <ListItemButton
+                onClick={() => navigate("/worker-band")}
+                sx={{
+                  minHeight: 40,
+                  justifyContent: collapsed ? "center" : "flex-start",
+                  color: "info.main",
+                  borderRadius: 3,
+                  "&:hover": { bgcolor: alpha("#0ea5e9", 0.12) },
+                }}
+              >
+                <ListItemIcon sx={{ minWidth: collapsed ? 0 : 34, color: "inherit", justifyContent: "center" }}>
+                  <Activity size={18} />
+                </ListItemIcon>
+                {!collapsed && <ListItemText primary="作業者ビュー（バンド）" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />}
               </ListItemButton>
             </Tooltip>
 

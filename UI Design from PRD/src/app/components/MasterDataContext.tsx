@@ -19,6 +19,7 @@ import {
   type SkillMaster,
   type WorkflowDefinition,
 } from "./masterStore";
+import { ensureDemoWorkerSubmissionData } from "./workerMobileStore";
 
 const STORAGE_KEY = "fluxview-master-data-v2";
 const SELECTED_SITE_KEY = "fluxview-selected-site-v1";
@@ -80,8 +81,26 @@ function readInitialSelectedSiteId(sites: Site[]) {
   return sites[0]?.id ?? "";
 }
 
+function prepareInitialState() {
+  const data = readInitialData();
+  const selectedSiteId = readInitialSelectedSiteId(data.sites);
+
+  ensureDemoWorkerSubmissionData({
+    sites: data.sites,
+    workflows: data.workflows,
+    shippers: data.shippers,
+    areas: data.areas,
+    processes: data.processes,
+  });
+
+  return {
+    ...data,
+    selectedSiteId,
+  };
+}
+
 export function MasterDataProvider({ children }: { children: ReactNode }) {
-  const initial = useMemo(() => readInitialData(), []);
+  const initial = useMemo(() => prepareInitialState(), []);
 
   const [shippers, setShippers] = useState<Shipper[]>(initial.shippers);
   const [sites, setSites] = useState<Site[]>(initial.sites);
@@ -91,7 +110,7 @@ export function MasterDataProvider({ children }: { children: ReactNode }) {
   const [dispatchCompanies, setDispatchCompanies] = useState<DispatchCompany[]>(initial.dispatchCompanies);
   const [processes, setProcesses] = useState<ProcessMaster[]>(initial.processes);
   const [workflows, setWorkflows] = useState<WorkflowDefinition[]>(initial.workflows);
-  const [selectedSiteId, setSelectedSiteId] = useState(() => readInitialSelectedSiteId(initial.sites));
+  const [selectedSiteId, setSelectedSiteId] = useState(initial.selectedSiteId);
 
   useEffect(() => {
     localStorage.setItem(

@@ -372,9 +372,10 @@ export function WorkerView() {
           <div className={`w-full rounded-[28px] border px-5 py-6 shadow-xl ${c.bgCard} ${c.borderCard}`}>
             <div className="mb-5 flex justify-center">
               <img
-                src={c.isDark ? "/logo-dark.png" : "/logo-light.png"}
+                src="/logo-light.png"
                 alt="FluxView Logo"
                 className="h-9 w-auto"
+                style={{ filter: c.isDark ? "brightness(0) invert(1)" : "none" }}
               />
             </div>
 
