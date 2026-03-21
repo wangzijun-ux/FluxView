@@ -73,7 +73,7 @@ export function DispatchManagement() {
           : 108 + workflowFactor * 4 + index * 3;
       const previewWorkflows =
         siteWorkflows.length === 0
-          ? ["ワークフロー未設定"]
+          ? ["業務未設定"]
           : siteWorkflows
               .slice(index % siteWorkflows.length, (index % siteWorkflows.length) + Math.min(2, siteWorkflows.length))
               .map((workflow) => {
@@ -115,7 +115,7 @@ export function DispatchManagement() {
           { icon: Truck, label: "稼働中会社数", value: `${summary.activeCompanies}社`, sub: `登録 ${dispatchCompanies.length} 社`, color: "text-cyan-400", bg: "bg-cyan-500/10" },
           { icon: CalendarClock, label: "予定時間", value: formatHours(summary.plannedHours), sub: activeSite?.name ?? "拠点未選択", color: "text-violet-400", bg: "bg-violet-500/10" },
           { icon: Activity, label: "実労働時間", value: formatHours(summary.actualHours), sub: `派遣作業者 ${companyRows.reduce((sum, row) => sum + row.assignedCount, 0)} 名`, color: "text-emerald-400", bg: "bg-emerald-500/10" },
-          { icon: Gauge, label: "平均稼働率", value: `${summary.averageUtilization}%`, sub: `対象WF ${siteWorkflows.length} 件`, color: "text-amber-400", bg: "bg-amber-500/10" },
+          { icon: Gauge, label: "平均稼働率", value: `${summary.averageUtilization}%`, sub: `対象業務 ${siteWorkflows.length} 件`, color: "text-amber-400", bg: "bg-amber-500/10" },
         ].map((item) => (
           <div key={item.label} className={`${cardClass} p-4 flex items-center gap-3`}>
             <div className={`w-10 h-10 rounded-xl ${item.bg} flex items-center justify-center`}>
@@ -134,7 +134,7 @@ export function DispatchManagement() {
         <div>
           <div className={`text-[14px] ${c.textPrimary}`}>派遣会社別の稼働状況</div>
           <div className={`text-[12px] ${c.textSecondary}`}>
-            {activeSite ? `${activeSite.name} のワークフローを基準に表示しています。` : "拠点選択に連動して表示します。"}
+            {activeSite ? `${activeSite.name} の業務を基準に表示しています。` : "拠点選択に連動して表示します。"}
           </div>
         </div>
       </div>
@@ -144,7 +144,7 @@ export function DispatchManagement() {
           <table className="w-full min-w-[1180px]">
             <thead className={`sticky top-0 z-10 ${c.bgCard}`}>
               <tr className={`border-b ${c.border}`}>
-                {["派遣会社", "対象ワークフロー", "予定時間", "実労働時間", "稼働率", "UPH", "単価", "実績コスト"].map((header) => (
+                {["派遣会社", "対象業務", "予定時間", "実労働時間", "稼働率", "UPH", "単価", "実績コスト"].map((header) => (
                   <th key={header} className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>{header}</th>
                 ))}
               </tr>

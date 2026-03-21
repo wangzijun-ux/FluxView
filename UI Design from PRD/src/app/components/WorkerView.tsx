@@ -1,5 +1,5 @@
-﻿import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router";
 import {
   ArrowLeft,
   Bell,
@@ -15,20 +15,24 @@ import {
   Pause,
   Play,
   Plus,
+  Send,
   ShieldAlert,
   UserRound,
   X,
 } from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
-import { DEPLOYMENT_WORKERS } from "./fieldDeploymentStore";
+import { readDeploymentWorkers } from "./fieldDeploymentStore";
 import { processColorClasses } from "./processStore";
-import { initialUsers } from "./UserManagement";
+import { readUsersFromStorage, type User } from "./userStore";
 import {
   buildWorkerDayTasks,
   buildWorkerSiteDeploymentData,
   clearWorkerAuthSession,
   getPausedMinutes,
+  getWorkerTaskLastReportedAt,
+  getWorkerTaskReportedQuantity,
+  getWorkerTaskSubmissionLogs,
   getTodayKey,
   getVisibleWorkerNotifications,
   pickFallbackWorkerId,
@@ -42,7 +46,6 @@ import {
   type WorkerTaskProgressEntry,
 } from "./workerMobileStore";
 
-const USER_STORAGE_KEY = "fluxview-users-v1";
 const DEMO_PASSWORD = "1234";
 
 interface WorkerLoginUser {
@@ -51,22 +54,6 @@ interface WorkerLoginUser {
   email: string;
   avatar: string;
   status: "active" | "inactive" | "locked";
-}
-
-function readWorkerLoginUsers() {
-  if (typeof window === "undefined") {
-    return initialUsers.filter((user) => user.status !== "locked");
-  }
-
-  try {
-    const raw = window.localStorage.getItem(USER_STORAGE_KEY);
-    if (!raw) return initialUsers.filter((user) => user.status !== "locked");
-    const parsed = JSON.parse(raw) as WorkerLoginUser[];
-    if (!Array.isArray(parsed) || parsed.length === 0) return initialUsers.filter((user) => user.status !== "locked");
-    return parsed.filter((user) => user?.id && user?.name && user?.email && user.status !== "locked");
-  } catch {
-    return initialUsers.filter((user) => user.status !== "locked");
-  }
 }
 
 function formatTimeRange(startTime: string, endTime: string) {
@@ -103,11 +90,31 @@ function getTaskStatusClass(status: WorkerTaskProgressEntry["status"]) {
 }
 
 export function WorkerView() {
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const c = useThemeColors();
-  const { shippers, sites, areas, processes, workflows, selectedSiteId, setSelectedSiteId } = useMasterData();
-  const loginUsers = useMemo(() => readWorkerLoginUsers(), []);
+  const {
+    shippers,
+    sites,
+    processes,
+    workflows,
+    selectedSiteId,
+    setSelectedSiteId,
+  } = useMasterData();
+  const workerUsers = useMemo<User[]>(
+    () => readUsersFromStorage().filter((user) => user.status !== "locked"),
+    [],
+  );
+  const loginUsers = useMemo<WorkerLoginUser[]>(
+    () =>
+      workerUsers.map((user) => ({
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        avatar: user.avatar,
+        status: user.status,
+      })),
+    [workerUsers],
+  );
   const [now, setNow] = useState(new Date());
   const [authSession, setAuthSession] = useState<WorkerAuthSession | null>(null);
   const [workerId, setWorkerId] = useState("");
@@ -126,7 +133,8 @@ export function WorkerView() {
     return () => window.clearInterval(timerId);
   }, []);
 
-  const workerMap = useMemo(() => new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker])), []);
+  const deploymentWorkers = useMemo(() => readDeploymentWorkers(), []);
+  const workerMap = useMemo(() => new Map(deploymentWorkers.map((worker) => [worker.id, worker])), [deploymentWorkers]);
   const siteName = sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択";
   const loginSiteOptions = useMemo(
     () =>
@@ -139,8 +147,8 @@ export function WorkerView() {
     [sites],
   );
   const siteData = useMemo(
-    () => buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, areas, processes),
-    [selectedSiteId, sites, workflows, shippers, areas, processes],
+    () => buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, processes),
+    [selectedSiteId, sites, workflows, shippers, processes],
   );
   const fallbackWorkerId = useMemo(() => pickFallbackWorkerId(siteData), [siteData]);
   const requestedWorkerId = searchParams.get("workerId");
@@ -170,6 +178,9 @@ export function WorkerView() {
 
   const currentWorker = authSession
     ? workerMap.get(workerId) ?? workerMap.get(authSession.workerId) ?? workerMap.get(fallbackWorkerId) ?? null
+    : null;
+  const currentUserDetail = authSession
+    ? workerUsers.find((user) => user.id === authSession.userId) ?? null
     : null;
   const todayKey = getTodayKey(now);
 
@@ -215,15 +226,6 @@ export function WorkerView() {
   const primaryAnnouncement = notifications.find((notification) => notification.type === "announce") ?? null;
   const latestChangeNotification = notifications.find((notification) => notification.type !== "announce") ?? null;
   const showAnnouncement = Boolean(primaryAnnouncement && primaryAnnouncement.id !== dismissedAnnouncementId);
-
-  const activeTaskId = (() => {
-    const inProgress = tasks.find((task) => {
-      const status = taskProgress[task.id]?.status ?? "pending";
-      return status === "working" || status === "paused";
-    });
-    if (inProgress) return inProgress.id;
-    return tasks.find((task) => (taskProgress[task.id]?.status ?? "pending") !== "completed")?.id ?? null;
-  })();
 
   const completedCount = tasks.filter((task) => (taskProgress[task.id]?.status ?? "pending") === "completed").length;
   const completedMinutes = tasks.reduce((sum, task) => {
@@ -273,25 +275,97 @@ export function WorkerView() {
       [taskId]: {
         ...prev[taskId],
         status: prev[taskId]?.status ?? "working",
-        reportedQuantity: Math.max(0, nextQuantity),
-        lastReportedAt: new Date().toISOString(),
+        draftQuantity: Math.max(0, nextQuantity),
       },
     }));
   };
 
+  const submitTaskQuantity = (taskId: string) => {
+    const nowIso = new Date().toISOString();
+    setTaskProgress((prev) => {
+      const current = prev[taskId] ?? { status: "working" as const };
+      const draftQuantity = Math.max(0, Number(current.draftQuantity ?? 0));
+      if (draftQuantity <= 0) return prev;
+
+      const submissionLogs = [
+        ...getWorkerTaskSubmissionLogs(current),
+        {
+          id: `${taskId}:${nowIso}`,
+          quantity: draftQuantity,
+          submittedAt: nowIso,
+        },
+      ];
+
+      return {
+        ...prev,
+        [taskId]: {
+          ...current,
+          status: current.status === "pending" ? "working" : current.status,
+          startedAt: current.startedAt ?? nowIso,
+          draftQuantity: 0,
+          submissionLogs,
+          reportedQuantity: getWorkerTaskReportedQuantity({ ...current, submissionLogs }),
+          lastReportedAt: nowIso,
+        },
+      };
+    });
+  };
+
+  const completeTask = (taskId: string) => {
+    const nowIso = new Date().toISOString();
+    setTaskProgress((prev) => {
+      const current = prev[taskId] ?? { status: "pending" as const };
+      const draftQuantity = Math.max(0, Number(current.draftQuantity ?? 0));
+      const nextSubmissionLogs = [...getWorkerTaskSubmissionLogs(current)];
+
+      if (draftQuantity > 0) {
+        nextSubmissionLogs.push({
+          id: `${taskId}:${nowIso}`,
+          quantity: draftQuantity,
+          submittedAt: nowIso,
+        });
+      }
+
+      const nextEntry: WorkerTaskProgressEntry = {
+        ...current,
+        status: "completed",
+        startedAt: current.startedAt ?? nowIso,
+        completedAt: nowIso,
+        draftQuantity: 0,
+        submissionLogs: nextSubmissionLogs,
+        reportedQuantity: getWorkerTaskReportedQuantity({ ...current, submissionLogs: nextSubmissionLogs }),
+        lastReportedAt:
+          draftQuantity > 0
+            ? nowIso
+            : getWorkerTaskLastReportedAt({ ...current, submissionLogs: nextSubmissionLogs }),
+      };
+
+      if (current.status === "paused" && current.pauseStartedAt) {
+        nextEntry.totalPausedMinutes = getPausedMinutes(current);
+        nextEntry.pauseStartedAt = undefined;
+      }
+
+      return {
+        ...prev,
+        [taskId]: nextEntry,
+      };
+    });
+  };
+
+  const getTaskDraftQuantity = (taskId: string) => Math.max(0, Number(taskProgress[taskId]?.draftQuantity ?? 0));
   const changeTaskQuantity = (taskId: string, delta: number) => {
-    const currentQuantity = taskProgress[taskId]?.reportedQuantity ?? 0;
+    const currentQuantity = getTaskDraftQuantity(taskId);
     updateTaskQuantity(taskId, currentQuantity + delta);
   };
 
   const appendTaskQuantityDigit = (taskId: string, digit: string) => {
-    const currentQuantity = String(taskProgress[taskId]?.reportedQuantity ?? 0);
+    const currentQuantity = String(getTaskDraftQuantity(taskId));
     const normalized = currentQuantity === "0" ? digit : `${currentQuantity}${digit}`;
     updateTaskQuantity(taskId, Number(normalized));
   };
 
   const backspaceTaskQuantity = (taskId: string) => {
-    const currentQuantity = String(taskProgress[taskId]?.reportedQuantity ?? 0);
+    const currentQuantity = String(getTaskDraftQuantity(taskId));
     const nextValue = currentQuantity.length <= 1 ? 0 : Number(currentQuantity.slice(0, -1));
     updateTaskQuantity(taskId, nextValue);
   };
@@ -312,12 +386,40 @@ export function WorkerView() {
   }, [currentScreen, displayInputTask]);
 
   const activeInputStatus = displayInputTask ? (taskProgress[displayInputTask.id]?.status ?? "pending") : "pending";
-  const activeInputQuantity = displayInputTask ? (taskProgress[displayInputTask.id]?.reportedQuantity ?? 0) : 0;
-  const activeInputUpdatedAt = displayInputTask ? taskProgress[displayInputTask.id]?.lastReportedAt : undefined;
+  const activeInputQuantity = displayInputTask ? getTaskDraftQuantity(displayInputTask.id) : 0;
+  const activeInputReportedQuantity = displayInputTask
+    ? getWorkerTaskReportedQuantity(taskProgress[displayInputTask.id])
+    : 0;
+  const activeInputSubmissionCount = displayInputTask
+    ? getWorkerTaskSubmissionLogs(taskProgress[displayInputTask.id]).length
+    : 0;
+  const activeInputUpdatedAt = displayInputTask
+    ? getWorkerTaskLastReportedAt(taskProgress[displayInputTask.id])
+    : undefined;
   const quickQuantityButtons = [1, 5, 10, 50];
   const keypadButtons = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "00", "0", "backspace"] as const;
-  const currentLoginUser = authSession ? loginUsers.find((user) => user.id === authSession.userId) ?? null : null;
+  const stageClass = c.isDark
+    ? "bg-[#0d0f16] lg:bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.16),_transparent_24%),radial-gradient(circle_at_bottom_right,_rgba(14,165,233,0.2),_transparent_28%),linear-gradient(180deg,#020617_0%,#0b1120_100%)]"
+    : "bg-slate-100 lg:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.18),_transparent_24%),radial-gradient(circle_at_bottom_right,_rgba(16,185,129,0.16),_transparent_28%),linear-gradient(180deg,#f8fafc_0%,#dbe4f0_100%)]";
+  const deviceFrameClass = c.isDark
+    ? "lg:border-slate-700/80 lg:bg-slate-950 lg:shadow-[0_36px_90px_rgba(2,6,23,0.72)]"
+    : "lg:border-slate-900 lg:bg-slate-900 lg:shadow-[0_36px_90px_rgba(15,23,42,0.3)]";
 
+  const renderDeviceShell = (content: ReactNode) => (
+    <div className={`min-h-screen ${stageClass} lg:flex lg:items-center lg:justify-center lg:px-6 lg:py-10`}>
+      <div className="relative w-full lg:max-w-[430px]">
+        <div className="pointer-events-none absolute inset-6 hidden rounded-[56px] bg-cyan-400/10 blur-3xl lg:block" />
+        <div className="pointer-events-none absolute -left-[4px] top-28 hidden h-16 w-[4px] rounded-r-full bg-slate-700/80 lg:block" />
+        <div className="pointer-events-none absolute -left-[4px] top-52 hidden h-24 w-[4px] rounded-r-full bg-slate-700/80 lg:block" />
+        <div className="pointer-events-none absolute -right-[4px] top-40 hidden h-28 w-[4px] rounded-l-full bg-slate-700/80 lg:block" />
+        <div className={`relative w-full overflow-hidden lg:mx-auto lg:h-[900px] lg:rounded-[46px] lg:border-[10px] ${deviceFrameClass}`}>
+          <div className="pointer-events-none absolute left-1/2 top-3 z-30 hidden h-7 w-40 -translate-x-1/2 rounded-full bg-slate-950 shadow-[0_4px_16px_rgba(0,0,0,0.45)] lg:block" />
+          <div className="pointer-events-none absolute bottom-3 left-1/2 z-30 hidden h-1.5 w-28 -translate-x-1/2 rounded-full bg-white/30 lg:block" />
+          {content}
+        </div>
+      </div>
+    </div>
+  );
   const handleWorkerLogin = (event: React.FormEvent) => {
     event.preventDefault();
     const selectedUser = loginUsers.find((user) => user.id === loginUserId);
@@ -366,9 +468,8 @@ export function WorkerView() {
   };
 
   if (!authSession) {
-    return (
-      <div className={`min-h-screen ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-100"}`}>
-        <div className="mx-auto flex min-h-screen w-full max-w-md items-center px-5 py-8">
+    return renderDeviceShell(
+      <div className="mx-auto flex min-h-screen w-full max-w-md items-center px-5 py-8 lg:h-full lg:min-h-0 lg:max-w-none lg:px-6 lg:py-10">
           <div className={`w-full rounded-[28px] border px-5 py-6 shadow-xl ${c.bgCard} ${c.borderCard}`}>
             <div className="mb-5 flex justify-center">
               <img
@@ -445,14 +546,13 @@ export function WorkerView() {
               </button>
             </form>
           </div>
-        </div>
-      </div>
+        </div>,
     );
   }
 
-  return (
-    <div className={`min-h-screen ${c.isDark ? "bg-[#0d0f16]" : "bg-slate-100"}`}>
-      <div className={`mx-auto flex min-h-screen w-full max-w-md flex-col ${c.bgCard}`}>
+  return renderDeviceShell(
+      <>
+      <div className={`relative mx-auto flex min-h-screen w-full max-w-md flex-col ${c.bgCard} lg:h-full lg:min-h-0 lg:max-w-none lg:overflow-hidden lg:rounded-[36px] lg:pt-7`}>
         <header className={`sticky top-0 z-20 border-b px-5 py-4 ${c.bgCard} ${c.border}`}>
           <div className="flex items-center justify-between gap-3">
             <button
@@ -464,7 +564,7 @@ export function WorkerView() {
             </button>
 
             <div className="min-w-0 flex-1 text-center">
-              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentLoginUser?.name ?? currentWorker?.name ?? "作業員"}</div>
+              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentUserDetail?.name ?? currentWorker?.name ?? "作業員"}</div>
               <div className={`truncate text-[12px] ${c.textSecondary}`}>{siteName}</div>
             </div>
 
@@ -483,7 +583,7 @@ export function WorkerView() {
           </div>
         </header>
 
-        <main className={`flex flex-1 flex-col overflow-y-auto px-5 ${currentScreen === "input" ? "py-4" : "py-5"}`}>
+        <main className={`flex flex-1 flex-col px-5 ${currentScreen === "input" ? "overflow-hidden py-3" : "overflow-y-auto py-5"}`}>
           {currentScreen === "list" ? (
             <div className={`rounded-3xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
               <div className="flex items-start justify-between gap-3">
@@ -534,7 +634,7 @@ export function WorkerView() {
 
           {currentScreen === "input" && displayInputTask ? (
             <section className="flex min-h-0 flex-1 flex-col">
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-2 flex items-center justify-between">
                 <button
                   type="button"
                   onClick={() => setCurrentScreen("list")}
@@ -545,12 +645,12 @@ export function WorkerView() {
                 </button>
               </div>
               <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] border ${c.borderCard} ${c.bgCard} shadow-xl`}>
-                <div className={`border-b px-4 py-4 ${c.isDark ? "bg-cyan-500/10" : "bg-cyan-50"} ${c.borderCard}`}>
+                <div className={`border-b px-4 py-3 ${c.isDark ? "bg-cyan-500/10" : "bg-cyan-50"} ${c.borderCard}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className={`text-[12px] font-semibold ${c.isDark ? "text-cyan-300" : "text-cyan-700"}`}>作業数入力</div>
-                      <div className={`mt-1 text-[20px] font-semibold ${c.textPrimary}`}>{displayInputTask.processName}</div>
-                      <div className={`mt-1 text-[12px] ${c.textSecondary}`}>{displayInputTask.areaName} / {displayInputTask.shipperName}</div>
+                      <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>{displayInputTask.processName}</div>
+                      <div className={`mt-1 text-[12px] ${c.textSecondary}`}>{displayInputTask.shipperName}</div>
                     </div>
                     <div className={`rounded-full px-3 py-1 text-[11px] font-semibold ${
                       activeInputStatus === "working"
@@ -560,33 +660,41 @@ export function WorkerView() {
                       {activeInputStatus === "working" ? "作業中" : "中断中"}
                     </div>
                   </div>
-                  <div className={`mt-3 flex items-center gap-2 text-[12px] ${c.textSecondary}`}>
+                  <div className={`mt-2 flex items-center gap-2 text-[12px] ${c.textSecondary}`}>
                     <Clock3 className="h-4 w-4" />
                     <span>{formatTimeRange(displayInputTask.startTime, displayInputTask.endTime)}</span>
                     <span className={c.textMuted}>/ {formatDuration(displayInputTask.durationMinutes)}</span>
                   </div>
                 </div>
 
-                <div className="flex min-h-0 flex-1 flex-col px-4 py-5">
-                  <div className={`rounded-[24px] border px-4 py-4 text-center ${c.bgSurface} ${c.borderCard}`}>
-                    <div className={`text-[12px] ${c.textMuted}`}>現在の入力数</div>
-                    <div className={`mt-3 text-[46px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                <div className="flex min-h-0 flex-1 flex-col px-3 py-3">
+                  <div className={`rounded-[24px] border px-3 py-3 text-center ${c.bgSurface} ${c.borderCard}`}>
+                    <div className={`text-[12px] ${c.textMuted}`}>今回送信数</div>
+                    <div className={`mt-2 text-[38px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
                       {activeInputQuantity.toLocaleString("ja-JP")}
                     </div>
                     <div className={`mt-2 text-[13px] ${c.textSecondary}`}>個</div>
-                    <div className={`mt-3 text-[11px] ${c.textMuted}`}>
-                      {activeInputUpdatedAt ? `最終入力 ${formatNotificationTime(activeInputUpdatedAt)}` : "まだ入力はありません"}
+                    <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+                      <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
+                        累計 {formatCount(activeInputReportedQuantity)}
+                      </div>
+                      <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
+                        送信 {activeInputSubmissionCount} 回
+                      </div>
+                    </div>
+                    <div className={`mt-2 text-[11px] ${c.textMuted}`}>
+                      {activeInputUpdatedAt ? `最終送信 ${formatNotificationTime(activeInputUpdatedAt)}` : "まだ送信していません"}
                     </div>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-4 gap-2.5">
+                  <div className="mt-3 grid grid-cols-4 gap-2">
                     {quickQuantityButtons.map((value) => (
                       <button
                         key={value}
                         type="button"
                         disabled={activeInputStatus !== "working"}
                         onClick={() => changeTaskQuantity(displayInputTask.id, value)}
-                        className={`min-h-[52px] rounded-2xl border text-[16px] font-semibold transition ${
+                        className={`min-h-[44px] rounded-2xl border text-[15px] font-semibold transition ${
                           activeInputStatus === "working"
                             ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                             : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -597,13 +705,13 @@ export function WorkerView() {
                     ))}
                   </div>
 
-                  <div className="mt-4 grid w-full grid-cols-[52px_minmax(0,1fr)_52px] gap-2">
+                  <div className="mt-3 grid w-full grid-cols-[44px_minmax(0,1fr)_44px] gap-2">
                     <button
                       type="button"
                       aria-label="1件減らす"
                       disabled={activeInputStatus !== "working"}
                       onClick={() => changeTaskQuantity(displayInputTask.id, -1)}
-                      className={`inline-flex min-h-[56px] w-[52px] items-center justify-center rounded-2xl border transition ${
+                        className={`inline-flex min-h-[48px] w-[44px] items-center justify-center rounded-2xl border transition ${
                         activeInputStatus === "working"
                           ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                           : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -618,7 +726,7 @@ export function WorkerView() {
                       value={activeInputQuantity}
                       disabled={activeInputStatus !== "working"}
                       onChange={(event) => updateTaskQuantity(displayInputTask.id, Number(event.target.value || 0))}
-                      className={`min-h-[56px] min-w-0 w-full rounded-2xl border px-3 text-center text-[24px] font-semibold tabular-nums outline-none ${
+                        className={`min-h-[48px] min-w-0 w-full rounded-2xl border px-3 text-center text-[20px] font-semibold tabular-nums outline-none ${
                         activeInputStatus === "working"
                           ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                           : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -629,7 +737,7 @@ export function WorkerView() {
                       aria-label="1件増やす"
                       disabled={activeInputStatus !== "working"}
                       onClick={() => changeTaskQuantity(displayInputTask.id, 1)}
-                      className={`inline-flex min-h-[56px] w-[52px] items-center justify-center rounded-2xl border transition ${
+                        className={`inline-flex min-h-[48px] w-[44px] items-center justify-center rounded-2xl border transition ${
                         activeInputStatus === "working"
                           ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                           : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -639,7 +747,7 @@ export function WorkerView() {
                     </button>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-3 gap-2.5">
+                  <div className="mt-3 grid grid-cols-4 gap-2">
                     {keypadButtons.map((buttonKey) => (
                       <button
                         key={buttonKey}
@@ -653,7 +761,7 @@ export function WorkerView() {
                           }
                           appendTaskQuantityDigit(displayInputTask.id, buttonKey);
                         }}
-                        className={`min-h-[64px] rounded-[20px] border text-[24px] font-semibold transition ${
+                        className={`min-h-[48px] rounded-[18px] border text-[20px] font-semibold transition ${
                           activeInputStatus === "working"
                             ? `${c.bgCard} ${c.borderCard} ${c.textPrimary}`
                             : `${c.bgSurface} ${c.borderCard} ${c.textMuted}`
@@ -664,12 +772,12 @@ export function WorkerView() {
                     ))}
                   </div>
 
-                  <div className="mt-auto grid grid-cols-2 gap-2.5 pt-4">
+                  <div className="mt-auto grid grid-cols-3 gap-2 pt-2">
                     {activeInputStatus === "working" ? (
                       <button
                         type="button"
                         onClick={() => updateTaskStatus(displayInputTask.id, "paused")}
-                        className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-amber-500 px-4 text-[14px] font-semibold text-white"
+                        className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-amber-500 px-3 text-[12px] font-semibold text-white"
                       >
                         <Pause className="h-4 w-4" />
                         作業を中断
@@ -678,7 +786,7 @@ export function WorkerView() {
                       <button
                         type="button"
                         onClick={() => updateTaskStatus(displayInputTask.id, "working")}
-                        className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 text-[14px] font-semibold text-white"
+                        className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-blue-600 px-3 text-[12px] font-semibold text-white"
                       >
                         <Play className="h-4 w-4" />
                         作業を再開
@@ -686,15 +794,28 @@ export function WorkerView() {
                     )}
                     <button
                       type="button"
+                      disabled={activeInputStatus !== "working" || activeInputQuantity <= 0}
+                      onClick={() => submitTaskQuantity(displayInputTask.id)}
+                      className={`inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl px-3 text-[12px] font-semibold ${
+                        activeInputStatus === "working" && activeInputQuantity > 0
+                          ? "bg-cyan-500 text-white"
+                          : `${c.bgSurface} ${c.textMuted}`
+                      }`}
+                    >
+                      <Send className="h-4 w-4" />
+                      送信
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => {
-                        updateTaskStatus(displayInputTask.id, "completed");
+                        completeTask(displayInputTask.id);
                         setSelectedTaskId(null);
                         setCurrentScreen("list");
                       }}
-                      className="inline-flex min-h-[56px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-4 text-[14px] font-semibold text-white"
+                      className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-3 text-[12px] font-semibold text-white"
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      入力して完了
+                      {activeInputQuantity > 0 ? "送信して完了" : "完了"}
                     </button>
                   </div>
                 </div>
@@ -734,8 +855,6 @@ export function WorkerView() {
                   {tasks.map((task) => {
                     const tone = processColorClasses[task.color] ?? processColorClasses.cyan;
                     const status = taskProgress[task.id]?.status ?? "pending";
-                    const isActive = activeTaskId === task.id;
-
                     return (
                       <article
                         key={task.id}
@@ -750,7 +869,6 @@ export function WorkerView() {
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
                                 <div className={`text-[16px] font-semibold ${c.textPrimary}`}>{task.processName}</div>
-                                <div className={`mt-1 text-[12px] ${c.textSecondary}`}>{task.areaName}</div>
                               </div>
                               <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${getTaskStatusClass(status)}`}>
                                 {status === "completed" ? "完了" : status === "working" ? "作業中" : status === "paused" ? "中断中" : "未着手"}
@@ -767,11 +885,14 @@ export function WorkerView() {
 
                             <div className="mt-3 flex flex-wrap gap-2">
                               <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>
-                                入力数 {formatCount(taskProgress[task.id]?.reportedQuantity ?? 0)}
+                                送信合計 {formatCount(getWorkerTaskReportedQuantity(taskProgress[task.id]))}
                               </div>
-                              {taskProgress[task.id]?.lastReportedAt ? (
+                              <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>
+                                送信 {getWorkerTaskSubmissionLogs(taskProgress[task.id]).length} 回
+                              </div>
+                              {getWorkerTaskLastReportedAt(taskProgress[task.id]) ? (
                                 <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textMuted}`}>
-                                  更新 {formatNotificationTime(taskProgress[task.id]?.lastReportedAt ?? "")}
+                                  最終送信 {formatNotificationTime(getWorkerTaskLastReportedAt(taskProgress[task.id]) ?? "")}
                                 </div>
                               ) : null}
                             </div>
@@ -780,7 +901,7 @@ export function WorkerView() {
                               {status === "completed" ? (
                                 <div className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500/10 px-3 py-2 text-[12px] font-medium text-emerald-500">
                                   <CheckCircle2 className="h-4 w-4" />
-                                  {formatCount(taskProgress[task.id]?.reportedQuantity ?? 0)} を入力して完了
+                                  {formatCount(getWorkerTaskReportedQuantity(taskProgress[task.id]))} / {getWorkerTaskSubmissionLogs(taskProgress[task.id]).length} 回送信で完了
                                 </div>
                               ) : status === "working" || status === "paused" ? (
                                 <button
@@ -797,20 +918,15 @@ export function WorkerView() {
                               ) : (
                                 <button
                                   type="button"
-                                  disabled={!isActive}
                                   onClick={() => {
                                     updateTaskStatus(task.id, "working");
                                     setSelectedTaskId(task.id);
                                     setCurrentScreen("input");
                                   }}
-                                  className={`inline-flex items-center gap-2 rounded-2xl px-4 py-3 text-[13px] font-semibold ${
-                                    isActive
-                                      ? "bg-blue-600 text-white"
-                                      : `${c.bgSurface} ${c.textMuted}`
-                                  }`}
+                                  className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-[13px] font-semibold text-white"
                                 >
                                   <Play className="h-4 w-4" />
-                                  {isActive ? "この作業を開始" : "前工程の完了待ち"}
+                                  この工程を開始
                                 </button>
                               )}
                             </div>
@@ -827,8 +943,8 @@ export function WorkerView() {
       </div>
 
       {showAnnouncement && primaryAnnouncement ? (
-        <div className="fixed inset-0 z-40 bg-black/40 px-5 py-8">
-          <div className="mx-auto flex h-full w-full max-w-md items-center">
+        <div className="absolute inset-0 z-40 bg-black/40 px-5 py-8 lg:rounded-[36px]">
+          <div className="mx-auto flex h-full w-full items-center">
             <div className={`w-full rounded-[28px] border px-5 py-5 shadow-2xl ${c.bgCard} ${c.borderCard}`}>
               <div className="flex items-start justify-between gap-4">
                 <div className="rounded-2xl bg-violet-500/10 p-3 text-violet-500">
@@ -864,8 +980,8 @@ export function WorkerView() {
       ) : null}
 
       {notificationOpen ? (
-        <div className="fixed inset-0 z-50 bg-black/40">
-          <div className={`absolute inset-x-0 bottom-0 mx-auto w-full max-w-md rounded-t-[32px] border px-5 pb-8 pt-5 ${c.bgCard} ${c.borderCard}`}>
+        <div className="absolute inset-0 z-50 bg-black/40 lg:rounded-[36px]">
+          <div className={`absolute inset-x-0 bottom-0 w-full rounded-t-[32px] border px-5 pb-8 pt-5 ${c.bgCard} ${c.borderCard}`}>
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <div className={`text-[18px] font-semibold ${c.textPrimary}`}>通知</div>
@@ -921,7 +1037,7 @@ export function WorkerView() {
           </div>
         </div>
       ) : null}
-    </div>
+    </>,
   );
 }
 

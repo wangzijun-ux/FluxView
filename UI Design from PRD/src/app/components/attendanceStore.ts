@@ -1,4 +1,4 @@
-import { INITIAL_WORKERS, type Worker as AttendanceWorker } from "./processStore";
+import { readAttendanceWorkers, type AttendanceWorker } from "./workforceStore";
 
 export interface ShiftData {
   start: string;
@@ -19,28 +19,49 @@ function getDayOfWeek(year: number, month: number, day: number) {
   return new Date(year, month, day).getDay();
 }
 
-function normalizeWorkerName(value: string) {
-  return value.replace(/[\s\u3000]/g, "");
+function normalizeWorkerKey(value: string) {
+  return value.replace(/[\s\u3000]/g, "").toLowerCase();
 }
 
 function buildDefaultShift(worker: AttendanceWorker, dayOfWeek: number): ShiftData {
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-  let start = "08:00";
-  let end = "17:00";
-  let isOff = isWeekend;
-
-  if (worker.category === "派遣") {
-    if (dayOfWeek !== 1 && dayOfWeek !== 3 && dayOfWeek !== 5) {
-      isOff = true;
-    }
-  }
 
   if (worker.category === "パートナー") {
-    start = "09:00";
-    end = "15:00";
+    return { start: "09:00", end: "15:00", isOff: isWeekend };
   }
 
-  return { start, end, isOff };
+  if (worker.category === "派遣") {
+    return { start: "09:00", end: "17:00", isOff: isWeekend };
+  }
+
+  return { start: "08:00", end: "17:00", isOff: isWeekend };
+}
+
+function normalizeShiftData(value: unknown, fallback: ShiftData) {
+  if (!value || typeof value !== "object") return fallback;
+  const shift = value as Partial<ShiftData>;
+  return {
+    start: typeof shift.start === "string" ? shift.start : fallback.start,
+    end: typeof shift.end === "string" ? shift.end : fallback.end,
+    isOff: typeof shift.isOff === "boolean" ? shift.isOff : fallback.isOff,
+  } satisfies ShiftData;
+}
+
+function resolveStoredShift(
+  stored: MonthlyShifts,
+  worker: AttendanceWorker,
+  day: number,
+  fallback: ShiftData,
+) {
+  const direct = stored[worker.id]?.[day];
+  if (direct) return normalizeShiftData(direct, fallback);
+
+  const legacyEntry = Object.entries(stored).find(([workerKey]) => normalizeWorkerKey(workerKey) === normalizeWorkerKey(worker.name));
+  if (legacyEntry?.[1]?.[day]) {
+    return normalizeShiftData(legacyEntry[1][day], fallback);
+  }
+
+  return fallback;
 }
 
 export function buildAttendanceMonthKey(year: number, month: number) {
@@ -50,7 +71,7 @@ export function buildAttendanceMonthKey(year: number, month: number) {
 export function createDefaultMonthlyShifts(
   year: number,
   month: number,
-  workers: AttendanceWorker[] = INITIAL_WORKERS,
+  workers: AttendanceWorker[] = readAttendanceWorkers(),
 ): MonthlyShifts {
   const next: MonthlyShifts = {};
   const daysInMonth = getDaysInMonth(year, month);
@@ -72,7 +93,7 @@ export function readAttendanceStore(): AttendanceStore {
     const raw = window.localStorage.getItem(ATTENDANCE_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed as AttendanceStore : {};
+    return parsed && typeof parsed === "object" ? (parsed as AttendanceStore) : {};
   } catch {
     return {};
   }
@@ -81,7 +102,7 @@ export function readAttendanceStore(): AttendanceStore {
 export function readAttendanceMonthShifts(
   year: number,
   month: number,
-  workers: AttendanceWorker[] = INITIAL_WORKERS,
+  workers: AttendanceWorker[] = readAttendanceWorkers(),
 ): MonthlyShifts {
   const defaults = createDefaultMonthlyShifts(year, month, workers);
   const monthKey = buildAttendanceMonthKey(year, month);
@@ -89,22 +110,13 @@ export function readAttendanceMonthShifts(
   if (!stored || typeof stored !== "object") return defaults;
 
   return Object.fromEntries(
-    Object.entries(defaults).map(([workerId, dayMap]) => [
-      workerId,
+    workers.map((worker) => [
+      worker.id,
       Object.fromEntries(
-        Object.entries(dayMap).map(([day, shift]) => {
-          const savedShift = stored[workerId]?.[Number(day)];
-          return [
-            Number(day),
-            savedShift && typeof savedShift === "object"
-              ? {
-                  start: typeof savedShift.start === "string" ? savedShift.start : shift.start,
-                  end: typeof savedShift.end === "string" ? savedShift.end : shift.end,
-                  isOff: Boolean(savedShift.isOff),
-                }
-              : shift,
-          ];
-        }),
+        Object.entries(defaults[worker.id] ?? {}).map(([day, fallbackShift]) => [
+          Number(day),
+          resolveStoredShift(stored, worker, Number(day), fallbackShift),
+        ]),
       ),
     ]),
   );
@@ -125,17 +137,19 @@ export function writeAttendanceMonthShifts(year: number, month: number, shifts: 
 }
 
 export function resolveWorkerShiftForDate(
-  workerName: string,
+  workerIdOrName: string,
   dateKey: string,
-  workers: AttendanceWorker[] = INITIAL_WORKERS,
+  workers: AttendanceWorker[] = readAttendanceWorkers(),
 ) {
   const [yearPart, monthPart, dayPart] = dateKey.split("-").map(Number);
   if (!yearPart || !monthPart || !dayPart) return null;
 
-  const worker = workers.find((item) => normalizeWorkerName(item.name) === normalizeWorkerName(workerName));
+  const normalizedTarget = normalizeWorkerKey(workerIdOrName);
+  const worker = workers.find((item) =>
+    normalizeWorkerKey(item.id) === normalizedTarget || normalizeWorkerKey(item.name) === normalizedTarget,
+  );
   if (!worker) return null;
 
   const monthlyShifts = readAttendanceMonthShifts(yearPart, monthPart - 1, workers);
   return monthlyShifts[worker.id]?.[dayPart] ?? null;
 }
-

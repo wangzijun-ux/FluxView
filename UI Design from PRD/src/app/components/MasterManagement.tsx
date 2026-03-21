@@ -6,49 +6,53 @@ import {
   ChevronDown,
   Factory,
   Filter,
-  MapPinned,
-  Network,
   Plus,
   RefreshCcw,
   Search,
   Trash2,
-  X,
 } from "lucide-react";
 import { useThemeColors } from "./ThemeContext";
 import { useMasterData } from "./MasterDataContext";
 import type { MasterStatus } from "./masterStore";
+import {
+  DEFAULT_QUALIFICATION_ICON_KEY,
+  DEFAULT_SKILL_ICON_KEY,
+  getCapabilityToneClasses,
+  getMasterIconOption,
+  masterIconOptions,
+  type CapabilityTone,
+  type MasterIconKey,
+} from "./masterIconOptions";
 
-type MasterTab = "shipper" | "site" | "area" | "qualification" | "skill" | "dispatchCompany" | "process";
+type MasterTab = "shipper" | "site" | "qualification" | "skill" | "dispatchCompany";
 
 const tabItems: Array<{ id: MasterTab; label: string; icon: typeof Building2 }> = [
   { id: "shipper", label: "荷主管理", icon: Building2 },
   { id: "site", label: "拠点管理", icon: Factory },
-  { id: "area", label: "エリア管理", icon: MapPinned },
   { id: "qualification", label: "資格管理", icon: BadgeCheck },
   { id: "skill", label: "スキル管理", icon: Brain },
   { id: "dispatchCompany", label: "派遣会社管理", icon: Building2 },
-  { id: "process", label: "工程管理", icon: Network },
 ];
 
 const makeId = (prefix: string) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
-function MultiSelectChips({
-  options,
-  selectedIds,
+function IconPicker({
+  value,
   onChange,
-  placeholder,
+  fallback,
+  tone,
 }: {
-  options: Array<{ id: string; name: string }>;
-  selectedIds: string[];
-  onChange: (ids: string[]) => void;
-  placeholder: string;
+  value: MasterIconKey;
+  onChange: (key: MasterIconKey) => void;
+  fallback: MasterIconKey;
+  tone: CapabilityTone;
 }) {
   const c = useThemeColors();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const selected = options.filter((option) => selectedIds.includes(option.id));
-  const visibleSelected = selected.slice(0, 2);
-  const hiddenCount = Math.max(selected.length - visibleSelected.length, 0);
+  const selected = getMasterIconOption(value, fallback);
+  const SelectedIcon = selected.icon;
+  const toneClasses = getCapabilityToneClasses(tone);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -74,90 +78,51 @@ function MultiSelectChips({
     };
   }, [open]);
 
-  const toggle = (id: string) => {
-    if (selectedIds.includes(id)) {
-      onChange(selectedIds.filter((x) => x !== id));
-      return;
-    }
-    onChange([...selectedIds, id]);
-  };
-
   return (
     <div ref={containerRef} className="relative">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
-        className={`w-full min-h-[40px] rounded-lg border px-3 py-2 text-left text-[12px] ${c.borderCard} ${c.bgSurface}`}
+        aria-label="アイコンを選択"
+        className={`flex h-[40px] w-full items-center justify-between gap-2 rounded-lg border px-3 ${c.borderCard} ${c.bgSurface}`}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 flex-wrap gap-1.5">
-            {selected.length === 0 ? (
-              <span className={c.textMuted}>{placeholder}</span>
-            ) : (
-              <>
-                {visibleSelected.map((option) => (
-                  <span
-                    key={option.id}
-                    className={`inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] ${c.borderCard} ${c.bgCardHover} ${c.textSecondary}`}
-                  >
-                    <span className="truncate">{option.name}</span>
-                  </span>
-                ))}
-                {hiddenCount > 0 && (
-                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] ${c.borderCard} ${c.bgCardHover} ${c.textMuted}`}>
-                    +{hiddenCount}
-                  </span>
-                )}
-              </>
-            )}
-          </div>
-          <ChevronDown className={`h-4 w-4 shrink-0 ${c.textMuted} transition-transform ${open ? "rotate-180" : ""}`} />
-        </div>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border ${toneClasses.surfaceClass}`}>
+            <SelectedIcon className={`h-4 w-4 ${toneClasses.accentClass}`} />
+          </span>
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 ${c.textMuted} transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
+
       {open && (
-        <div className={`absolute left-0 top-[44px] z-20 w-[300px] rounded-lg border ${c.border} ${c.bgCard} p-2 shadow-xl`}>
-          <div className="max-h-52 space-y-1 overflow-y-auto">
-            {options.length === 0 ? (
-              <div className={`px-2 py-3 text-[12px] ${c.textMuted}`}>候補がありません</div>
-            ) : (
-              options.map((option) => {
-                const active = selectedIds.includes(option.id);
-                return (
-                  <button
-                    key={option.id}
-                    type="button"
-                    onClick={() => toggle(option.id)}
-                    className={`flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-[12px] ${
-                      active ? "bg-cyan-500/15 text-cyan-300" : `${c.textSecondary} ${c.bgCardHover}`
-                    }`}
-                  >
-                    <span>{option.name}</span>
-                    {active && <span className="text-[11px]">選択中</span>}
-                  </button>
-                );
-              })
-            )}
-          </div>
-          <div className={`mt-2 flex items-center justify-between gap-2 border-t pt-2 ${c.borderCard}`}>
-            <div className={`text-[11px] ${c.textMuted}`}>{selected.length}件選択中</div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => onChange([])}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-rose-400 hover:bg-rose-500/10"
-              >
-                <X className="h-3.5 w-3.5" />
-                クリア
-              </button>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className={`rounded-md px-2 py-1 text-[11px] ${c.textSecondary} ${c.bgCardHover}`}
-              >
-                閉じる
-              </button>
-            </div>
+        <div className={`absolute left-0 top-[44px] z-20 w-[312px] rounded-xl border ${c.border} ${c.bgCard} p-3 shadow-xl`}>
+          <div className="grid grid-cols-4 gap-2">
+            {masterIconOptions.map((option) => {
+              const Icon = option.icon;
+              const active = option.key === selected.key;
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  title={option.label}
+                  aria-label={option.label}
+                  onClick={() => {
+                    onChange(option.key);
+                    setOpen(false);
+                  }}
+                  className={`flex h-12 items-center justify-center rounded-xl border transition-all ${
+                    active
+                      ? toneClasses.activeClass
+                      : `${c.borderCard} ${c.bgCardHover}`
+                  }`}
+                >
+                  <span className={`flex h-8 w-8 items-center justify-center rounded-lg border ${toneClasses.surfaceClass}`}>
+                    <Icon className={`h-4 w-4 ${toneClasses.accentClass}`} />
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -172,8 +137,6 @@ export function MasterManagement() {
     setShippers,
     sites,
     setSites,
-    areas,
-    setAreas,
     qualifications,
     setQualifications,
     skills,
@@ -191,7 +154,6 @@ export function MasterManagement() {
   const [search, setSearch] = useState("");
   const [shipperStatusFilter, setShipperStatusFilter] = useState<"all" | MasterStatus>("all");
   const [siteShipperFilter, setSiteShipperFilter] = useState("all");
-  const [areaSiteFilter, setAreaSiteFilter] = useState("all");
   const [dispatchCompanyStatusFilter, setDispatchCompanyStatusFilter] = useState<"all" | MasterStatus>("all");
 
   const [newShipperName, setNewShipperName] = useState("");
@@ -199,27 +161,17 @@ export function MasterManagement() {
   const [newSiteName, setNewSiteName] = useState("");
   const [newSiteAddress, setNewSiteAddress] = useState("");
   const [newSiteShipperId, setNewSiteShipperId] = useState("");
-  const [newAreaName, setNewAreaName] = useState("");
-  const [newAreaDescription, setNewAreaDescription] = useState("");
-  const [newAreaSiteId, setNewAreaSiteId] = useState("");
   const [newQualificationName, setNewQualificationName] = useState("");
+  const [newQualificationIconKey, setNewQualificationIconKey] = useState<MasterIconKey>(DEFAULT_QUALIFICATION_ICON_KEY);
   const [newSkillName, setNewSkillName] = useState("");
+  const [newSkillIconKey, setNewSkillIconKey] = useState<MasterIconKey>(DEFAULT_SKILL_ICON_KEY);
   const [newDispatchCompanyName, setNewDispatchCompanyName] = useState("");
   const [newDispatchCompanyContact, setNewDispatchCompanyContact] = useState("");
   const [newDispatchCompanyPhone, setNewDispatchCompanyPhone] = useState("");
   const [newDispatchCompanyUnitPrice, setNewDispatchCompanyUnitPrice] = useState("1200");
   const [newDispatchCompanyStatus, setNewDispatchCompanyStatus] = useState<MasterStatus>("active");
-  const [newProcessName, setNewProcessName] = useState("");
-  const [newProcessDescription, setNewProcessDescription] = useState("");
-
-  const [newProcessUph, setNewProcessUph] = useState("100");
-  const [newProcessQualificationIds, setNewProcessQualificationIds] = useState<string[]>([]);
-  const [newProcessSkillIds, setNewProcessSkillIds] = useState<string[]>([]);
 
   const shipperMap = useMemo(() => new Map(shippers.map((x) => [x.id, x])), [shippers]);
-  const siteMap = useMemo(() => new Map(sites.map((x) => [x.id, x])), [sites]);
-  const qualificationMap = useMemo(() => new Map(qualifications.map((x) => [x.id, x])), [qualifications]);
-  const skillMap = useMemo(() => new Map(skills.map((x) => [x.id, x])), [skills]);
 
   const filteredShippers = shippers.filter((x) => {
     if (shipperStatusFilter !== "all" && x.status !== shipperStatusFilter) return false;
@@ -232,23 +184,11 @@ export function MasterManagement() {
     return haystack.includes(search.toLowerCase());
   });
 
-  const filteredAreas = areas.filter((x) => {
-    if (areaSiteFilter !== "all" && x.siteId !== areaSiteFilter) return false;
-    const haystack = `${x.name} ${x.description} ${siteMap.get(x.siteId)?.name ?? ""}`.toLowerCase();
-    return haystack.includes(search.toLowerCase());
-  });
-
   const filteredQualifications = qualifications.filter((x) => x.name.toLowerCase().includes(search.toLowerCase()));
   const filteredSkills = skills.filter((x) => x.name.toLowerCase().includes(search.toLowerCase()));
   const filteredDispatchCompanies = dispatchCompanies.filter((x) => {
     if (dispatchCompanyStatusFilter !== "all" && x.status !== dispatchCompanyStatusFilter) return false;
     return `${x.name} ${x.contactName} ${x.phone}`.toLowerCase().includes(search.toLowerCase());
-  });
-
-  const filteredProcesses = processes.filter((x) => {
-    const q = x.defaultQualificationIds.map((id) => qualificationMap.get(id)?.name ?? "").join(" ");
-    const s = x.defaultSkillIds.map((id) => skillMap.get(id)?.name ?? "").join(" ");
-    return `${x.name} ${x.description} ${q} ${s}`.toLowerCase().includes(search.toLowerCase());
   });
 
   const addShipper = () => {
@@ -258,10 +198,8 @@ export function MasterManagement() {
   };
 
   const deleteShipper = (shipperId: string) => {
-    const relatedSiteIds = sites.filter((x) => x.shipperId === shipperId).map((x) => x.id);
     setShippers((prev) => prev.filter((x) => x.id !== shipperId));
     setSites((prev) => prev.filter((x) => x.shipperId !== shipperId));
-    setAreas((prev) => prev.filter((x) => !relatedSiteIds.includes(x.siteId)));
     setWorkflows((prev) => prev.filter((x) => x.shipperId !== shipperId));
   };
 
@@ -274,32 +212,27 @@ export function MasterManagement() {
 
   const deleteSite = (siteId: string) => {
     setSites((prev) => prev.filter((x) => x.id !== siteId));
-    setAreas((prev) => prev.filter((x) => x.siteId !== siteId));
     setWorkflows((prev) => prev.filter((x) => x.siteId !== siteId));
-  };
-
-  const addArea = () => {
-    if (!newAreaName.trim() || !newAreaSiteId) return;
-    setAreas((prev) => [...prev, { id: makeId("area"), siteId: newAreaSiteId, name: newAreaName.trim(), description: newAreaDescription.trim() }]);
-    setNewAreaName("");
-    setNewAreaDescription("");
-  };
-
-  const deleteArea = (areaId: string) => {
-    setAreas((prev) => prev.filter((x) => x.id !== areaId));
-    setWorkflows((prev) => prev.filter((x) => x.areaId !== areaId));
   };
 
   const addQualification = () => {
     if (!newQualificationName.trim()) return;
-    setQualifications((prev) => [...prev, { id: makeId("qual"), name: newQualificationName.trim() }]);
+    setQualifications((prev) => [
+      ...prev,
+      { id: makeId("qual"), name: newQualificationName.trim(), iconKey: newQualificationIconKey },
+    ]);
     setNewQualificationName("");
+    setNewQualificationIconKey(DEFAULT_QUALIFICATION_ICON_KEY);
   };
 
   const addSkill = () => {
     if (!newSkillName.trim()) return;
-    setSkills((prev) => [...prev, { id: makeId("skill"), name: newSkillName.trim() }]);
+    setSkills((prev) => [
+      ...prev,
+      { id: makeId("skill"), name: newSkillName.trim(), iconKey: newSkillIconKey },
+    ]);
     setNewSkillName("");
+    setNewSkillIconKey(DEFAULT_SKILL_ICON_KEY);
   };
 
   const addDispatchCompany = () => {
@@ -344,28 +277,6 @@ export function MasterManagement() {
     setDispatchCompanies((prev) => prev.filter((x) => x.id !== dispatchCompanyId));
   };
 
-  const addProcess = () => {
-    if (!newProcessName.trim()) return;
-    setProcesses((prev) => [...prev, {
-      id: makeId("process"),
-      name: newProcessName.trim(),
-      description: newProcessDescription.trim(),
-      defaultQualificationIds: newProcessQualificationIds,
-      defaultSkillIds: newProcessSkillIds,
-      defaultHeadcount: 1,
-      defaultUph: Number(newProcessUph) || 0,
-    }]);
-    setNewProcessName("");
-    setNewProcessDescription("");
-    setNewProcessQualificationIds([]);
-    setNewProcessSkillIds([]);
-  };
-
-  const deleteProcess = (processId: string) => {
-    setProcesses((prev) => prev.filter((x) => x.id !== processId));
-    setWorkflows((prev) => prev.map((w) => ({ ...w, steps: w.steps.filter((s) => s.processId !== processId) })));
-  };
-
   const cardClass = `${c.bgCard} border ${c.border} rounded-xl`;
   const inputClass = `${c.bgSurface} border ${c.borderCard} rounded-lg px-3 py-2.5 text-[13px] ${c.textPrimary} placeholder:${c.textDimmed} focus:border-cyan-500/50 outline-none`;
   const actionButtonClass = "h-[40px] px-4 rounded-lg bg-cyan-600 text-white text-[13px] font-semibold hover:bg-cyan-500 transition-all";
@@ -374,15 +285,11 @@ export function MasterManagement() {
       ? filteredShippers.length
       : activeTab === "site"
         ? filteredSites.length
-        : activeTab === "area"
-          ? filteredAreas.length
-          : activeTab === "qualification"
+        : activeTab === "qualification"
             ? filteredQualifications.length
             : activeTab === "skill"
               ? filteredSkills.length
-              : activeTab === "dispatchCompany"
-                ? filteredDispatchCompanies.length
-              : filteredProcesses.length;
+              : filteredDispatchCompanies.length;
 
   return (
     <div className="p-6 h-full flex flex-col gap-4">
@@ -421,12 +328,6 @@ export function MasterManagement() {
             <select value={siteShipperFilter} onChange={(e) => setSiteShipperFilter(e.target.value)} className={inputClass}>
               <option value="all">荷主: すべて</option>
               {shippers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          )}
-          {activeTab === "area" && (
-            <select value={areaSiteFilter} onChange={(e) => setAreaSiteFilter(e.target.value)} className={inputClass}>
-              <option value="all">拠点: すべて</option>
-              {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           )}
           {activeTab === "dispatchCompany" && (
@@ -505,31 +406,75 @@ export function MasterManagement() {
         </div>
       )}
 
-      {activeTab === "area" && (
+      {activeTab === "qualification" && (
         <div className={`${cardClass} overflow-hidden`}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1020px]">
+            <table className="w-full min-w-[920px]">
               <thead>
                 <tr className={`border-b ${c.border}`}>
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>拠点</th>
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>エリア名</th>
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>説明</th>
+                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>アイコン</th>
+                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>資格名</th>
                   <th className={`px-4 py-3 text-right text-[12px] ${c.textMuted}`}>操作</th>
                 </tr>
               </thead>
               <tbody>
                 <tr className={`border-b ${c.borderCard} ${c.bgSurface}`}>
-                  <td className="px-4 py-2 w-[240px]"><select value={newAreaSiteId} onChange={(e) => setNewAreaSiteId(e.target.value)} className={`${inputClass} w-full`}><option value="">拠点を選択</option>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></td>
-                  <td className="px-4 py-2"><input value={newAreaName} onChange={(e) => setNewAreaName(e.target.value)} placeholder="新規エリア名" className={`${inputClass} w-full`} /></td>
-                  <td className="px-4 py-2"><input value={newAreaDescription} onChange={(e) => setNewAreaDescription(e.target.value)} placeholder="説明" className={`${inputClass} w-full`} /></td>
-                  <td className="px-4 py-2 text-right"><button onClick={addArea} className={actionButtonClass}><Plus className="w-4 h-4 inline mr-1" />追加</button></td>
+                  <td className="px-4 py-2 w-[108px]">
+                    <IconPicker
+                      value={newQualificationIconKey}
+                      onChange={setNewQualificationIconKey}
+                      fallback={DEFAULT_QUALIFICATION_ICON_KEY}
+                      tone="qualification"
+                    />
+                  </td>
+                  <td className="px-4 py-2">
+                    <input
+                      value={newQualificationName}
+                      onChange={(e) => setNewQualificationName(e.target.value)}
+                      placeholder="新規資格名"
+                      className={`${inputClass} w-full`}
+                    />
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button onClick={addQualification} className={actionButtonClass}>
+                      <Plus className="w-4 h-4 inline mr-1" />
+                      追加
+                    </button>
+                  </td>
                 </tr>
-                {filteredAreas.map((item) => (
+                {filteredQualifications.map((item) => (
                   <tr key={item.id} className={`border-b ${c.borderCard} ${c.bgCardHover}`}>
-                    <td className="px-4 py-2 w-[240px]"><select value={item.siteId} onChange={(e) => setAreas((prev) => prev.map((x) => x.id === item.id ? { ...x, siteId: e.target.value } : x))} className={`${inputClass} w-full`}>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></td>
-                    <td className="px-4 py-2"><input value={item.name} onChange={(e) => setAreas((prev) => prev.map((x) => x.id === item.id ? { ...x, name: e.target.value } : x))} className={`${inputClass} w-full`} /></td>
-                    <td className="px-4 py-2"><input value={item.description} onChange={(e) => setAreas((prev) => prev.map((x) => x.id === item.id ? { ...x, description: e.target.value } : x))} className={`${inputClass} w-full`} /></td>
-                    <td className="px-4 py-2 text-right"><button onClick={() => deleteArea(item.id)} className="p-2 rounded-lg text-rose-500 hover:bg-rose-500/10"><Trash2 className="w-4 h-4" /></button></td>
+                    <td className="px-4 py-2 w-[108px]">
+                      <IconPicker
+                        value={item.iconKey ?? DEFAULT_QUALIFICATION_ICON_KEY}
+                        onChange={(iconKey) =>
+                          setQualifications((prev) =>
+                            prev.map((x) => (x.id === item.id ? { ...x, iconKey } : x)),
+                          )
+                        }
+                        fallback={DEFAULT_QUALIFICATION_ICON_KEY}
+                        tone="qualification"
+                      />
+                    </td>
+                    <td className="px-4 py-2">
+                      <input
+                        value={item.name}
+                        onChange={(e) =>
+                          setQualifications((prev) =>
+                            prev.map((x) => (x.id === item.id ? { ...x, name: e.target.value } : x)),
+                          )
+                        }
+                        className={`${inputClass} w-full`}
+                      />
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        onClick={() => deleteQualification(item.id)}
+                        className="p-2 rounded-lg text-rose-500 hover:bg-rose-500/10"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -538,10 +483,10 @@ export function MasterManagement() {
         </div>
       )}
 
-      {activeTab === "qualification" && (
+      {false && activeTab === "qualification" && (
         <div className={`${cardClass} overflow-hidden`}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px]">
+            <table className="w-full min-w-[920px]">
               <thead>
                 <tr className={`border-b ${c.border}`}>
                   <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>資格名</th>
@@ -568,7 +513,84 @@ export function MasterManagement() {
       {activeTab === "skill" && (
         <div className={`${cardClass} overflow-hidden`}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px]">
+            <table className="w-full min-w-[920px]">
+              <thead>
+                <tr className={`border-b ${c.border}`}>
+                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>アイコン</th>
+                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>スキル名</th>
+                  <th className={`px-4 py-3 text-right text-[12px] ${c.textMuted}`}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className={`border-b ${c.borderCard} ${c.bgSurface}`}>
+                  <td className="px-4 py-2 w-[108px]">
+                    <IconPicker
+                      value={newSkillIconKey}
+                      onChange={setNewSkillIconKey}
+                      fallback={DEFAULT_SKILL_ICON_KEY}
+                      tone="skill"
+                    />
+                  </td>
+                  <td className="px-4 py-2">
+                    <input
+                      value={newSkillName}
+                      onChange={(e) => setNewSkillName(e.target.value)}
+                      placeholder="新規スキル名"
+                      className={`${inputClass} w-full`}
+                    />
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <button onClick={addSkill} className={actionButtonClass}>
+                      <Plus className="w-4 h-4 inline mr-1" />
+                      追加
+                    </button>
+                  </td>
+                </tr>
+                {filteredSkills.map((item) => (
+                  <tr key={item.id} className={`border-b ${c.borderCard} ${c.bgCardHover}`}>
+                    <td className="px-4 py-2 w-[108px]">
+                      <IconPicker
+                        value={item.iconKey ?? DEFAULT_SKILL_ICON_KEY}
+                        onChange={(iconKey) =>
+                          setSkills((prev) =>
+                            prev.map((x) => (x.id === item.id ? { ...x, iconKey } : x)),
+                          )
+                        }
+                        fallback={DEFAULT_SKILL_ICON_KEY}
+                        tone="skill"
+                      />
+                    </td>
+                    <td className="px-4 py-2">
+                      <input
+                        value={item.name}
+                        onChange={(e) =>
+                          setSkills((prev) =>
+                            prev.map((x) => (x.id === item.id ? { ...x, name: e.target.value } : x)),
+                          )
+                        }
+                        className={`${inputClass} w-full`}
+                      />
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      <button
+                        onClick={() => deleteSkill(item.id)}
+                        className="p-2 rounded-lg text-rose-500 hover:bg-rose-500/10"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {false && activeTab === "skill" && (
+        <div className={`${cardClass} overflow-hidden`}>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[920px]">
               <thead>
                 <tr className={`border-b ${c.border}`}>
                   <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>スキル名</th>
@@ -631,49 +653,7 @@ export function MasterManagement() {
         </div>
       )}
 
-      {activeTab === "process" && (
-        <div className={`${cardClass} overflow-hidden`}>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1180px]">
-              <thead>
-                <tr className={`border-b ${c.border}`}>
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>工程名</th>
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>説明</th>
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>所要資格</th>
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>所要スキル</th>
-                  
-                  <th className={`px-4 py-3 text-left text-[12px] ${c.textMuted}`}>標準UPH</th>
-                  <th className={`px-4 py-3 text-right text-[12px] ${c.textMuted}`}>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className={`border-b ${c.borderCard} ${c.bgSurface}`}>
-                  <td className="px-4 py-2"><input value={newProcessName} onChange={(e) => setNewProcessName(e.target.value)} placeholder="新規工程名" className={`${inputClass} w-full`} /></td>
-                  <td className="px-4 py-2"><input value={newProcessDescription} onChange={(e) => setNewProcessDescription(e.target.value)} placeholder="説明" className={`${inputClass} w-full`} /></td>
-                  <td className="px-4 py-2"><MultiSelectChips options={qualifications} selectedIds={newProcessQualificationIds} onChange={setNewProcessQualificationIds} placeholder="所要資格を選択" /></td>
-                  <td className="px-4 py-2"><MultiSelectChips options={skills} selectedIds={newProcessSkillIds} onChange={setNewProcessSkillIds} placeholder="所要スキルを選択" /></td>
-                  
-                  <td className="px-4 py-2 w-[110px]"><input value={newProcessUph} onChange={(e) => setNewProcessUph(e.target.value)} type="number" className={`${inputClass} w-full`} /></td>
-                  <td className="px-4 py-2 text-right"><button onClick={addProcess} className={actionButtonClass}><Plus className="w-4 h-4 inline mr-1" />追加</button></td>
-                </tr>
-                {filteredProcesses.map((item) => (
-                  <tr key={item.id} className={`border-b ${c.borderCard} ${c.bgCardHover}`}>
-                    <td className="px-4 py-2"><input value={item.name} onChange={(e) => setProcesses((prev) => prev.map((x) => x.id === item.id ? { ...x, name: e.target.value } : x))} className={`${inputClass} w-full`} /></td>
-                    <td className="px-4 py-2"><input value={item.description} onChange={(e) => setProcesses((prev) => prev.map((x) => x.id === item.id ? { ...x, description: e.target.value } : x))} className={`${inputClass} w-full`} /></td>
-                    <td className="px-4 py-2"><MultiSelectChips options={qualifications} selectedIds={item.defaultQualificationIds} onChange={(values) => setProcesses((prev) => prev.map((x) => x.id === item.id ? { ...x, defaultQualificationIds: values } : x))} placeholder="所要資格を選択" /></td>
-                    <td className="px-4 py-2"><MultiSelectChips options={skills} selectedIds={item.defaultSkillIds} onChange={(values) => setProcesses((prev) => prev.map((x) => x.id === item.id ? { ...x, defaultSkillIds: values } : x))} placeholder="所要スキルを選択" /></td>
-                    
-                    <td className="px-4 py-2 w-[110px]"><input value={item.defaultUph} onChange={(e) => setProcesses((prev) => prev.map((x) => x.id === item.id ? { ...x, defaultUph: Number(e.target.value) || 0 } : x))} type="number" className={`${inputClass} w-full`} /></td>
-                    <td className="px-4 py-2 text-right"><button onClick={() => deleteProcess(item.id)} className="p-2 rounded-lg text-rose-500 hover:bg-rose-500/10"><Trash2 className="w-4 h-4" /></button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      <div className={`${cardClass} p-3 text-[12px] ${c.textSecondary}`}>ワークフロー定義数: {workflows.length} 件</div>
+      <div className={`${cardClass} p-3 text-[12px] ${c.textSecondary}`}>業務定義数: {workflows.length} 件</div>
     </div>
   );
 }

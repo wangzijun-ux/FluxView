@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   ArrowDownRight,
@@ -42,7 +42,7 @@ import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import { processColorClasses } from "./processStore";
 import { DEFAULT_SHIFT_END_MINUTES, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
-import type { AreaMaster, ProcessMaster, Shipper, WorkflowDefinition } from "./masterStore";
+import type { ProcessMaster, Shipper, Site, WorkflowDefinition } from "./masterStore";
 
 const COLORS = ["cyan", "emerald", "violet", "amber", "blue", "rose", "orange", "teal", "indigo"] as const;
 
@@ -160,9 +160,9 @@ function pickColor(index: number) {
   return COLORS[index % COLORS.length];
 }
 
-function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[], areas: AreaMaster[], processes: ProcessMaster[]) {
+function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[], sites: Site[], processes: ProcessMaster[]) {
   const shipperMap = new Map(shippers.map((item) => [item.id, item]));
-  const areaMap = new Map(areas.map((item) => [item.id, item]));
+  const siteMap = new Map(sites.map((item) => [item.id, item]));
   const processMap = new Map(processes.map((item) => [item.id, item]));
 
   return workflows
@@ -173,8 +173,8 @@ function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[]
       workflowName: workflow.name,
       shipperId: workflow.shipperId,
       shipperName: shipperMap.get(workflow.shipperId)?.name ?? "未設定荷主",
-      areaId: workflow.areaId,
-      areaName: areaMap.get(workflow.areaId)?.name ?? workflow.name,
+      areaId: workflow.siteId,
+      areaName: siteMap.get(workflow.siteId)?.name ?? workflow.name,
       color: pickColor(workflowIndex),
       steps: workflow.steps.map((step, stepIndex) => {
         const process = processMap.get(step.processId);
@@ -191,8 +191,8 @@ function buildWorkflowViews(workflows: WorkflowDefinition[], shippers: Shipper[]
           workflowName: workflow.name,
           shipperId: workflow.shipperId,
           shipperName: shipperMap.get(workflow.shipperId)?.name ?? "未設定荷主",
-          areaId: workflow.areaId,
-          areaName: areaMap.get(workflow.areaId)?.name ?? workflow.name,
+          areaId: workflow.siteId,
+          areaName: siteMap.get(workflow.siteId)?.name ?? workflow.name,
           processId: step.processId,
           processName: process?.name ?? `工程${stepIndex + 1}`,
           color: pickColor(workflowIndex + stepIndex),
@@ -285,7 +285,7 @@ function buildHourlyData(totalPlanned: number, selectedDate: string, today: stri
 
 export function Dashboard() {
   const c = useThemeColors();
-  const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
+  const { shippers, sites, processes, workflows, selectedSiteId } = useMasterData();
   const [selectedDate] = useState(() => toDateInput(new Date()));
   const now = new Date();
   const today = toDateInput(now);
@@ -295,8 +295,8 @@ export function Dashboard() {
   const dayPlans = planStore[selectedDate] ?? {};
 
   const workflowViews = useMemo(
-    () => buildWorkflowViews(workflows.filter((workflow) => workflow.siteId === selectedSiteId), shippers, areas, processes),
-    [workflows, selectedSiteId, shippers, areas, processes],
+    () => buildWorkflowViews(workflows.filter((workflow) => workflow.siteId === selectedSiteId), shippers, sites, processes),
+    [workflows, selectedSiteId, shippers, sites, processes],
   );
 
   const workflowSummaries = useMemo<WorkflowSummary[]>(() => {
@@ -428,7 +428,7 @@ export function Dashboard() {
 
   const kpiData = [
     {
-      label: "対象ワークフロー",
+      label: "対象業務",
       value: String(workflowSummaries.length),
       total: "件",
       change: workflowSummaries.length > 0 ? `+${shipperGroups.length}` : "0",
@@ -455,7 +455,7 @@ export function Dashboard() {
       color: "violet",
     },
     {
-      label: "遅延ワークフロー",
+      label: "遅延業務",
       value: String(delayedWorkflowCount),
       total: "件",
       change: delayedWorkflowCount > 0 ? `+${delayedWorkflowCount}` : "0",
@@ -491,7 +491,7 @@ export function Dashboard() {
       : [
           {
             time: formatTime(nowMinutes),
-            message: "大きな遅延は検出されていません。ワークフローは概ね計画通りです。",
+            message: "大きな遅延は検出されていません。業務は概ね計画通りです。",
             level: "info",
           },
           ...info,
@@ -651,19 +651,19 @@ export function Dashboard() {
         <div className={`xl:col-span-2 rounded-xl border p-5 ${c.bgCard} ${c.border}`}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h3 className={`text-[16px] font-semibold ${c.textPrimary}`}>荷主別ワークフロー進捗</h3>
-              <p className={`text-[13px] ${c.textMuted}`}>選択中拠点に紐づくワークフローを荷主単位で表示します。</p>
+              <h3 className={`text-[16px] font-semibold ${c.textPrimary}`}>荷主別業務進捗</h3>
+              <p className={`text-[13px] ${c.textMuted}`}>選択中拠点に紐づく業務を荷主単位で表示します。</p>
             </div>
             <div className="flex items-center gap-2 text-[12px]">
               <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>{shipperGroups.length}荷主</span>
-              <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>{workflowSummaries.length}WF</span>
+              <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>{workflowSummaries.length}件</span>
             </div>
           </div>
 
           {shipperGroups.length === 0 ? (
             <div className={`rounded-2xl border px-4 py-10 text-center ${c.bgSurface} ${c.borderCard}`}>
-              <div className={`text-[15px] font-semibold ${c.textPrimary}`}>ワークフローがありません</div>
-              <div className={`mt-2 text-[13px] ${c.textSecondary}`}>この拠点に紐づく workflow を登録すると、ここに進捗が表示されます。</div>
+              <div className={`text-[15px] font-semibold ${c.textPrimary}`}>業務がありません</div>
+              <div className={`mt-2 text-[13px] ${c.textSecondary}`}>この拠点に紐づく業務を登録すると、ここに進捗が表示されます。</div>
             </div>
           ) : (
             <div className="space-y-4">
@@ -672,7 +672,7 @@ export function Dashboard() {
                   <div className={`flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 ${c.bgSurface} ${c.borderCard}`}>
                     <div>
                       <div className={`text-[15px] font-semibold ${c.textPrimary}`}>{group.shipperName}</div>
-                      <div className={`mt-1 text-[12px] ${c.textMuted}`}>{group.workflowCount} 件のワークフロー</div>
+                      <div className={`mt-1 text-[12px] ${c.textMuted}`}>{group.workflowCount} 件の業務</div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 text-[12px]">
                       <span className={`rounded-full px-2.5 py-1 ${c.bgCard} ${c.textSecondary}`}>
@@ -699,8 +699,7 @@ export function Dashboard() {
                         <article key={workflow.id} className={`rounded-2xl border p-4 ${c.bgCard} ${c.borderCard}`}>
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                              <div className={`truncate text-[14px] font-semibold ${c.textPrimary}`}>{workflow.areaName}</div>
-                              <div className={`mt-1 truncate text-[12px] ${c.textSecondary}`}>{workflow.workflowName}</div>
+                              <div className={`truncate text-[14px] font-semibold ${c.textPrimary}`}>{workflow.workflowName}</div>
                             </div>
                             <div className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium ${status.className}`}>
                               <StatusIcon className="h-3.5 w-3.5" />

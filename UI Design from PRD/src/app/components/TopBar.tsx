@@ -22,10 +22,10 @@ const pageLabels: Record<string, string> = {
   "/performance": "作業可視化",
   "/submission-records": "送信実績",
   "/process-summary": "進捗管理",
-  "/attendance": "勤怠管理",
+  "/attendance": "シフト管理",
   "/cost-analysis": "コスト分析",
   "/dispatch": "派遣管理",
-  "/workflow-management": "ワークフロー管理",
+  "/workflow-management": "業務管理",
   "/master-management": "マスタ管理",
   "/user-management": "ユーザー管理",
   "/notifications": "通知管理",
@@ -33,16 +33,16 @@ const pageLabels: Record<string, string> = {
 };
 
 const pageSubtitles: Record<string, string> = {
-  "/": "当日の進捗とワークフロー状況を俯瞰します。",
+  "/": "当日の進捗と業務状況を俯瞰します。",
   "/live-command": "時間帯ごとの人員配置を調整します。",
-  "/performance": "現場配置の結果をワークフロー別・作業員別に可視化します。",
-  "/submission-records": "現場作業者が送信した実績ログを工程別に確認します。",
-  "/process-summary": "全体把握と予定数管理を同じ画面で行います。",
-  "/attendance": "勤務計画とシフト調整を行います。",
+  "/performance": "現場配置の結果を業務別・作業員別に可視化します。",
+  "/submission-records": "現場作業者が送信した実績ログを確認し、管理者評価を付与します。",
+  "/process-summary": "業務別・工程別に予定数入力と進捗確認を行います。",
+  "/attendance": "月次シフトの作成・取込・調整を行います。",
   "/cost-analysis": "雇用区分別の原価と予算差異を分析します。",
   "/dispatch": "派遣会社別の予定・実績・稼働率を管理します。",
-  "/workflow-management": "工程設定と作業順序をテーブル形式で管理します。",
-  "/master-management": "荷主・拠点・エリア・資格・スキル・派遣会社・工程を管理します。",
+  "/workflow-management": "拠点に紐づく業務と工程設定を管理します。",
+  "/master-management": "荷主・拠点・資格・スキル・派遣会社を管理します。",
   "/user-management": "ユーザー管理とロール・権限設定を行います。",
   "/notifications": "通知作成・配信状況・既読状況を管理します。",
   "/settings": "システム設定、デバイス設定、外部連携を管理します。",
@@ -58,7 +58,7 @@ export function TopBar() {
   const workflowCount = activeSite ? workflows.filter((workflow) => workflow.siteId === activeSite.id).length : workflows.length;
   const notificationCount = Math.max(1, workflowCount);
   const pageLabel = pageLabels[location.pathname] ?? "FluxView";
-  const pageSubtitle = pageSubtitles[location.pathname] ?? `${activeSite?.name ?? "拠点未選択"} | ワークフロー ${workflowCount} 件`;
+  const pageSubtitle = pageSubtitles[location.pathname] ?? `${activeSite?.name ?? "拠点未選択"} | 業務 ${workflowCount} 件`;
   return (
     <AppBar
       position="sticky"

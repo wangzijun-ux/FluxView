@@ -34,6 +34,7 @@ import {
 import { alpha } from "@mui/material/styles";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { clearDemoAccess } from "../lib/demoAccess";
 import { useTheme } from "./ThemeContext";
 
 type NavItem = {
@@ -48,10 +49,10 @@ const navItems: NavItem[] = [
   { icon: CalendarClock, label: "作業可視化", path: "/performance" },
   { icon: Send, label: "送信実績", path: "/submission-records" },
   { icon: BarChart3, label: "進捗管理", path: "/process-summary" },
-  { icon: Clock, label: "勤怠管理", path: "/attendance" },
+  { icon: Clock, label: "シフト管理", path: "/attendance" },
   { icon: PieChart, label: "コスト分析", path: "/cost-analysis" },
   { icon: Building2, label: "派遣管理", path: "/dispatch" },
-  { icon: GitBranch, label: "ワークフロー管理", path: "/workflow-management" },
+  { icon: GitBranch, label: "業務管理", path: "/workflow-management" },
   { icon: Database, label: "マスタ管理", path: "/master-management" },
   { icon: UserCog, label: "ユーザー管理", path: "/user-management" },
   { icon: Bell, label: "通知管理", path: "/notifications" },
@@ -220,10 +221,10 @@ export function Sidebar() {
                 {!collapsed && (
                   <Box sx={{ minWidth: 0 }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 700 }} noWrap>
-                      Admin User
+                      管理者
                     </Typography>
                     <Typography variant="caption" color="text.secondary" noWrap>
-                      Administrator
+                      システム管理者
                     </Typography>
                   </Box>
                 )}
@@ -268,7 +269,10 @@ export function Sidebar() {
 
             <Tooltip title={collapsed ? "ログアウト" : ""} placement="right">
               <ListItemButton
-                onClick={() => navigate("/login")}
+                onClick={() => {
+                  clearDemoAccess();
+                  navigate("/login");
+                }}
                 sx={{
                   minHeight: 40,
                   justifyContent: collapsed ? "center" : "flex-start",

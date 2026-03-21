@@ -1,5 +1,4 @@
 import {
-  DEPLOYMENT_WORKERS,
   buildBaseDeploymentSnapshot,
   buildDeploymentWorkflows,
   buildSiteScope,
@@ -7,13 +6,15 @@ import {
   createTimeSlots,
   materializeSnapshot,
   parseTimeLabel,
+  readDeploymentWorkers,
   readFieldDeploymentSnapshots,
   type AssignmentSnapshot,
   type DeploymentStep,
   type DeploymentWorkflow,
 } from "./fieldDeploymentStore";
 import { buildStepPlanDefaults, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
-import type { AreaMaster, ProcessMaster, Shipper, Site, WorkflowDefinition } from "./masterStore";
+import type { ProcessMaster, Shipper, Site, WorkflowDefinition } from "./masterStore";
+import { resolveDeploymentWorkerIdForUser } from "./workforceStore";
 
 export const WORKER_SESSION_STORAGE_KEY = "fluxview-worker-session-v1";
 export const WORKER_AUTH_STORAGE_KEY = "fluxview-worker-auth-v1";
@@ -60,7 +61,6 @@ export interface WorkerTaskRecord {
   workflowId: string;
   workflowName: string;
   shipperName: string;
-  areaName: string;
   processName: string;
   color: string;
   startTime: string;
@@ -71,14 +71,22 @@ export interface WorkerTaskRecord {
   order: number;
 }
 
+export interface WorkerTaskSubmissionLog {
+  id: string;
+  quantity: number;
+  submittedAt: string;
+}
+
 export interface WorkerTaskProgressEntry {
   status: WorkerTaskStatus;
   startedAt?: string;
   completedAt?: string;
+  draftQuantity?: number;
   reportedQuantity?: number;
   lastReportedAt?: string;
   pauseStartedAt?: string;
   totalPausedMinutes?: number;
+  submissionLogs?: WorkerTaskSubmissionLog[];
 }
 
 export interface WorkerSubmissionRecord {
@@ -92,7 +100,6 @@ export interface WorkerSubmissionRecord {
   workflowId: string;
   workflowName: string;
   shipperName: string;
-  areaName: string;
   processName: string;
   scheduledStartTime: string;
   scheduledEndTime: string;
@@ -209,6 +216,77 @@ function findAssignedStepId(snapshot: SnapshotLike, workerId: string) {
   return null;
 }
 
+function normalizeWorkerTaskSubmissionLog(
+  log: Partial<WorkerTaskSubmissionLog>,
+  fallbackId: string,
+  index: number,
+) {
+  const quantity = Math.max(0, Number(log.quantity ?? 0));
+  const submittedAt = typeof log.submittedAt === "string" ? log.submittedAt : "";
+  if (quantity <= 0 || !submittedAt) return null;
+
+  return {
+    id: typeof log.id === "string" && log.id ? log.id : `${fallbackId}:${index + 1}`,
+    quantity,
+    submittedAt,
+  } satisfies WorkerTaskSubmissionLog;
+}
+
+export function getWorkerTaskSubmissionLogs(entry?: WorkerTaskProgressEntry) {
+  if (!entry) return [] satisfies WorkerTaskSubmissionLog[];
+
+  const explicitLogs = Array.isArray(entry.submissionLogs)
+    ? entry.submissionLogs
+        .map((log, index) => normalizeWorkerTaskSubmissionLog(log, "submission", index))
+        .filter((log): log is WorkerTaskSubmissionLog => Boolean(log))
+        .sort((left, right) => new Date(left.submittedAt).getTime() - new Date(right.submittedAt).getTime())
+    : [];
+
+  if (explicitLogs.length > 0) return explicitLogs;
+
+  const legacyQuantity = Math.max(0, Number(entry.reportedQuantity ?? 0));
+  const legacySubmittedAt = entry.lastReportedAt ?? entry.completedAt ?? entry.startedAt;
+  if (legacyQuantity <= 0 || !legacySubmittedAt) return [] satisfies WorkerTaskSubmissionLog[];
+
+  return [
+    {
+      id: `legacy:${legacySubmittedAt}`,
+      quantity: legacyQuantity,
+      submittedAt: legacySubmittedAt,
+    },
+  ] satisfies WorkerTaskSubmissionLog[];
+}
+
+export function getWorkerTaskReportedQuantity(entry?: WorkerTaskProgressEntry) {
+  const logs = getWorkerTaskSubmissionLogs(entry);
+  if (logs.length > 0) {
+    return logs.reduce((sum, log) => sum + log.quantity, 0);
+  }
+  return Math.max(0, Number(entry?.reportedQuantity ?? 0));
+}
+
+export function getWorkerTaskLastReportedAt(entry?: WorkerTaskProgressEntry) {
+  const logs = getWorkerTaskSubmissionLogs(entry);
+  if (logs.length > 0) return logs[logs.length - 1]?.submittedAt;
+  return entry?.lastReportedAt;
+}
+
+function normalizeWorkerTaskProgressEntry(entry?: WorkerTaskProgressEntry) {
+  if (!entry) return { status: "pending" as const } satisfies WorkerTaskProgressEntry;
+
+  const submissionLogs = getWorkerTaskSubmissionLogs(entry);
+  const reportedQuantity = getWorkerTaskReportedQuantity({ ...entry, submissionLogs });
+  const lastReportedAt = getWorkerTaskLastReportedAt({ ...entry, submissionLogs });
+
+  return {
+    ...entry,
+    draftQuantity: Math.max(0, Number(entry.draftQuantity ?? 0)),
+    reportedQuantity,
+    lastReportedAt,
+    submissionLogs,
+  } satisfies WorkerTaskProgressEntry;
+}
+
 export function getDefaultWorkerSession(defaultSiteId: string, fallbackWorkerId: string) {
   const stored = readStorage<Partial<WorkerSession> | null>(WORKER_SESSION_STORAGE_KEY, null);
   if (stored?.workerId && stored?.siteId) {
@@ -235,11 +313,11 @@ export function clearWorkerAuthSession() {
 }
 
 export function resolveDemoWorkerId(userId: string) {
-  const candidateWorkers = DEPLOYMENT_WORKERS.filter((worker) => worker.status === "active");
-  const workers = candidateWorkers.length > 0 ? candidateWorkers : DEPLOYMENT_WORKERS;
-  const fallbackWorkerId = workers[0]?.id ?? "worker-1";
-  if (!userId) return fallbackWorkerId;
-  return workers[hashString(userId) % workers.length]?.id ?? fallbackWorkerId;
+  if (userId) {
+    return resolveDeploymentWorkerIdForUser(userId);
+  }
+
+  return readDeploymentWorkers().find((worker) => worker.status === "active")?.id ?? "worker-1";
 }
 
 export function readWorkerProgress(dateKey: string, workerId: string) {
@@ -247,7 +325,10 @@ export function readWorkerProgress(dateKey: string, workerId: string) {
     WORKER_PROGRESS_STORAGE_KEY,
     {},
   );
-  return stored[dateKey]?.[workerId] ?? {};
+  const progress = stored[dateKey]?.[workerId] ?? {};
+  return Object.fromEntries(
+    Object.entries(progress).map(([taskId, entry]) => [taskId, normalizeWorkerTaskProgressEntry(entry)]),
+  ) as Record<string, WorkerTaskProgressEntry>;
 }
 
 export function saveWorkerProgress(dateKey: string, workerId: string, progress: Record<string, WorkerTaskProgressEntry>) {
@@ -255,11 +336,14 @@ export function saveWorkerProgress(dateKey: string, workerId: string, progress: 
     WORKER_PROGRESS_STORAGE_KEY,
     {},
   );
+  const normalizedProgress = Object.fromEntries(
+    Object.entries(progress).map(([taskId, entry]) => [taskId, normalizeWorkerTaskProgressEntry(entry)]),
+  ) as Record<string, WorkerTaskProgressEntry>;
   writeStorage(WORKER_PROGRESS_STORAGE_KEY, {
     ...stored,
     [dateKey]: {
       ...(stored[dateKey] ?? {}),
-      [workerId]: progress,
+      [workerId]: normalizedProgress,
     },
   });
 }
@@ -277,14 +361,13 @@ export function buildWorkerSiteDeploymentData(
   sites: Site[],
   workflows: WorkflowDefinition[],
   shippers: Shipper[],
-  areas: AreaMaster[],
   processes: ProcessMaster[],
 ) {
   const siteScope = buildSiteScope(sites, selectedSiteId);
   const workflowViews = buildDeploymentWorkflows(
     workflows.filter((workflow) => siteScope.siteIds.includes(workflow.siteId)),
     shippers,
-    areas,
+    sites,
     processes,
   );
   const steps = workflowViews.flatMap((workflow) => workflow.steps);
@@ -295,8 +378,9 @@ export function buildWorkerSiteDeploymentData(
     return sortTimeLabels(Array.from(new Set([...defaultTimeLabels, ...storedLabels])));
   })();
 
-  const baseSnapshot = buildBaseDeploymentSnapshot(steps, DEPLOYMENT_WORKERS);
-  const seededSnapshots = createSeededDeploymentSnapshots(timeLabels, steps, DEPLOYMENT_WORKERS, baseSnapshot);
+  const deploymentWorkers = readDeploymentWorkers();
+  const baseSnapshot = buildBaseDeploymentSnapshot(steps, deploymentWorkers);
+  const seededSnapshots = createSeededDeploymentSnapshots(timeLabels, steps, deploymentWorkers, baseSnapshot);
   const snapshotsByTime = Object.fromEntries(
     timeLabels.map((timeLabel) => [
       timeLabel,
@@ -319,7 +403,7 @@ export function pickFallbackWorkerId(siteData: WorkerSiteDeploymentData) {
     .flatMap((timeLabel) => Object.values(siteData.snapshotsByTime[timeLabel] ?? {}).flat())
     .filter((workerId, index, array): workerId is string => Boolean(workerId) && array.indexOf(workerId) === index);
 
-  return assignedWorkerIds[0] ?? DEPLOYMENT_WORKERS.find((worker) => worker.status === "active")?.id ?? "worker-1";
+  return assignedWorkerIds[0] ?? readDeploymentWorkers().find((worker) => worker.status === "active")?.id ?? "worker-1";
 }
 
 export function buildWorkerDayTasks(siteData: WorkerSiteDeploymentData, workerId: string) {
@@ -355,7 +439,6 @@ export function buildWorkerDayTasks(siteData: WorkerSiteDeploymentData, workerId
         workflowId: step.workflowId,
         workflowName: step.workflowName,
         shipperName: step.shipperName,
-        areaName: step.areaName,
         processName: step.processName,
         color: step.color,
         startTime: formatTimeLabel(clippedStartMinutes),
@@ -366,16 +449,19 @@ export function buildWorkerDayTasks(siteData: WorkerSiteDeploymentData, workerId
     });
   });
 
-  rawTasks.sort((left, right) => left.startMinutes - right.startMinutes || left.processName.localeCompare(right.processName, "ja"));
+  rawTasks.sort(
+    (left, right) =>
+      left.startMinutes - right.startMinutes ||
+      left.shipperName.localeCompare(right.shipperName, "ja") ||
+      left.processName.localeCompare(right.processName, "ja"),
+  );
 
   const merged: Array<Omit<WorkerTaskRecord, "id" | "durationMinutes" | "order">> = [];
   rawTasks.forEach((task) => {
     const previous = merged[merged.length - 1];
     if (
       previous &&
-      previous.workflowId === task.workflowId &&
-      previous.processName === task.processName &&
-      previous.areaName === task.areaName &&
+      previous.stepId === task.stepId &&
       previous.endMinutes === task.startMinutes
     ) {
       previous.endMinutes = task.endMinutes;
@@ -387,7 +473,7 @@ export function buildWorkerDayTasks(siteData: WorkerSiteDeploymentData, workerId
 
   return merged.map((task, index) => ({
     ...task,
-    id: `${workerId}:${task.workflowId}:${task.processName}:${task.startTime}`,
+    id: `${workerId}:${task.stepId}:${task.startTime}`,
     durationMinutes: task.endMinutes - task.startMinutes,
     order: index + 1,
   })) satisfies WorkerTaskRecord[];
@@ -407,31 +493,62 @@ export function buildWorkerSubmissionRecords(params: {
   sites: Site[];
   workflows: WorkflowDefinition[];
   shippers: Shipper[];
-  areas: AreaMaster[];
   processes: ProcessMaster[];
   now?: Date;
 }) {
-  const { dateKey, selectedSiteId, sites, workflows, shippers, areas, processes, now = new Date() } = params;
-  const siteData = buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, areas, processes);
-  const workerMap = new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker]));
+  const { dateKey, selectedSiteId, sites, workflows, shippers, processes, now = new Date() } = params;
+  const siteData = buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, processes);
+  const deploymentWorkers = readDeploymentWorkers();
+  const workerMap = new Map(deploymentWorkers.map((worker) => [worker.id, worker]));
 
-  return DEPLOYMENT_WORKERS.flatMap((worker) => {
+  return deploymentWorkers.flatMap((worker) => {
     const progressByTaskId = readWorkerProgress(dateKey, worker.id);
     const tasks = buildWorkerDayTasks(siteData, worker.id);
 
     return tasks.flatMap((task) => {
       const progress = progressByTaskId[task.id];
       if (!progress) return [];
+      const submissionLogs = getWorkerTaskSubmissionLogs(progress);
 
       const hasActivity =
         Boolean(progress.startedAt) ||
         Boolean(progress.completedAt) ||
-        Boolean(progress.lastReportedAt) ||
+        Boolean(getWorkerTaskLastReportedAt(progress)) ||
         Boolean(progress.pauseStartedAt) ||
-        (progress.reportedQuantity ?? 0) > 0 ||
+        submissionLogs.length > 0 ||
+        getWorkerTaskReportedQuantity(progress) > 0 ||
         progress.status !== "pending";
 
       if (!hasActivity) return [];
+
+      if (submissionLogs.length > 0) {
+        return submissionLogs.map((submissionLog, index, array) => ({
+          id: `${dateKey}:${task.id}:${submissionLog.id}`,
+          dateKey,
+          siteId: task.siteId,
+          siteName: task.siteName,
+          workerId: worker.id,
+          workerName: workerMap.get(worker.id)?.name ?? worker.id,
+          stepId: task.stepId,
+          workflowId: task.workflowId,
+          workflowName: task.workflowName,
+          shipperName: task.shipperName,
+          processName: task.processName,
+          scheduledStartTime: task.startTime,
+          scheduledEndTime: task.endTime,
+          startedAt: progress.startedAt,
+          completedAt: index === array.length - 1 ? progress.completedAt : undefined,
+          lastReportedAt: submissionLog.submittedAt,
+          reportedQuantity: submissionLog.quantity,
+          pausedMinutes: index === array.length - 1 ? getPausedMinutes(progress, now) : 0,
+          status:
+            index === array.length - 1
+              ? progress.status
+              : progress.completedAt
+                ? "working"
+                : progress.status,
+        })) satisfies WorkerSubmissionRecord[];
+      }
 
       return {
         id: `${dateKey}:${task.id}`,
@@ -444,14 +561,13 @@ export function buildWorkerSubmissionRecords(params: {
         workflowId: task.workflowId,
         workflowName: task.workflowName,
         shipperName: task.shipperName,
-        areaName: task.areaName,
         processName: task.processName,
         scheduledStartTime: task.startTime,
         scheduledEndTime: task.endTime,
         startedAt: progress.startedAt,
         completedAt: progress.completedAt,
-        lastReportedAt: progress.lastReportedAt,
-        reportedQuantity: progress.reportedQuantity ?? 0,
+        lastReportedAt: getWorkerTaskLastReportedAt(progress),
+        reportedQuantity: getWorkerTaskReportedQuantity(progress),
         pausedMinutes: getPausedMinutes(progress, now),
         status: progress.status,
       } satisfies WorkerSubmissionRecord;
@@ -496,13 +612,12 @@ export function seedDemoWorkerSubmissionData(params: {
   sites: Site[];
   workflows: WorkflowDefinition[];
   shippers: Shipper[];
-  areas: AreaMaster[];
   processes: ProcessMaster[];
   date?: Date;
 }) {
-  const { selectedSiteId, sites, workflows, shippers, areas, processes, date = new Date() } = params;
+  const { selectedSiteId, sites, workflows, shippers, processes, date = new Date() } = params;
   const dateKey = formatLocalDateKey(date);
-  const siteData = buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, areas, processes);
+  const siteData = buildWorkerSiteDeploymentData(selectedSiteId, sites, workflows, shippers, processes);
   const stepMap = new Map(siteData.steps.map((step) => [step.id, step]));
   const stepPlanMap = buildStepPlanMap(siteData, dateKey);
 
@@ -536,8 +651,9 @@ export function seedDemoWorkerSubmissionData(params: {
 
   const generatedByWorker = new Map<string, Record<string, WorkerTaskProgressEntry>>();
   const tasksByStep = new Map<string, SeedTask[]>();
+  const deploymentWorkers = readDeploymentWorkers();
 
-  DEPLOYMENT_WORKERS.forEach((worker) => {
+  deploymentWorkers.forEach((worker) => {
     const tasks = buildWorkerDayTasks(siteData, worker.id);
     if (tasks.length === 0) return;
 
@@ -638,6 +754,21 @@ export function seedDemoWorkerSubmissionData(params: {
                 endSeconds,
               ),
               reportedQuantity,
+              draftQuantity: 0,
+              submissionLogs:
+                reportedQuantity > 0
+                  ? [
+                      {
+                        id: `${taskSeed.task.id}:seed-1`,
+                        quantity: reportedQuantity,
+                        submittedAt: toDateTimeIsoFromMinutes(
+                          date,
+                          clampNumber(nowMinutes - (taskSeed.isPaused ? 11 : 4), taskSeed.startedMinutes + 3, nowMinutes - 1),
+                          endSeconds,
+                        ),
+                      },
+                    ]
+                  : [],
               totalPausedMinutes: taskSeed.isPaused ? 5 + (taskSeed.seed % 14) : 0,
               pauseStartedAt: taskSeed.isPaused
                 ? toDateTimeIsoFromMinutes(date, clampNumber(nowMinutes - 9, taskSeed.startedMinutes + 4, nowMinutes - 1))
@@ -653,6 +784,21 @@ export function seedDemoWorkerSubmissionData(params: {
                 (endSeconds + 11) % 60,
               ),
               reportedQuantity,
+              draftQuantity: 0,
+              submissionLogs:
+                reportedQuantity > 0
+                  ? [
+                      {
+                        id: `${taskSeed.task.id}:seed-1`,
+                        quantity: reportedQuantity,
+                        submittedAt: toDateTimeIsoFromMinutes(
+                          date,
+                          clampNumber(taskSeed.finishedMinutes - 2, taskSeed.startedMinutes + 2, taskSeed.finishedMinutes),
+                          (endSeconds + 11) % 60,
+                        ),
+                      },
+                    ]
+                  : [],
               totalPausedMinutes: taskSeed.seed % 6 === 0 ? 3 + (taskSeed.seed % 10) : 0,
             };
 
@@ -665,7 +811,12 @@ export function seedDemoWorkerSubmissionData(params: {
     const activityCount = generatedTaskIds.filter((taskId) => {
       if (!currentSiteTaskIds.has(taskId)) return false;
       const entry = generatedEntries[taskId];
-      return Boolean(entry.startedAt) || Boolean(entry.completedAt) || Boolean(entry.lastReportedAt) || (entry.reportedQuantity ?? 0) > 0;
+      return (
+        Boolean(entry.startedAt) ||
+        Boolean(entry.completedAt) ||
+        Boolean(getWorkerTaskLastReportedAt(entry)) ||
+        getWorkerTaskReportedQuantity(entry) > 0
+      );
     }).length;
 
     if (activityCount === 0) return;
@@ -686,7 +837,6 @@ export function seedDemoWorkerSubmissionData(params: {
     sites,
     workflows,
     shippers,
-    areas,
     processes,
     now: current,
   }).length;
@@ -698,11 +848,10 @@ export function ensureDemoWorkerSubmissionData(params: {
   sites: Site[];
   workflows: WorkflowDefinition[];
   shippers: Shipper[];
-  areas: AreaMaster[];
   processes: ProcessMaster[];
   date?: Date;
 }) {
-  const { sites, workflows, shippers, areas, processes, date = new Date() } = params;
+  const { sites, workflows, shippers, processes, date = new Date() } = params;
   const dateKey = formatLocalDateKey(date);
   const targetSiteIds = Array.from(new Set(workflows.map((workflow) => workflow.siteId).filter(Boolean)));
 
@@ -718,7 +867,6 @@ export function ensureDemoWorkerSubmissionData(params: {
       sites,
       workflows,
       shippers,
-      areas,
       processes,
       now: date,
     });
@@ -732,7 +880,6 @@ export function ensureDemoWorkerSubmissionData(params: {
       sites,
       workflows,
       shippers,
-      areas,
       processes,
       date,
     });
@@ -756,8 +903,8 @@ export function buildDefaultAnnouncements(siteName: string, date = new Date()) {
       siteId: "",
       workerId: null,
       type: "announce",
-      title: "全体連絡",
-      message: `${siteName} の本日の作業開始前に、安全確認と最新の配置通知を確認してください。`,
+      title: "朝礼連絡",
+      message: `${siteName} の本日の作業は 06:00 開始です。配置、注意事項、引継ぎ内容を確認してから入場してください。`,
       createdAt: toDateTimeIso(date, "05:00"),
       deliverAt: toDateTimeIso(date, "05:00"),
     },
@@ -788,7 +935,7 @@ export function pushAssignmentChangeNotifications(params: {
   effectiveTime: string;
   previousSnapshot: SnapshotLike;
   nextSnapshot: SnapshotLike;
-  stepMap: Map<string, { areaName: string; processName: string }>;
+  stepMap: Map<string, { workflowName: string; processName: string }>;
   workerMap: Map<string, { id: string; name: string }>;
   now?: Date;
 }) {
@@ -811,7 +958,7 @@ export function pushAssignmentChangeNotifications(params: {
   );
 
   const created = now.toISOString();
-  const generated = changedWorkerIds.flatMap((workerId) => {
+  const generated: WorkerNotificationRecord[] = changedWorkerIds.flatMap((workerId) => {
     const worker = workerMap.get(workerId);
     if (!worker) return [];
 
@@ -820,39 +967,39 @@ export function pushAssignmentChangeNotifications(params: {
     const nextStep = stepMap.get(nextStepId ?? "");
 
     const changeMessage = nextStep
-      ? `${effectiveTime} から ${nextStep.areaName} / ${nextStep.processName} を担当してください。`
-      : `${effectiveTime} から現場待機に変更されます。`;
+      ? effectiveTime + " から " + nextStep.workflowName + " / " + nextStep.processName + " を開始します。"
+      : effectiveTime + " の配置が変更されました。";
     const moveDetail = previousStep && nextStep
-      ? `${previousStep.areaName} / ${previousStep.processName} から ${nextStep.areaName} / ${nextStep.processName} へ変更されます。`
+      ? previousStep.workflowName + " / " + previousStep.processName + " → " + nextStep.workflowName + " / " + nextStep.processName
       : changeMessage;
     const reminderMessage = nextStep
-      ? `5分後の ${effectiveTime} に ${nextStep.areaName} / ${nextStep.processName} へ移動してください。`
-      : `5分後の ${effectiveTime} から現場待機に切り替わります。`;
+      ? effectiveTime + " に " + nextStep.workflowName + " / " + nextStep.processName + " へ移動してください。"
+      : effectiveTime + " の配置変更があります。";
 
     return [
       {
-        id: `assignment:${siteId}:${workerId}:${effectiveTime}`,
+        id: "assignment:" + siteId + ":" + workerId + ":" + effectiveTime,
         siteId,
         workerId,
         type: "assignment",
-        title: "配置変更のお知らせ",
+        title: "配置変更",
         message: moveDetail,
         createdAt: created,
         deliverAt: created,
         effectiveAt: effectiveTime,
       },
       {
-        id: `reminder:${siteId}:${workerId}:${effectiveTime}`,
+        id: "reminder:" + siteId + ":" + workerId + ":" + effectiveTime,
         siteId,
         workerId,
         type: "reminder",
-        title: "まもなく配置変更",
+        title: "移動リマインド",
         message: reminderMessage,
         createdAt: created,
         deliverAt: toDateTimeIso(now, reminderTime),
         effectiveAt: effectiveTime,
       },
-    ] satisfies WorkerNotificationRecord[];
+    ];
   });
 
   saveWorkerNotifications([...existing, ...generated]);

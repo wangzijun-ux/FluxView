@@ -133,10 +133,10 @@ function readUserCandidates() {
 
 function createSeedNotifications(nowIso: string): NotificationRecord[] {
   return [
-    { id: "N001", title: "B棟への移動指示", message: "格納エリアの人員不足のため、検品完了後にB棟へ移動してください。", type: "move", status: "sent", targetMode: "selected-workers", targetSiteId: "", targetUserIds: [], targetLabel: "田中太郎、佐藤花子 他3名", createdAt: nowIso, sentAt: nowIso, readRate: 80, source: "system" },
+    { id: "N001", title: "B棟への移動指示", message: "B棟の人員不足のため、検品完了後にB棟へ移動してください。", type: "move", status: "sent", targetMode: "selected-workers", targetSiteId: "", targetUserIds: [], targetLabel: "田中太郎、佐藤花子 他3名", createdAt: nowIso, sentAt: nowIso, readRate: 80, source: "system" },
     { id: "N002", title: "安全注意: 3番フォークリフト点検中", message: "A棟3番レーンのフォークリフトが定期点検中です。迂回路を使用してください。", type: "safety", status: "sent", targetMode: "site-workers", targetSiteId: "", targetUserIds: [], targetLabel: "A棟全作業員", createdAt: nowIso, sentAt: new Date(new Date(nowIso).getTime() - 1000 * 60 * 42).toISOString(), readRate: 95, source: "system" },
     { id: "N003", title: "明日の出勤時間変更", message: "大口出荷対応のため、明日の出勤時間は 05:30 開始です。", type: "announce", status: "scheduled", targetMode: "site-workers", targetSiteId: "", targetUserIds: [], targetLabel: "全作業員", createdAt: nowIso, scheduledAt: new Date(new Date(nowIso).getTime() + 1000 * 60 * 60 * 2).toISOString(), source: "manual" },
-    { id: "N004", title: "緊急: 格納エリア進捗遅延", message: "格納エリアの進捗が計画比30%遅延。応援要員を追加配置してください。", type: "alert", status: "sent", targetMode: "site-managers", targetSiteId: "", targetUserIds: [], targetLabel: "現場管理者", createdAt: nowIso, sentAt: new Date(new Date(nowIso).getTime() - 1000 * 60 * 15).toISOString(), readRate: 100, source: "system" },
+    { id: "N004", title: "緊急: B棟進捗遅延", message: "B棟の進捗が計画比30%遅延。応援要員を追加配置してください。", type: "alert", status: "sent", targetMode: "site-managers", targetSiteId: "", targetUserIds: [], targetLabel: "現場管理者", createdAt: nowIso, sentAt: new Date(new Date(nowIso).getTime() - 1000 * 60 * 15).toISOString(), readRate: 100, source: "system" },
   ];
 }
 

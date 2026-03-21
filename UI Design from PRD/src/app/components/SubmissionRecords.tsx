@@ -1,7 +1,21 @@
-﻿import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Clock3, PauseOctagon, RotateCcw, Search, Send, Users } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  CheckCircle2,
+  Clock3,
+  MessageSquareText,
+  Search,
+  Send,
+  Star,
+  Users,
+} from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
+import {
+  createDefaultSubmissionReviewEntry,
+  readSubmissionReviewStore,
+  updateSubmissionReview,
+  writeSubmissionReviewStore,
+} from "./submissionReviewStore";
 import { buildWorkerSubmissionRecords, type WorkerSubmissionRecord } from "./workerMobileStore";
 
 function toDateInput(date: Date) {
@@ -23,30 +37,18 @@ function formatDateTime(value?: string) {
   });
 }
 
-function formatMinutes(value: number) {
-  if (value <= 0) return "0分";
-  const hours = Math.floor(value / 60);
-  const minutes = value % 60;
-  if (hours <= 0) return `${minutes}分`;
-  if (minutes === 0) return `${hours}時間`;
-  return `${hours}時間${minutes}分`;
+function formatClock(value?: string) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function latestActivityTime(record: WorkerSubmissionRecord) {
   return record.lastReportedAt ?? record.completedAt ?? record.startedAt ?? "";
-}
-
-function statusMeta(status: WorkerSubmissionRecord["status"]) {
-  switch (status) {
-    case "completed":
-      return { label: "完了", className: "bg-emerald-500/15 text-emerald-500" };
-    case "paused":
-      return { label: "中断中", className: "bg-amber-500/15 text-amber-500" };
-    case "working":
-      return { label: "作業中", className: "bg-cyan-500/15 text-cyan-500" };
-    default:
-      return { label: "未着手", className: "bg-slate-500/15 text-slate-500" };
-  }
 }
 
 function sortRecords(records: WorkerSubmissionRecord[]) {
@@ -57,18 +59,168 @@ function sortRecords(records: WorkerSubmissionRecord[]) {
   });
 }
 
+function parseClockLabel(value?: string) {
+  if (!value) return null;
+  const [hours, minutes] = value.split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return hours * 60 + minutes;
+}
+
+function toMinutesOfDay(value?: string) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getHours() * 60 + date.getMinutes();
+}
+
+function formatDurationHours(totalMinutes: number | null) {
+  if (totalMinutes === null || totalMinutes <= 0) return "-";
+  return `${(totalMinutes / 60).toFixed(1)}h`;
+}
+
+function formatVariance(minutes: number | null) {
+  if (minutes === null) return "-";
+  if (minutes === 0) return "±0分";
+  return `${minutes > 0 ? "+" : ""}${minutes}分`;
+}
+
+function calculateUph(quantity: number, durationMinutes: number | null) {
+  if (durationMinutes === null || durationMinutes <= 0) return null;
+  return quantity / (durationMinutes / 60);
+}
+
+function buildRecordMetrics(record: WorkerSubmissionRecord, idealUph: number | null) {
+  const scheduledStartMinutes = parseClockLabel(record.scheduledStartTime);
+  const scheduledEndMinutes = parseClockLabel(record.scheduledEndTime);
+  const actualStartMinutes = toMinutesOfDay(record.startedAt);
+  const actualEndSource = record.completedAt ?? latestActivityTime(record);
+  const actualCompletedMinutes = toMinutesOfDay(record.completedAt);
+
+  const scheduledDurationMinutes =
+    scheduledStartMinutes !== null && scheduledEndMinutes !== null
+      ? Math.max(0, scheduledEndMinutes - scheduledStartMinutes)
+      : null;
+
+  const actualSpanMinutes =
+    record.startedAt && actualEndSource
+      ? Math.max(0, Math.round((new Date(actualEndSource).getTime() - new Date(record.startedAt).getTime()) / 60000))
+      : null;
+
+  const actualWorkingMinutes =
+    actualSpanMinutes !== null
+      ? Math.max(0, actualSpanMinutes - (record.pausedMinutes ?? 0))
+      : null;
+
+  const startVariance =
+    scheduledStartMinutes !== null && actualStartMinutes !== null
+      ? actualStartMinutes - scheduledStartMinutes
+      : null;
+
+  const endVariance =
+    scheduledEndMinutes !== null && actualCompletedMinutes !== null
+      ? actualCompletedMinutes - scheduledEndMinutes
+      : null;
+
+  const actualUph = calculateUph(record.reportedQuantity, actualWorkingMinutes);
+  const uphAchievement =
+    idealUph !== null && actualUph !== null && idealUph > 0
+      ? (actualUph / idealUph) * 100
+      : null;
+
+  return {
+    scheduledDurationMinutes,
+    actualWorkingMinutes,
+    startVariance,
+    endVariance,
+    actualUph,
+    uphAchievement,
+  };
+}
+
+function statusLabel(status: WorkerSubmissionRecord["status"]) {
+  switch (status) {
+    case "completed":
+      return "完了";
+    case "paused":
+      return "中断";
+    case "working":
+      return "作業中";
+    default:
+      return "未着手";
+  }
+}
+
+function statusTone(status: WorkerSubmissionRecord["status"]) {
+  switch (status) {
+    case "completed":
+      return "bg-emerald-500/15 text-emerald-500";
+    case "paused":
+      return "bg-amber-500/15 text-amber-500";
+    case "working":
+      return "bg-cyan-500/15 text-cyan-500";
+    default:
+      return "bg-slate-500/15 text-slate-500";
+  }
+}
+
+function varianceTone(minutes: number | null) {
+  if (minutes === null) return "border-slate-200 bg-slate-100 text-slate-500";
+  if (minutes <= 0) return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (minutes <= 15) return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
+function uphTone(rate: number | null) {
+  if (rate === null) return "border-slate-200 bg-slate-100 text-slate-500";
+  if (rate >= 100) return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (rate >= 85) return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
+function resolveReviewEntry(
+  reviewStore: ReturnType<typeof readSubmissionReviewStore>,
+  recordId: string,
+) {
+  const current = reviewStore[recordId];
+  const fallback = createDefaultSubmissionReviewEntry();
+
+  return {
+    rank: current?.rank || fallback.rank,
+    comment: current?.comment ?? fallback.comment,
+    updatedAt: current?.updatedAt ?? fallback.updatedAt,
+  };
+}
+
 export function SubmissionRecords() {
   const c = useThemeColors();
-  const { selectedSiteId, sites, workflows, shippers, areas, processes } = useMasterData();
+  const { selectedSiteId, sites, workflows, shippers, processes } = useMasterData();
 
   const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
-  const [activeTab, setActiveTab] = useState<"summary" | "log">("summary");
-  const [filterShipperId, setFilterShipperId] = useState("all");
-  const [filterAreaId, setFilterAreaId] = useState("all");
-  const [filterProcessId, setFilterProcessId] = useState("all");
+  const [keyword, setKeyword] = useState("");
+  const [filterProcessName, setFilterProcessName] = useState("all");
   const [filterWorkerId, setFilterWorkerId] = useState("all");
   const [filterStatus, setFilterStatus] = useState<WorkerSubmissionRecord["status"] | "all">("all");
-  const [keyword, setKeyword] = useState("");
+  const [filterRank, setFilterRank] = useState<"all" | "S" | "A" | "B" | "C">("all");
+  const [reviewStore, setReviewStore] = useState(() => readSubmissionReviewStore());
+
+  useEffect(() => {
+    writeSubmissionReviewStore(reviewStore);
+  }, [reviewStore]);
+
+  const siteName = useMemo(
+    () => sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択",
+    [sites, selectedSiteId],
+  );
+
+  const stepUphMap = useMemo(
+    () =>
+      new Map(
+        workflows
+          .filter((workflow) => !selectedSiteId || workflow.siteId === selectedSiteId)
+          .flatMap((workflow) => workflow.steps.map((step) => [step.id, step.uph] as const)),
+      ),
+    [workflows, selectedSiteId],
+  );
 
   const records = useMemo(
     () =>
@@ -79,267 +231,182 @@ export function SubmissionRecords() {
           sites,
           workflows,
           shippers,
-          areas,
           processes,
         }),
       ),
-    [selectedDate, selectedSiteId, sites, workflows, shippers, areas, processes],
+    [selectedDate, selectedSiteId, sites, workflows, shippers, processes],
   );
 
-  const shipperOptions = useMemo(
-    () => Array.from(new Map(records.map((record) => [record.shipperName, { id: record.shipperName, label: record.shipperName }])).values()),
+  const processOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          records.map((record) => [record.processName, { id: record.processName, label: record.processName }]),
+        ).values(),
+      ),
     [records],
   );
 
-  const areaOptions = useMemo(() => {
-    const candidates = filterShipperId === "all" ? records : records.filter((record) => record.shipperName === filterShipperId);
-    return Array.from(new Map(candidates.map((record) => [record.areaName, { id: record.areaName, label: record.areaName }])).values());
-  }, [records, filterShipperId]);
-
-  const processOptions = useMemo(() => {
-    const candidates = records.filter((record) => {
-      if (filterShipperId !== "all" && record.shipperName !== filterShipperId) return false;
-      if (filterAreaId !== "all" && record.areaName !== filterAreaId) return false;
-      return true;
-    });
-    return Array.from(new Map(candidates.map((record) => [record.processName, { id: record.processName, label: record.processName }])).values());
-  }, [records, filterShipperId, filterAreaId]);
-
-  const aggregateRecords = useMemo(
+  const filteredByProcess = useMemo(
     () =>
       records.filter((record) => {
-        if (filterShipperId !== "all" && record.shipperName !== filterShipperId) return false;
-        if (filterAreaId !== "all" && record.areaName !== filterAreaId) return false;
-        if (filterProcessId !== "all" && record.processName !== filterProcessId) return false;
+        if (filterProcessName !== "all" && record.processName !== filterProcessName) return false;
         return true;
       }),
-    [records, filterShipperId, filterAreaId, filterProcessId],
+    [records, filterProcessName],
   );
 
   const workerOptions = useMemo(
-    () => Array.from(new Map(aggregateRecords.map((record) => [record.workerId, { id: record.workerId, label: record.workerName }])).values()),
-    [aggregateRecords],
+    () =>
+      Array.from(
+        new Map(
+          filteredByProcess.map((record) => [record.workerId, { id: record.workerId, label: record.workerName }]),
+        ).values(),
+      ),
+    [filteredByProcess],
   );
 
   useEffect(() => {
-    if (filterAreaId !== "all" && !areaOptions.some((option) => option.id === filterAreaId)) {
-      setFilterAreaId("all");
-    }
-  }, [filterAreaId, areaOptions]);
-
-  useEffect(() => {
-    if (filterProcessId !== "all" && !processOptions.some((option) => option.id === filterProcessId)) {
-      setFilterProcessId("all");
-    }
-  }, [filterProcessId, processOptions]);
-
-  useEffect(() => {
-    if (filterWorkerId !== "all" && !workerOptions.some((option) => option.id === filterWorkerId)) {
+    if (filterWorkerId !== "all" && !workerOptions.some((worker) => worker.id === filterWorkerId)) {
       setFilterWorkerId("all");
     }
   }, [filterWorkerId, workerOptions]);
 
-  const detailRecords = useMemo(() => {
+  const visibleRecords = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLowerCase();
-    return aggregateRecords.filter((record) => {
+
+    return filteredByProcess.filter((record) => {
+      const review = resolveReviewEntry(reviewStore, record.id);
+
       if (filterWorkerId !== "all" && record.workerId !== filterWorkerId) return false;
       if (filterStatus !== "all" && record.status !== filterStatus) return false;
+      if (filterRank !== "all" && review.rank !== filterRank) return false;
+
       if (!normalizedKeyword) return true;
-      const haystack = `${record.workerName} ${record.workflowName} ${record.shipperName} ${record.areaName} ${record.processName}`.toLowerCase();
+
+      const haystack = [
+        record.workerName,
+        record.workflowName,
+        record.processName,
+        record.shipperName,
+        review.comment,
+      ]
+        .join(" ")
+        .toLowerCase();
+
       return haystack.includes(normalizedKeyword);
     });
-  }, [aggregateRecords, filterWorkerId, filterStatus, keyword]);
+  }, [filteredByProcess, filterWorkerId, filterStatus, filterRank, keyword, reviewStore]);
 
   const totals = useMemo(() => {
-    const completedCount = aggregateRecords.filter((record) => record.status === "completed").length;
-    const uniqueWorkers = new Set(aggregateRecords.map((record) => record.workerId)).size;
-    const totalQuantity = aggregateRecords.reduce((sum, record) => sum + record.reportedQuantity, 0);
-    const pausedMinutes = aggregateRecords.reduce((sum, record) => sum + record.pausedMinutes, 0);
+    const completedCount = visibleRecords.filter((record) => record.status === "completed").length;
+    const workingCount = visibleRecords.filter((record) => record.status === "working").length;
+    const uniqueWorkers = new Set(visibleRecords.map((record) => record.workerId)).size;
+    const totalQuantity = visibleRecords.reduce((sum, record) => sum + record.reportedQuantity, 0);
 
     return {
       completedCount,
+      workingCount,
       uniqueWorkers,
       totalQuantity,
-      pausedMinutes,
-      recordCount: aggregateRecords.length,
+      recordCount: visibleRecords.length,
     };
-  }, [aggregateRecords]);
+  }, [visibleRecords]);
 
-  const stepSummaries = useMemo(() => {
-    const summaryMap = new Map<
-      string,
-      {
-        key: string;
-        workflowName: string;
-        shipperName: string;
-        areaName: string;
-        processName: string;
-        totalQuantity: number;
-        recordCount: number;
-        pausedMinutes: number;
-        workerCount: number;
-        latestReportedAt?: string;
-      }
-    >();
+  const inputClass = `h-10 w-full rounded-xl border px-3 text-[13px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`;
+  const tableInputClass = `h-9 w-full rounded-lg border px-3 text-[12px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`;
+  const cardClass = `${c.bgCard} border ${c.border} rounded-2xl`;
+  const thClass = `sticky top-0 z-10 border-b px-3 py-3 text-left text-[11px] font-semibold ${c.border} ${c.bgPanel} ${c.textSecondary}`;
+  const tdClass = `border-b px-3 py-3 align-top text-[12px] ${c.borderCard}`;
+  const metaLabelClass = `text-[10px] font-medium ${c.textMuted}`;
+  const metaValueClass = `text-[12px] ${c.textPrimary}`;
 
-    aggregateRecords.forEach((record) => {
-      const current = summaryMap.get(record.stepId) ?? {
-        key: record.stepId,
-        workflowName: record.workflowName,
-        shipperName: record.shipperName,
-        areaName: record.areaName,
-        processName: record.processName,
-        totalQuantity: 0,
-        recordCount: 0,
-        pausedMinutes: 0,
-        workerCount: 0,
-        latestReportedAt: undefined,
-      };
-
-      current.totalQuantity += record.reportedQuantity;
-      current.recordCount += 1;
-      current.pausedMinutes += record.pausedMinutes;
-      current.workerCount += 1;
-
-      const currentLatest = current.latestReportedAt ? new Date(current.latestReportedAt).getTime() : 0;
-      const nextLatest = latestActivityTime(record) ? new Date(latestActivityTime(record)).getTime() : 0;
-      if (nextLatest > currentLatest) current.latestReportedAt = latestActivityTime(record);
-
-      summaryMap.set(record.stepId, current);
-    });
-
-    return Array.from(summaryMap.values()).sort((left, right) => {
-      if (right.totalQuantity !== left.totalQuantity) return right.totalQuantity - left.totalQuantity;
-      return left.processName.localeCompare(right.processName, "ja");
-    });
-  }, [aggregateRecords]);
-
-  const cardClass = `${c.bgCard} border ${c.border} rounded-xl`;
-  const inputClass = `h-10 w-full rounded-lg border px-3 text-[13px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`;
-
-  const resetFilters = () => {
-    setFilterShipperId("all");
-    setFilterAreaId("all");
-    setFilterProcessId("all");
-    setFilterWorkerId("all");
-    setFilterStatus("all");
-    setKeyword("");
-  };
+  const summaryCards = [
+    {
+      icon: Send,
+      label: "送信ログ数",
+      value: `${totals.recordCount.toLocaleString("ja-JP")} 件`,
+      sub: "現在の絞り込み結果",
+      color: "text-cyan-500",
+      bg: "bg-cyan-500/10",
+    },
+    {
+      icon: CheckCircle2,
+      label: "完了ログ",
+      value: `${totals.completedCount.toLocaleString("ja-JP")} 件`,
+      sub: "完了済みの送信実績",
+      color: "text-emerald-500",
+      bg: "bg-emerald-500/10",
+    },
+    {
+      icon: Users,
+      label: "対象作業者",
+      value: `${totals.uniqueWorkers.toLocaleString("ja-JP")} 人`,
+      sub: `作業中 ${totals.workingCount.toLocaleString("ja-JP")} 件`,
+      color: "text-violet-500",
+      bg: "bg-violet-500/10",
+    },
+    {
+      icon: Clock3,
+      label: "実績数合計",
+      value: `${totals.totalQuantity.toLocaleString("ja-JP")} 件`,
+      sub: "ログに記録された実績数",
+      color: "text-amber-500",
+      bg: "bg-amber-500/10",
+    },
+  ] as const;
 
   return (
-    <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {[
-          {
-            icon: Send,
-            label: "送信件数",
-            value: `${totals.recordCount.toLocaleString("ja-JP")}件`,
-            sub: "送信記録として登録された件数",
-            color: "text-cyan-500",
-            bg: "bg-cyan-500/10",
-          },
-          {
-            icon: CheckCircle2,
-            label: "処理数量実績",
-            value: `${totals.totalQuantity.toLocaleString("ja-JP")}個`,
-            sub: "送信済み数量の合計",
-            color: "text-emerald-500",
-            bg: "bg-emerald-500/10",
-          },
-          {
-            icon: PauseOctagon,
-            label: "中断時間合計",
-            value: formatMinutes(totals.pausedMinutes),
-            sub: "休憩・中断時間の累計",
-            color: "text-amber-500",
-            bg: "bg-amber-500/10",
-          },
-          {
-            icon: Users,
-            label: "対象作業者数",
-            value: `${totals.uniqueWorkers.toLocaleString("ja-JP")}名`,
-            sub: `完了 ${totals.completedCount.toLocaleString("ja-JP")} 件`,
-            color: "text-violet-500",
-            bg: "bg-violet-500/10",
-          },
-        ].map((item) => (
-          <div key={item.label} className={`${cardClass} flex items-center gap-3 p-4`}>
-            <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${item.bg}`}>
-              <item.icon className={`h-5 w-5 ${item.color}`} />
-            </div>
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-6">
+      <div className={`${cardClass} shrink-0`}>
+        <div className={`flex flex-col gap-4 border-b px-5 py-4 ${c.border}`}>
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className={`text-[11px] ${c.textMuted}`}>{item.label}</div>
-              <div className={`text-[20px] ${c.textPrimary} tabular-nums`}>{item.value}</div>
-              <div className={`text-[11px] ${c.textSecondary}`}>{item.sub}</div>
+              <div className={`text-lg font-semibold ${c.textPrimary}`}>送信実績</div>
+              <div className={`text-sm ${c.textSecondary}`}>
+                大量の送信ログを一覧で比較できるよう、予定と実績の差分とUPHを表形式で管理します。
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>拠点: {siteName}</span>
+              <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>対象日: {selectedDate}</span>
             </div>
           </div>
-        ))}
-      </div>
 
-      <div className={`${cardClass} p-4`}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className={`text-[14px] font-semibold ${c.textPrimary}`}>送信実績の絞り込み</div>
-            <div className={`mt-1 text-[12px] ${c.textSecondary}`}>
-              上段で集計条件、下段で明細条件を指定します。
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={resetFilters}
-            className={`inline-flex h-10 items-center gap-2 rounded-lg border px-4 text-[13px] ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
-          >
-            <RotateCcw className="h-4 w-4" />
-            条件をクリア
-          </button>
-        </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <label className="grid gap-1">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>対象日</span>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(event) => setSelectedDate(event.target.value)}
+                className={inputClass}
+              />
+            </label>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <label className="block">
-            <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>作業日</div>
-            <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} className={inputClass} />
-          </label>
-          <label className="block">
-            <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>荷主</div>
-            <select value={filterShipperId} onChange={(event) => setFilterShipperId(event.target.value)} className={inputClass}>
-              <option value="all">すべて</option>
-              {shipperOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>エリア</div>
-            <select value={filterAreaId} onChange={(event) => setFilterAreaId(event.target.value)} className={inputClass}>
-              <option value="all">すべて</option>
-              {areaOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>工程</div>
-            <select value={filterProcessId} onChange={(event) => setFilterProcessId(event.target.value)} className={inputClass}>
-              <option value="all">すべて</option>
-              {processOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+            <label className="grid gap-1">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>工程</span>
+              <select
+                value={filterProcessName}
+                onChange={(event) => setFilterProcessName(event.target.value)}
+                className={inputClass}
+              >
+                <option value="all">すべて</option>
+                {processOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        <div className={`mt-4 border-t pt-4 ${c.borderCard}`}>
-          <div className={`mb-3 text-[12px] font-medium ${c.textSecondary}`}>明細条件</div>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[220px_220px_minmax(0,1fr)]">
-            <label className="block">
-              <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>作業者</div>
-              <select value={filterWorkerId} onChange={(event) => setFilterWorkerId(event.target.value)} className={inputClass}>
+            <label className="grid gap-1">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>作業者</span>
+              <select
+                value={filterWorkerId}
+                onChange={(event) => setFilterWorkerId(event.target.value)}
+                className={inputClass}
+              >
                 <option value="all">すべて</option>
                 {workerOptions.map((option) => (
                   <option key={option.id} value={option.id}>
@@ -348,169 +415,218 @@ export function SubmissionRecords() {
                 ))}
               </select>
             </label>
-            <label className="block">
-              <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>状態</div>
+
+            <label className="grid gap-1">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>状態</span>
               <select
                 value={filterStatus}
                 onChange={(event) => setFilterStatus(event.target.value as WorkerSubmissionRecord["status"] | "all")}
                 className={inputClass}
               >
                 <option value="all">すべて</option>
+                <option value="pending">未着手</option>
                 <option value="working">作業中</option>
-                <option value="paused">中断中</option>
+                <option value="paused">中断</option>
                 <option value="completed">完了</option>
               </select>
             </label>
-            <label className="block">
-              <div className={`mb-1.5 text-[12px] ${c.textSecondary}`}>キーワード</div>
-              <div className="relative">
-                <Search className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${c.textMuted}`} />
-                <input
-                  value={keyword}
-                  onChange={(event) => setKeyword(event.target.value)}
-                  placeholder="作業者、荷主、エリア、工程で検索"
-                  className={`${inputClass} pl-9`}
-                />
-              </div>
+
+            <label className="grid gap-1">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>ランク</span>
+              <select
+                value={filterRank}
+                onChange={(event) => setFilterRank(event.target.value as typeof filterRank)}
+                className={inputClass}
+              >
+                <option value="all">すべて</option>
+                <option value="S">S</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+              </select>
             </label>
           </div>
+
+          <label className="grid gap-1">
+            <span className={`text-xs font-medium ${c.textSecondary}`}>検索</span>
+            <div className="relative">
+              <Search className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${c.textMuted}`} />
+              <input
+                value={keyword}
+                onChange={(event) => setKeyword(event.target.value)}
+                placeholder="作業者名 / 業務名 / 工程名 / 荷主名 / コメントで検索"
+                className={`${inputClass} pl-10`}
+              />
+            </div>
+          </label>
+        </div>
+
+        <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
+          {summaryCards.map((card) => {
+            const Icon = card.icon;
+
+            return (
+              <div key={card.label} className={`rounded-2xl border p-4 ${c.borderCard} ${c.bgPanel}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className={`text-xs ${c.textSecondary}`}>{card.label}</div>
+                    <div className={`mt-1 text-lg font-semibold ${c.textPrimary}`}>{card.value}</div>
+                    <div className={`mt-1 text-xs ${c.textMuted}`}>{card.sub}</div>
+                  </div>
+                  <div className={`rounded-xl p-2 ${card.bg}`}>
+                    <Icon className={`h-5 w-5 ${card.color}`} />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      <div className={`${cardClass} overflow-hidden`}>
-        <div className={`border-b px-4 py-3 ${c.borderCard}`}>
-          <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className={`${cardClass} min-h-0 flex-1 overflow-hidden`}>
+        {visibleRecords.length === 0 ? (
+          <div className="flex h-full items-center justify-center p-10 text-center">
             <div>
-              <div className={`text-[14px] font-semibold ${c.textPrimary}`}>
-                {activeTab === "summary" ? "工程別送信集計" : "送信ログ一覧"}
-              </div>
-              <div className={`mt-1 text-[12px] ${c.textSecondary}`}>
-                {activeTab === "summary"
-                  ? "工程ごとの送信件数、数量、人数、停止時間を集計します。"
-                  : "作業者ごとの開始・終了・数量・停止時間を時系列で確認します。"}
+              <MessageSquareText className={`mx-auto h-6 w-6 ${c.textMuted}`} />
+              <div className={`mt-3 text-base font-medium ${c.textPrimary}`}>表示できる送信ログがありません</div>
+              <div className={`mt-2 text-sm ${c.textSecondary}`}>
+                対象日や絞り込み条件を変更して確認してください。
               </div>
             </div>
-            <div className={`inline-flex rounded-xl border p-1 ${c.borderCard} ${c.bgSurface}`}>
-              <button
-                type="button"
-                onClick={() => setActiveTab("summary")}
-                className={`rounded-lg px-3 py-2 text-[12px] font-medium transition ${
-                  activeTab === "summary" ? "bg-cyan-500 text-white" : `${c.textSecondary}`
-                }`}
-              >
-                工程別送信集計
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("log")}
-                className={`rounded-lg px-3 py-2 text-[12px] font-medium transition ${
-                  activeTab === "log" ? "bg-cyan-500 text-white" : `${c.textSecondary}`
-                }`}
-              >
-                送信ログ一覧
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {activeTab === "summary" ? (
-          <div className="overflow-auto">
-            <table className="w-full min-w-[760px]">
-              <thead className={c.bgCard}>
-                <tr className={`border-b ${c.borderCard}`}>
-                  {["荷主", "エリア", "工程", "実績数量", "送信件数", "作業者数", "中断時間", "最新送信"].map((header) => (
-                    <th key={header} className={`px-4 py-3 text-left text-[12px] font-medium ${c.textMuted}`}>
-                      {header}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {stepSummaries.map((row) => (
-                  <tr key={row.key} className={`border-b ${c.borderCard} ${c.bgCardHover}`}>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>{row.shipperName}</td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>{row.areaName}</td>
-                    <td className="px-4 py-3">
-                      <div className={`text-[13px] ${c.textPrimary}`}>{row.processName}</div>
-                      <div className={`mt-0.5 text-[11px] ${c.textSecondary}`}>{row.workflowName}</div>
-                    </td>
-                    <td className={`px-4 py-3 text-[13px] font-semibold text-cyan-500 tabular-nums`}>
-                      {row.totalQuantity.toLocaleString("ja-JP")}個
-                    </td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>
-                      {row.recordCount.toLocaleString("ja-JP")}件
-                    </td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary} tabular-nums`}>
-                      {row.workerCount.toLocaleString("ja-JP")}名
-                    </td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>{formatMinutes(row.pausedMinutes)}</td>
-                    <td className={`px-4 py-3 text-[13px] ${c.textSecondary}`}>{formatDateTime(row.latestReportedAt)}</td>
-                  </tr>
-                ))}
-                {stepSummaries.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className={`px-4 py-12 text-center text-[13px] ${c.textMuted}`}>
-                      条件に一致する工程別送信集計がありません。
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
           </div>
         ) : (
-          <div className="overflow-auto">
-            <table className="w-full min-w-[880px]">
-              <thead className={c.bgCard}>
-                <tr className={`border-b ${c.borderCard}`}>
-                  {["作業者", "作業内容", "開始", "終了", "数量", "中断", "状態", "送信時刻"].map((header) => (
-                    <th key={header} className={`px-4 py-3 text-left text-[12px] font-medium ${c.textMuted}`}>
-                      {header}
-                    </th>
-                  ))}
+          <div className="h-full overflow-auto">
+            <table className="min-w-[1480px] w-full border-collapse">
+              <thead>
+                <tr>
+                  <th className={thClass}>作業者</th>
+                  <th className={thClass}>業務情報</th>
+                  <th className={thClass}>状態</th>
+                  <th className={thClass}>開始</th>
+                  <th className={thClass}>終了</th>
+                  <th className={thClass}>所要時間</th>
+                  <th className={thClass}>UPH</th>
+                  <th className={thClass}>実績数</th>
+                  <th className={thClass}>ランク</th>
+                  <th className={thClass}>管理者コメント</th>
+                  <th className={thClass}>最終更新</th>
                 </tr>
               </thead>
               <tbody>
-                {detailRecords.map((record) => {
-                  const meta = statusMeta(record.status);
+                {visibleRecords.map((record) => {
+                  const review = resolveReviewEntry(reviewStore, record.id);
+                  const idealUph = stepUphMap.get(record.stepId) ?? null;
+                  const metrics = buildRecordMetrics(record, idealUph);
+
                   return (
-                    <tr key={record.id} className={`border-b ${c.borderCard} ${c.bgCardHover}`}>
-                      <td className="px-4 py-3">
-                        <div className={`text-[13px] ${c.textPrimary}`}>{record.workerName}</div>
-                        <div className={`mt-0.5 text-[11px] ${c.textSecondary}`}>{record.siteName}</div>
+                    <tr key={record.id} className={c.bgCard}>
+                      <td className={tdClass}>
+                        <div className={`font-semibold ${c.textPrimary}`}>{record.workerName}</div>
                       </td>
-                      <td className="px-4 py-3">
-                        <div className={`text-[13px] ${c.textPrimary}`}>{record.processName}</div>
-                        <div className={`mt-0.5 text-[11px] ${c.textSecondary}`}>
-                          {record.shipperName} / {record.areaName}
+
+                      <td className={tdClass}>
+                        <div className={`font-medium ${c.textPrimary}`}>{record.workflowName}</div>
+                        <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{record.shipperName}</div>
+                        <div className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>
+                          {record.processName}
                         </div>
-                        <div className={`mt-0.5 text-[11px] ${c.textMuted}`}>{record.workflowName}</div>
                       </td>
-                      <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>
-                        {record.startedAt ? formatDateTime(record.startedAt) : `${record.scheduledStartTime} 予定`}
-                      </td>
-                      <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>
-                        {record.completedAt ? formatDateTime(record.completedAt) : `${record.scheduledEndTime} 予定`}
-                      </td>
-                      <td className={`px-4 py-3 text-[13px] font-semibold text-cyan-500 tabular-nums`}>
-                        {record.reportedQuantity.toLocaleString("ja-JP")}個
-                      </td>
-                      <td className={`px-4 py-3 text-[13px] ${c.textPrimary}`}>{formatMinutes(record.pausedMinutes)}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-full px-2 py-1 text-[11px] font-medium ${meta.className}`}>
-                          {meta.label}
+
+                      <td className={tdClass}>
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(record.status)}`}>
+                          {statusLabel(record.status)}
                         </span>
                       </td>
-                      <td className={`px-4 py-3 text-[13px] ${c.textSecondary}`}>{formatDateTime(record.lastReportedAt)}</td>
+
+                      <td className={tdClass}>
+                        <div className={metaLabelClass}>予定</div>
+                        <div className={metaValueClass}>{record.scheduledStartTime}</div>
+                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
+                        <div className={metaValueClass}>{formatClock(record.startedAt)}</div>
+                        <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${varianceTone(metrics.startVariance)}`}>
+                          {formatVariance(metrics.startVariance)}
+                        </div>
+                      </td>
+
+                      <td className={tdClass}>
+                        <div className={metaLabelClass}>予定</div>
+                        <div className={metaValueClass}>{record.scheduledEndTime}</div>
+                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
+                        <div className={metaValueClass}>{record.completedAt ? formatClock(record.completedAt) : "-"}</div>
+                        <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${varianceTone(metrics.endVariance)}`}>
+                          {formatVariance(metrics.endVariance)}
+                        </div>
+                      </td>
+
+                      <td className={tdClass}>
+                        <div className={metaLabelClass}>予定</div>
+                        <div className={metaValueClass}>{formatDurationHours(metrics.scheduledDurationMinutes)}</div>
+                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
+                        <div className={metaValueClass}>{formatDurationHours(metrics.actualWorkingMinutes)}</div>
+                        {!record.completedAt && record.startedAt ? (
+                          <div className={`mt-1 text-[10px] ${c.textMuted}`}>最新送信時点</div>
+                        ) : null}
+                      </td>
+
+                      <td className={tdClass}>
+                        <div className={metaLabelClass}>理想</div>
+                        <div className={metaValueClass}>
+                          {idealUph !== null ? idealUph.toLocaleString("ja-JP") : "-"}
+                        </div>
+                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
+                        <div className={metaValueClass}>
+                          {metrics.actualUph !== null ? metrics.actualUph.toFixed(1) : "-"}
+                        </div>
+                        <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${uphTone(metrics.uphAchievement)}`}>
+                          {metrics.uphAchievement !== null ? `${metrics.uphAchievement.toFixed(0)}%` : "-"}
+                        </div>
+                      </td>
+
+                      <td className={tdClass}>
+                        <div className={`font-semibold ${c.textPrimary}`}>
+                          {record.reportedQuantity.toLocaleString("ja-JP")} 件
+                        </div>
+                      </td>
+
+                      <td className={tdClass}>
+                        <select
+                          value={review.rank}
+                          onChange={(event) =>
+                            setReviewStore((prev) =>
+                              updateSubmissionReview(prev, record.id, { rank: event.target.value as "S" | "A" | "B" | "C" }),
+                            )
+                          }
+                          className={tableInputClass}
+                        >
+                          <option value="S">S</option>
+                          <option value="A">A</option>
+                          <option value="B">B</option>
+                          <option value="C">C</option>
+                        </select>
+                      </td>
+
+                      <td className={tdClass}>
+                        <input
+                          value={review.comment}
+                          onChange={(event) =>
+                            setReviewStore((prev) =>
+                              updateSubmissionReview(prev, record.id, { comment: event.target.value }),
+                            )
+                          }
+                          placeholder="コメント入力"
+                          className={tableInputClass}
+                        />
+                      </td>
+
+                      <td className={tdClass}>
+                        <div className={`flex items-center gap-2 ${c.textMuted}`}>
+                          <Star className="h-4 w-4" />
+                          <span>{review.updatedAt ? formatDateTime(review.updatedAt) : "-"}</span>
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
-                {detailRecords.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className={`px-4 py-12 text-center text-[13px] ${c.textMuted}`}>
-                      条件に一致する送信ログがありません。
-                    </td>
-                  </tr>
-                ) : null}
               </tbody>
             </table>
           </div>

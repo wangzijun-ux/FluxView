@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
   Clock3,
   Layers,
@@ -10,9 +10,7 @@ import {
 } from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
-import { processColorClasses } from "./processStore";
 import {
-  DEPLOYMENT_WORKERS,
   buildBaseDeploymentSnapshot,
   buildDeploymentWorkflows,
   buildSiteScope,
@@ -20,6 +18,7 @@ import {
   createTimeSlots,
   materializeSnapshot,
   parseTimeLabel,
+  readDeploymentWorkers,
   readFieldDeploymentSnapshots,
   type AssignmentSnapshot,
   type DeploymentStep,
@@ -39,8 +38,8 @@ interface GanttSegment {
   workflowName: string;
   shipperId: string;
   shipperName: string;
-  areaId: string;
-  areaName: string;
+  siteId: string;
+  siteName: string;
   processId: string;
   processName: string;
   color: string;
@@ -67,6 +66,134 @@ interface WorkflowGroup {
 const LABEL_COLUMN_WIDTH = 320;
 const MINUTES_IN_DAY = 24 * 60;
 const DISPLAY_SCALES: TimeScale[] = ["15m", "30m", "1h"];
+const READABLE_GANTT_PALETTE: Record<
+  string,
+  {
+    accent: string;
+    solid: string;
+    barText: string;
+    accentTextDark: string;
+    accentTextLight: string;
+  }
+> = {
+  cyan: {
+    accent: "#06b6d4",
+    solid: "#0e7490",
+    barText: "#ecfeff",
+    accentTextDark: "#a5f3fc",
+    accentTextLight: "#155e75",
+  },
+  emerald: {
+    accent: "#10b981",
+    solid: "#047857",
+    barText: "#ecfdf5",
+    accentTextDark: "#a7f3d0",
+    accentTextLight: "#065f46",
+  },
+  violet: {
+    accent: "#8b5cf6",
+    solid: "#6d28d9",
+    barText: "#f5f3ff",
+    accentTextDark: "#ddd6fe",
+    accentTextLight: "#5b21b6",
+  },
+  amber: {
+    accent: "#f59e0b",
+    solid: "#b45309",
+    barText: "#fffbeb",
+    accentTextDark: "#fde68a",
+    accentTextLight: "#92400e",
+  },
+  blue: {
+    accent: "#3b82f6",
+    solid: "#1d4ed8",
+    barText: "#eff6ff",
+    accentTextDark: "#bfdbfe",
+    accentTextLight: "#1d4ed8",
+  },
+  rose: {
+    accent: "#f43f5e",
+    solid: "#be123c",
+    barText: "#fff1f2",
+    accentTextDark: "#fecdd3",
+    accentTextLight: "#9f1239",
+  },
+  orange: {
+    accent: "#f97316",
+    solid: "#c2410c",
+    barText: "#fff7ed",
+    accentTextDark: "#fed7aa",
+    accentTextLight: "#9a3412",
+  },
+  pink: {
+    accent: "#ec4899",
+    solid: "#be185d",
+    barText: "#fdf2f8",
+    accentTextDark: "#fbcfe8",
+    accentTextLight: "#9d174d",
+  },
+  teal: {
+    accent: "#14b8a6",
+    solid: "#0f766e",
+    barText: "#f0fdfa",
+    accentTextDark: "#99f6e4",
+    accentTextLight: "#115e59",
+  },
+  indigo: {
+    accent: "#6366f1",
+    solid: "#4338ca",
+    barText: "#eef2ff",
+    accentTextDark: "#c7d2fe",
+    accentTextLight: "#3730a3",
+  },
+};
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace("#", "");
+  const full = normalized.length === 3
+    ? normalized
+      .split("")
+      .map((char) => `${char}${char}`)
+      .join("")
+    : normalized;
+
+  const red = Number.parseInt(full.slice(0, 2), 16);
+  const green = Number.parseInt(full.slice(2, 4), 16);
+  const blue = Number.parseInt(full.slice(4, 6), 16);
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function getReadableGanttTone(color: string, isDark: boolean) {
+  const palette = READABLE_GANTT_PALETTE[color] ?? READABLE_GANTT_PALETTE.cyan;
+
+  return {
+    headerStyle: {
+      backgroundColor: hexToRgba(palette.accent, isDark ? 0.18 : 0.1),
+      borderColor: hexToRgba(palette.accent, isDark ? 0.34 : 0.22),
+      color: isDark ? palette.accentTextDark : palette.accentTextLight,
+    } satisfies CSSProperties,
+    subtitleStyle: {
+      color: isDark ? "rgba(226, 232, 240, 0.86)" : "rgba(15, 23, 42, 0.72)",
+    } satisfies CSSProperties,
+    chipStyle: {
+      backgroundColor: hexToRgba(palette.accent, isDark ? 0.16 : 0.08),
+      borderColor: hexToRgba(palette.accent, isDark ? 0.32 : 0.18),
+      color: isDark ? palette.accentTextDark : palette.accentTextLight,
+    } satisfies CSSProperties,
+    barStyle: {
+      backgroundColor: hexToRgba(palette.solid, isDark ? 0.94 : 0.9),
+      borderColor: hexToRgba(palette.accent, isDark ? 0.5 : 0.38),
+      color: palette.barText,
+      boxShadow: isDark
+        ? "0 10px 24px rgba(15, 23, 42, 0.28)"
+        : "0 8px 18px rgba(15, 23, 42, 0.12)",
+    } satisfies CSSProperties,
+    metaStyle: {
+      color: hexToRgba(palette.barText, 0.92),
+    } satisfies CSSProperties,
+  };
+}
 
 function sortTimeLabels(labels: string[]) {
   return [...labels].sort((left, right) => parseTimeLabel(left) - parseTimeLabel(right));
@@ -92,11 +219,13 @@ function toDateInput(date: Date) {
 
 function detectSnapshotInterval(labels: string[]) {
   if (labels.length < 2) return 30;
+
   let minDelta = Number.POSITIVE_INFINITY;
   for (let index = 1; index < labels.length; index += 1) {
     const delta = parseTimeLabel(labels[index]) - parseTimeLabel(labels[index - 1]);
     if (delta > 0) minDelta = Math.min(minDelta, delta);
   }
+
   return Number.isFinite(minDelta) ? minDelta : 30;
 }
 
@@ -115,12 +244,14 @@ function buildSegments(
     const endMinutes = index < sortedLabels.length - 1
       ? parseTimeLabel(sortedLabels[index + 1])
       : Math.min(MINUTES_IN_DAY, startMinutes + intervalMinutes);
+
     if (endMinutes <= startMinutes) return;
     const snapshot = snapshotsByTime[timeLabel] ?? {};
 
     Object.entries(snapshot).forEach(([stepId, workerIds]) => {
       const step = stepMap.get(stepId);
       if (!step) return;
+
       const stepStartMinutes = parseTimeLabel(step.startTime);
       const stepEndMinutes = parseTimeLabel(step.targetEndTime);
       const clippedStartMinutes = Math.max(startMinutes, stepStartMinutes);
@@ -140,8 +271,8 @@ function buildSegments(
           workflowName: step.workflowName,
           shipperId: step.shipperId,
           shipperName: step.shipperName,
-          areaId: step.areaId,
-          areaName: step.areaName,
+          siteId: step.siteId,
+          siteName: step.siteName,
           processId: step.processId,
           processName: step.processName,
           color: step.color,
@@ -153,19 +284,13 @@ function buildSegments(
   });
 
   rawSegments.sort(
-    (left, right) =>
-      left.key.localeCompare(right.key, "ja") ||
-      left.startMinutes - right.startMinutes,
+    (left, right) => left.key.localeCompare(right.key, "ja") || left.startMinutes - right.startMinutes,
   );
 
   const merged: GanttSegment[] = [];
   rawSegments.forEach((segment) => {
     const previous = merged[merged.length - 1];
-    if (
-      previous &&
-      previous.key === segment.key &&
-      previous.endMinutes === segment.startMinutes
-    ) {
+    if (previous && previous.key === segment.key && previous.endMinutes === segment.startMinutes) {
       previous.endMinutes = segment.endMinutes;
       return;
     }
@@ -225,34 +350,46 @@ function getWorkerRowHeight() {
 
 export function WorkPerformance() {
   const c = useThemeColors();
-  const { shippers, sites, areas, processes, workflows, selectedSiteId } = useMasterData();
+  const { shippers, sites, processes, workflows, selectedSiteId } = useMasterData();
   const [viewMode, setViewMode] = useState<ViewMode>("workflow");
   const [timeScale, setTimeScale] = useState<TimeScale>("30m");
   const [filterShipperId, setFilterShipperId] = useState("all");
-  const [filterAreaId, setFilterAreaId] = useState("all");
+  const [filterWorkflowId, setFilterWorkflowId] = useState("all");
   const [filterProcessId, setFilterProcessId] = useState("all");
   const [keyword, setKeyword] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
   const selectedDate = useMemo(() => toDateInput(new Date()), []);
-  const workerMap = useMemo(() => new Map(DEPLOYMENT_WORKERS.map((worker) => [worker.id, worker])), []);
+  const deploymentWorkers = useMemo(() => readDeploymentWorkers(), []);
+  const workerMap = useMemo(() => new Map(deploymentWorkers.map((worker) => [worker.id, worker])), [deploymentWorkers]);
 
   const workflowViews = useMemo(
-    () => buildDeploymentWorkflows(workflows.filter((workflow) => siteScope.siteIds.includes(workflow.siteId)), shippers, areas, processes),
-    [workflows, siteScope.siteIds, shippers, areas, processes],
+    () =>
+      buildDeploymentWorkflows(
+        workflows.filter((workflow) => siteScope.siteIds.includes(workflow.siteId)),
+        shippers,
+        sites,
+        processes,
+      ),
+    [workflows, siteScope.siteIds, shippers, sites, processes],
   );
 
   const shipperOptions = useMemo(
     () => shippers.filter((shipper) => workflowViews.some((workflow) => workflow.shipperId === shipper.id)),
     [workflowViews, shippers],
   );
-  const areaOptions = useMemo(
-    () => areas.filter((area) => workflowViews.some((workflow) => workflow.areaId === area.id)),
-    [workflowViews, areas],
+
+  const workflowOptions = useMemo(
+    () => workflowViews.map((workflow) => ({ id: workflow.id, name: workflow.workflowName })),
+    [workflowViews],
   );
+
   const processOptions = useMemo(
-    () => processes.filter((process) => workflowViews.some((workflow) => workflow.steps.some((step) => step.processId === process.id))),
+    () =>
+      processes.filter((process) =>
+        workflowViews.some((workflow) => workflow.steps.some((step) => step.processId === process.id)),
+      ),
     [workflowViews, processes],
   );
 
@@ -261,14 +398,16 @@ export function WorkPerformance() {
 
     return workflowViews.filter((workflow) => {
       if (filterShipperId !== "all" && workflow.shipperId !== filterShipperId) return false;
-      if (filterAreaId !== "all" && workflow.areaId !== filterAreaId) return false;
-      if (filterProcessId !== "all" && !workflow.steps.some((step) => step.processId === filterProcessId)) return false;
+      if (filterWorkflowId !== "all" && workflow.id !== filterWorkflowId) return false;
+      if (filterProcessId !== "all" && !workflow.steps.some((step) => step.processId === filterProcessId)) {
+        return false;
+      }
       if (!normalizedKeyword) return true;
 
       const haystack = [
         workflow.workflowName,
         workflow.shipperName,
-        workflow.areaName,
+        workflow.siteName,
         ...workflow.steps.map((step) => step.processName),
       ]
         .join(" ")
@@ -276,7 +415,7 @@ export function WorkPerformance() {
 
       return haystack.includes(normalizedKeyword);
     });
-  }, [workflowViews, filterShipperId, filterAreaId, filterProcessId, keyword]);
+  }, [workflowViews, filterShipperId, filterWorkflowId, filterProcessId, keyword]);
 
   const allSteps = useMemo(
     () =>
@@ -285,6 +424,7 @@ export function WorkPerformance() {
       ),
     [filteredWorkflows, filterProcessId],
   );
+
   const stepMap = useMemo(() => new Map(allSteps.map((step) => [step.id, step])), [allSteps]);
   const visibleStepIds = useMemo(() => new Set(allSteps.map((step) => step.id)), [allSteps]);
 
@@ -293,15 +433,16 @@ export function WorkPerformance() {
     () => readFieldDeploymentSnapshots(siteScope.storageScopeKey, selectedDate),
     [siteScope.storageScopeKey, selectedDate],
   );
+
   const snapshotLabels = useMemo(() => {
     const storedLabels = sortTimeLabels(Object.keys(storedSnapshots).filter((label) => /^\d{2}:\d{2}$/.test(label)));
     return sortTimeLabels(Array.from(new Set([...defaultTimeLabels, ...storedLabels])));
   }, [storedSnapshots, defaultTimeLabels]);
 
   const seededSnapshots = useMemo(() => {
-    const baseSnapshot = buildBaseDeploymentSnapshot(allSteps, DEPLOYMENT_WORKERS);
-    return createSeededDeploymentSnapshots(snapshotLabels, allSteps, DEPLOYMENT_WORKERS, baseSnapshot);
-  }, [snapshotLabels, allSteps]);
+    const baseSnapshot = buildBaseDeploymentSnapshot(allSteps, deploymentWorkers);
+    return createSeededDeploymentSnapshots(snapshotLabels, allSteps, deploymentWorkers, baseSnapshot);
+  }, [snapshotLabels, allSteps, deploymentWorkers]);
 
   const normalizedSnapshots = useMemo(
     () =>
@@ -344,6 +485,7 @@ export function WorkPerformance() {
       .map((workerId) => {
         const worker = workerMap.get(workerId);
         if (!worker) return null;
+
         return {
           worker,
           segments: segments
@@ -360,7 +502,10 @@ export function WorkPerformance() {
     () => Array.from({ length: MINUTES_IN_DAY / timelineStepMinutes }, (_, index) => index * timelineStepMinutes),
     [timelineStepMinutes],
   );
-  const timelineWidth = Math.max(1440, timelineSlots.length * (timeScale === "15m" ? 28 : timeScale === "30m" ? 40 : 68));
+  const timelineWidth = Math.max(
+    1440,
+    timelineSlots.length * (timeScale === "15m" ? 28 : timeScale === "30m" ? 40 : 68),
+  );
   const tableWidth = LABEL_COLUMN_WIDTH + timelineWidth;
 
   const kpis = useMemo(() => {
@@ -370,11 +515,11 @@ export function WorkPerformance() {
     const totalHours = segments.reduce((sum, segment) => sum + (segment.endMinutes - segment.startMinutes) / 60, 0);
 
     return [
-      { label: "対象ワークフロー", value: workflowsInView, suffix: "件", icon: Layers, color: "text-cyan-500" },
-      { label: "対象作業員", value: workersInView, suffix: "名", icon: Users, color: "text-blue-500" },
-      { label: "対象工程", value: processesInView, suffix: "件", icon: Package, color: "text-violet-500" },
-      { label: "配置ブロック", value: segments.length, suffix: "本", icon: Target, color: "text-emerald-500" },
-      { label: "総配置時間", value: totalHours.toFixed(1), suffix: "h", icon: Clock3, color: "text-amber-500" },
+      { label: "業務数", value: workflowsInView, suffix: "件", icon: Layers, color: "text-cyan-500" },
+      { label: "作業者数", value: workersInView, suffix: "人", icon: Users, color: "text-blue-500" },
+      { label: "工程数", value: processesInView, suffix: "工程", icon: Package, color: "text-violet-500" },
+      { label: "配置枠数", value: segments.length, suffix: "枠", icon: Target, color: "text-emerald-500" },
+      { label: "総工数", value: totalHours.toFixed(1), suffix: "時間", icon: Clock3, color: "text-amber-500" },
     ];
   }, [segments, filteredWorkflows, allSteps]);
 
@@ -402,7 +547,7 @@ export function WorkPerformance() {
         style={{ width: `${LABEL_COLUMN_WIDTH}px` }}
       >
         <div className={`text-[11px] font-medium ${c.textMuted}`}>
-          {viewMode === "workflow" ? "荷主 / エリア / 工程" : "作業員"}
+          {viewMode === "workflow" ? "業務 / 荷主 / 拠点 / 工程" : "作業者"}
         </div>
       </div>
       <div className="shrink-0" style={{ width: `${timelineWidth}px` }}>
@@ -465,7 +610,7 @@ export function WorkPerformance() {
       </div>
 
       <div className={`${c.bgCard} border-b ${c.border} px-6 py-3`}>
-        <div className="grid gap-3 xl:grid-cols-[180px_180px_180px_minmax(0,1fr)_auto]">
+        <div className="grid gap-3 xl:grid-cols-[180px_180px_180px_minmax(0,1fr)_auto_auto]">
           <label className="space-y-1">
             <span className={`text-[11px] ${c.textMuted}`}>荷主</span>
             <select
@@ -483,16 +628,16 @@ export function WorkPerformance() {
           </label>
 
           <label className="space-y-1">
-            <span className={`text-[11px] ${c.textMuted}`}>エリア</span>
+            <span className={`text-[11px] ${c.textMuted}`}>業務</span>
             <select
-              value={filterAreaId}
-              onChange={(event) => setFilterAreaId(event.target.value)}
+              value={filterWorkflowId}
+              onChange={(event) => setFilterWorkflowId(event.target.value)}
               className={`${c.bgSurface} ${c.borderCard} ${c.textPrimary} w-full rounded-xl border px-3 py-2 text-[13px] outline-none`}
             >
               <option value="all">すべて</option>
-              {areaOptions.map((area) => (
-                <option key={area.id} value={area.id}>
-                  {area.name}
+              {workflowOptions.map((workflow) => (
+                <option key={workflow.id} value={workflow.id}>
+                  {workflow.name}
                 </option>
               ))}
             </select>
@@ -515,20 +660,20 @@ export function WorkPerformance() {
           </label>
 
           <label className="space-y-1">
-            <span className={`text-[11px] ${c.textMuted}`}>キーワード</span>
+            <span className={`text-[11px] ${c.textMuted}`}>検索</span>
             <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${c.bgSurface} ${c.borderCard}`}>
               <Search className={`h-4 w-4 ${c.textMuted}`} />
               <input
                 value={keyword}
                 onChange={(event) => setKeyword(event.target.value)}
-                placeholder="ワークフロー名や工程名で検索"
+                placeholder="荷主、業務、工程で検索"
                 className={`w-full bg-transparent text-[13px] ${c.textPrimary} outline-none placeholder:text-slate-400`}
               />
             </div>
           </label>
 
           <div className="space-y-1">
-            <span className={`text-[11px] ${c.textMuted}`}>表示粒度</span>
+            <span className={`text-[11px] ${c.textMuted}`}>表示幅</span>
             <div className={`flex rounded-xl border p-1 ${c.bgSurface} ${c.borderCard}`}>
               {DISPLAY_SCALES.map((scale) => (
                 <button
@@ -537,31 +682,32 @@ export function WorkPerformance() {
                   onClick={() => setTimeScale(scale)}
                   className={`rounded-lg px-3 py-1.5 text-[12px] font-medium ${timeScale === scale ? "bg-blue-600 text-white" : c.textSecondary}`}
                 >
-                  {scale === "15m" ? "15分" : scale === "30m" ? "30分" : "1時間"}
+                  {scale}
                 </button>
               ))}
             </div>
           </div>
-        </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <div className={`inline-flex rounded-xl border p-1 ${c.bgSurface} ${c.borderCard}`}>
-            <button
-              type="button"
-              onClick={() => setViewMode("workflow")}
-              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "workflow" ? "bg-blue-600 text-white" : c.textSecondary}`}
-            >
-              <Layers className="h-4 w-4" />
-              ワークフロー別
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("worker")}
-              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "worker" ? "bg-blue-600 text-white" : c.textSecondary}`}
-            >
-              <UserRound className="h-4 w-4" />
-              作業員別
-            </button>
+          <div className="space-y-1">
+            <span className={`text-[11px] ${c.textMuted}`}>表示単位</span>
+            <div className={`inline-flex rounded-xl border p-1 ${c.bgSurface} ${c.borderCard}`}>
+              <button
+                type="button"
+                onClick={() => setViewMode("workflow")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "workflow" ? "bg-blue-600 text-white" : c.textSecondary}`}
+              >
+                <Layers className="h-4 w-4" />
+                業務
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("worker")}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "worker" ? "bg-blue-600 text-white" : c.textSecondary}`}
+              >
+                <UserRound className="h-4 w-4" />
+                作業者
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -569,9 +715,9 @@ export function WorkPerformance() {
       <div className="min-h-0 flex-1 overflow-hidden px-6 py-5">
         {!hasRows ? (
           <div className={`${c.bgCard} ${c.border} rounded-3xl border px-6 py-16 text-center`}>
-            <div className={`text-[16px] font-semibold ${c.textPrimary}`}>表示できる作業実績がありません</div>
+            <div className={`text-[16px] font-semibold ${c.textPrimary}`}>配置ブロックがありません</div>
             <div className={`mt-2 text-[13px] ${c.textSecondary}`}>
-              現場配置の対象ワークフロー、またはフィルター条件に一致するデータが見つかりません。
+              絞り込み条件を見直して再度確認してください。
             </div>
           </div>
         ) : (
@@ -582,25 +728,31 @@ export function WorkPerformance() {
 
                 {viewMode === "workflow" ? (
                   workflowGroups.map((group) => {
-                    const workflowTone = processColorClasses[group.workflow.color] ?? processColorClasses.cyan;
+                    const workflowTone = getReadableGanttTone(group.workflow.color, c.isDark);
 
                     return (
                       <section key={group.workflow.id} className={`border-b ${c.borderCard} last:border-b-0`}>
                         <div className={`flex border-b ${c.borderCard}`}>
                           <div
-                            className={`sticky left-0 z-20 shrink-0 border-r px-4 py-3 ${workflowTone.bg} ${workflowTone.text} ${c.border}`}
-                            style={{ width: `${LABEL_COLUMN_WIDTH}px` }}
+                            className="sticky left-0 z-20 shrink-0 border-r px-4 py-3"
+                            style={{ width: `${LABEL_COLUMN_WIDTH}px`, ...workflowTone.headerStyle }}
                           >
                             <div className="text-[13px] font-semibold">{group.workflow.workflowName}</div>
-                            <div className={`mt-1 text-[11px] ${c.textSecondary}`}>
-                              {group.workflow.shipperName} / {group.workflow.areaName}
+                            <div className="mt-1 text-[11px]" style={workflowTone.subtitleStyle}>
+                              {group.workflow.shipperName}
                             </div>
                           </div>
-                          <div className={`${workflowTone.bg} shrink-0`} style={{ width: `${timelineWidth}px` }} />
+                          <div
+                            className="shrink-0"
+                            style={{
+                              width: `${timelineWidth}px`,
+                              backgroundColor: workflowTone.headerStyle.backgroundColor,
+                            }}
+                          />
                         </div>
 
                         {group.rows.map((row) => {
-                          const rowTone = processColorClasses[row.step.color] ?? processColorClasses.cyan;
+                          const rowTone = getReadableGanttTone(row.step.color, c.isDark);
                           const rowHeight = getWorkflowRowHeight(row.laneCount);
 
                           return (
@@ -610,11 +762,14 @@ export function WorkPerformance() {
                                 style={{ width: `${LABEL_COLUMN_WIDTH}px` }}
                               >
                                 <div className="flex items-start gap-3">
-                                  <div className={`rounded-xl border px-2 py-2 ${rowTone.bg} ${rowTone.border} ${rowTone.text}`}>
+                                  <div className="rounded-xl border px-2 py-2" style={rowTone.chipStyle}>
                                     <row.step.icon className="h-4 w-4" />
                                   </div>
                                   <div className="min-w-0">
                                     <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{row.step.processName}</div>
+                                    <div className={`mt-1 text-[11px] ${c.textSecondary}`}>
+                                      {row.step.startTime} - {row.step.targetEndTime}
+                                    </div>
                                   </div>
                                 </div>
                               </div>
@@ -632,24 +787,28 @@ export function WorkPerformance() {
                                 ) : null}
 
                                 {row.segments.map((segment) => {
-                                  const tone = processColorClasses[segment.color] ?? processColorClasses.cyan;
+                                  const tone = getReadableGanttTone(segment.color, c.isDark);
                                   const left = minuteToPixels(segment.startMinutes, timelineWidth);
-                                  const width = Math.max(52, minuteToPixels(segment.endMinutes - segment.startMinutes, timelineWidth));
+                                  const width = Math.max(
+                                    52,
+                                    minuteToPixels(segment.endMinutes - segment.startMinutes, timelineWidth),
+                                  );
                                   const top = 12 + segment.laneIndex * 34;
 
                                   return (
                                     <div
                                       key={`${segment.key}:${segment.startMinutes}`}
                                       title={`${segment.workerName} | ${formatClock(segment.startMinutes)} - ${formatClock(segment.endMinutes)}`}
-                                      className={`absolute flex h-[28px] items-center gap-2 overflow-hidden rounded-xl border px-3 text-[11px] font-medium shadow-sm ${tone.bg} ${tone.border} ${tone.text}`}
+                                      className="absolute flex h-[28px] items-center gap-2 overflow-hidden rounded-xl border px-3 text-[11px] font-semibold"
                                       style={{
                                         left: `${left}px`,
                                         top: `${top}px`,
                                         width: `${width}px`,
+                                        ...tone.barStyle,
                                       }}
                                     >
                                       <span className="truncate">{segment.workerName}</span>
-                                      <span className="ml-auto shrink-0 text-[10px] opacity-70">
+                                      <span className="ml-auto shrink-0 text-[10px]" style={tone.metaStyle}>
                                         {formatClock(segment.startMinutes)} - {formatClock(segment.endMinutes)}
                                       </span>
                                     </div>
@@ -678,7 +837,7 @@ export function WorkPerformance() {
                             </div>
                             <div className="min-w-0">
                               <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{worker.name}</div>
-                              <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{worker.note ?? "現場配置中"}</div>
+                              <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{worker.note ?? "備考なし"}</div>
                             </div>
                           </div>
                         </div>
@@ -690,23 +849,31 @@ export function WorkPerformance() {
                           {renderTimelineGrid()}
 
                           {workerSegments.map((segment) => {
-                            const tone = processColorClasses[segment.color] ?? processColorClasses.cyan;
+                            const tone = getReadableGanttTone(segment.color, c.isDark);
                             const left = minuteToPixels(segment.startMinutes, timelineWidth);
-                            const width = Math.max(56, minuteToPixels(segment.endMinutes - segment.startMinutes, timelineWidth));
+                            const width = Math.max(
+                              96,
+                              minuteToPixels(segment.endMinutes - segment.startMinutes, timelineWidth),
+                            );
 
                             return (
                               <div
                                 key={`${segment.key}:${segment.startMinutes}`}
-                                title={`${segment.processName} | ${segment.areaName} | ${formatClock(segment.startMinutes)} - ${formatClock(segment.endMinutes)}`}
-                                className={`absolute top-3 flex h-[44px] items-center gap-2 overflow-hidden rounded-xl border px-3 text-[11px] font-medium shadow-sm ${tone.bg} ${tone.border} ${tone.text}`}
+                                title={`${segment.shipperName} | ${segment.processName} | ${formatClock(segment.startMinutes)} - ${formatClock(segment.endMinutes)}`}
+                                className="absolute top-3 flex h-[44px] items-center gap-3 overflow-hidden rounded-xl border px-3 text-[11px] font-semibold"
                                 style={{
                                   left: `${left}px`,
                                   width: `${width}px`,
+                                  ...tone.barStyle,
                                 }}
                               >
-                                <span className="truncate">{segment.processName}</span>
-                                <span className="shrink-0 text-[10px] opacity-70">{segment.areaName}</span>
-                                <span className="ml-auto shrink-0 text-[10px] opacity-70">
+                                <div className="min-w-0 flex-1 leading-tight">
+                                  <div className="truncate">{segment.processName}</div>
+                                  <div className="truncate text-[10px]" style={tone.metaStyle}>
+                                    {segment.shipperName}
+                                  </div>
+                                </div>
+                                <span className="ml-auto shrink-0 text-[10px]" style={tone.metaStyle}>
                                   {formatClock(segment.startMinutes)} - {formatClock(segment.endMinutes)}
                                 </span>
                               </div>

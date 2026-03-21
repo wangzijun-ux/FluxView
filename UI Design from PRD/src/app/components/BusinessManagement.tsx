@@ -239,9 +239,9 @@ export function BusinessManagement() {
           <div className={`p-4 border-b ${c.border} bg-gray-500/5`}>
             <div className="flex items-center gap-2">
               <Layers className={`w-4 h-4 text-indigo-500`} />
-              <h3 className={`${c.textSecondary} text-[11px] font-black uppercase tracking-[0.2em]`}>ワークフローツリー</h3>
+              <h3 className={`${c.textSecondary} text-[11px] font-black uppercase tracking-[0.2em]`}>業務ツリー</h3>
             </div>
-            <p className="text-[10px] text-gray-400 mt-2">荷主→拠点→エリアを選択し、右側でワークフロー編集を行います。</p>
+            <p className="text-[10px] text-gray-400 mt-2">荷主→拠点→エリアを選択し、右側で業務編集を行います。</p>
           </div>
           <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
             {clients.map((client) => {

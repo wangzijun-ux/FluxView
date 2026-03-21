@@ -20,13 +20,29 @@ import {
   ToggleLeft,
   ToggleRight,
   Award,
-  Activity,
-  Calendar,
-  Zap,
 } from "lucide-react";
 import { useThemeColors } from "./ThemeContext";
 import { useMasterData } from "./MasterDataContext";
 import { defaultMasterData } from "./masterStore";
+import {
+  readDeploymentWorkers,
+  writeDeploymentWorkerNotes,
+} from "./fieldDeploymentStore";
+import {
+  DEFAULT_QUALIFICATION_ICON_KEY,
+  DEFAULT_SKILL_ICON_KEY,
+  getCapabilityToneClasses,
+  getMasterIconOption,
+  type CapabilityTone,
+  type MasterIconKey,
+} from "./masterIconOptions";
+import {
+  DEFAULT_USER_UNIT_PRICE,
+  USER_STORAGE_KEY,
+  buildDeploymentWorkerIdFromUserId,
+  normalizeUsersWithMasterData,
+  readUsersFromStorage,
+} from "./userStore";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -71,6 +87,8 @@ interface User {
   createdAt: string;
   mfaEnabled: boolean;
   employmentType: "正社員" | "パートナー" | "派遣";
+  unitPrice: number;
+  deploymentWorkerId?: string;
   dispatchCompanyId?: string;
   skills: SkillAssignment[];
   certifications: CertificationAssignment[];
@@ -199,89 +217,9 @@ const initialRoles: Role[] = [
   },
 ];
 
-export const initialUsers: User[] = [
-  { id: "U001", name: "管理者 太郎", email: "admin@fluxview.jp", avatar: "管", roleIds: ["role-admin"], status: "active", lastLogin: "2026-03-04 09:45", createdAt: "2025-04-01", mfaEnabled: true, employmentType: "正社員", skills: [{ name: "検品", level: 5 }], certifications: [], performance: { uph: 168, attendanceRate: 98 } },
-  { id: "U002", name: "山田 花子", email: "yamada@fluxview.jp", avatar: "山", roleIds: ["role-admin"], status: "active", lastLogin: "2026-03-04 08:30", createdAt: "2025-04-01", mfaEnabled: true, employmentType: "正社員", skills: [{ name: "梱包", level: 5 }], certifications: [], performance: { uph: 155, attendanceRate: 96 } },
-  { id: "U003", name: "田中 一郎", email: "tanaka@fluxview.jp", avatar: "田", roleIds: ["role-manager"], status: "active", lastLogin: "2026-03-04 10:00", createdAt: "2025-05-15", mfaEnabled: true, employmentType: "正社員", skills: [{ name: "仕分け", level: 4 }], certifications: [{ name: "フォークリフト免許", expiry: "2027-06-15", status: "valid" }], performance: { uph: 145, attendanceRate: 95 } },
-  { id: "U004", name: "佐藤 美紀", email: "sato@fluxview.jp", avatar: "佐", roleIds: ["role-manager"], status: "active", lastLogin: "2026-03-03 17:20", createdAt: "2025-06-01", mfaEnabled: false, employmentType: "正社員", skills: [{ name: "流通加工", level: 4 }], certifications: [], performance: { uph: 138, attendanceRate: 97 } },
-  { id: "U005", name: "鈴木 健太", email: "suzuki@fluxview.jp", avatar: "鈴", roleIds: ["role-manager"], status: "active", lastLogin: "2026-03-04 07:50", createdAt: "2025-06-10", mfaEnabled: true, employmentType: "正社員", skills: [{ name: "リフト操作", level: 5 }], certifications: [{ name: "フォークリフト免許", expiry: "2028-03-20", status: "valid" }], performance: { uph: 172, attendanceRate: 99 } },
-  { id: "U006", name: "高橋 翔太", email: "takahashi@fluxview.jp", avatar: "高", roleIds: ["role-leader"], status: "active", lastLogin: "2026-03-04 06:15", createdAt: "2025-07-01", mfaEnabled: false, employmentType: "正社員", skills: [{ name: "検品", level: 4 }, { name: "梱包", level: 4 }], certifications: [], performance: { uph: 152, attendanceRate: 94 } },
-  { id: "U007", name: "伊藤 さくら", email: "ito@fluxview.jp", avatar: "伊", roleIds: ["role-leader"], status: "active", lastLogin: "2026-03-04 06:10", createdAt: "2025-07-15", mfaEnabled: false, employmentType: "正社員", skills: [{ name: "ラベリング", level: 5 }], certifications: [], performance: { uph: 142, attendanceRate: 95 } },
-  { id: "U008", name: "渡辺 大輔", email: "watanabe@fluxview.jp", avatar: "渡", roleIds: ["role-leader"], status: "inactive", lastLogin: "2026-02-28 14:30", createdAt: "2025-08-01", mfaEnabled: false, employmentType: "パートナー", skills: [{ name: "仕分け", level: 3 }], certifications: [], performance: { uph: 125, attendanceRate: 85 } },
-  { id: "U009", name: "中村 由美", email: "nakamura@fluxview.jp", avatar: "中", roleIds: ["role-leader"], status: "active", lastLogin: "2026-03-04 06:20", createdAt: "2025-08-15", mfaEnabled: false, employmentType: "パートナー", skills: [{ name: "検品", level: 4 }], certifications: [], performance: { uph: 148, attendanceRate: 92 } },
-  { id: "U010", name: "小林 勇気", email: "kobayashi@fluxview.jp", avatar: "小", roleIds: ["role-leader"], status: "locked", lastLogin: "2026-03-01 09:00", createdAt: "2025-09-01", mfaEnabled: false, employmentType: "派遣", dispatchCompanyId: "dispatch-2", skills: [{ name: "梱包", level: 3 }], certifications: [], performance: { uph: 115, attendanceRate: 80 } },
-  { id: "U011", name: "加藤 和子", email: "kato@fluxview.jp", avatar: "加", roleIds: ["role-viewer"], status: "active", lastLogin: "2026-03-04 10:10", createdAt: "2025-09-15", mfaEnabled: false, employmentType: "正社員", skills: [], certifications: [], performance: { uph: 130, attendanceRate: 94 } },
-  { id: "U012", name: "吉田 誠", email: "yoshida@fluxview.jp", avatar: "吉", roleIds: ["role-viewer"], status: "active", lastLogin: "2026-03-03 16:00", createdAt: "2025-10-01", mfaEnabled: false, employmentType: "パートナー", skills: [], certifications: [], performance: { uph: 122, attendanceRate: 88 } },
-  { id: "U013", name: "松本 真司", email: "matsumoto@fluxview.jp", avatar: "松", roleIds: ["role-dispatch-mgr"], status: "active", lastLogin: "2026-03-04 09:30", createdAt: "2025-10-15", mfaEnabled: true, employmentType: "正社員", skills: [], certifications: [], performance: { uph: 140, attendanceRate: 96 } },
-  { id: "U014", name: "井上 恵", email: "inoue@fluxview.jp", avatar: "井", roleIds: ["role-dispatch-mgr"], status: "active", lastLogin: "2026-03-04 08:45", createdAt: "2025-11-01", mfaEnabled: false, employmentType: "正社員", skills: [], certifications: [], performance: { uph: 128, attendanceRate: 93 } },
-  { id: "U015", name: "木村 拓也", email: "kimura@fluxview.jp", avatar: "木", roleIds: ["role-viewer"], status: "inactive", lastLogin: "2026-01-15 11:00", createdAt: "2025-11-15", mfaEnabled: false, employmentType: "派遣", dispatchCompanyId: "dispatch-4", skills: [], certifications: [], performance: { uph: 110, attendanceRate: 75 } },
-  { id: "U016", name: "林 由香里", email: "hayashi@fluxview.jp", avatar: "林", roleIds: ["role-viewer"], status: "active", lastLogin: "2026-03-02 13:20", createdAt: "2025-12-01", mfaEnabled: false, employmentType: "パートナー", skills: [], certifications: [], performance: { uph: 135, attendanceRate: 91 } },
-];
-
-const USER_STORAGE_KEY = "fluxview-users-v1";
 const defaultSkillNameSet = new Set(defaultMasterData.skills.map((item) => item.name));
 const defaultQualificationNameSet = new Set(defaultMasterData.qualifications.map((item) => item.name));
 const defaultDispatchCompanyIdSet = new Set(defaultMasterData.dispatchCompanies.map((item) => item.id));
-const defaultDispatchCompanyByUserId: Record<string, string> = {
-  U010: "dispatch-2",
-  U015: "dispatch-4",
-};
-
-const initialSkillAliasMap: Record<string, string> = {
-  "検品": "検品作業",
-  "梱包": "梱包作業",
-  "仕分け": "仕分け作業",
-  "流通加工": "AI検品装置操作",
-  "リフト操作": "フォークリフト操作",
-  "ラベリング": "RFIDタグ発行",
-};
-
-const initialQualificationAliasMap: Record<string, string> = {
-  "フォークリフト免許": "フォークリフト運転技能講習",
-};
-
-function normalizeUsersWithMasterData(
-  users: User[],
-  validSkillNames: Set<string>,
-  validQualificationNames: Set<string>,
-  validDispatchCompanyIds: Set<string>,
-): User[] {
-  return users.map((user) => ({
-    ...user,
-    dispatchCompanyId:
-      user.employmentType === "派遣" &&
-      (user.dispatchCompanyId ?? defaultDispatchCompanyByUserId[user.id]) &&
-      validDispatchCompanyIds.has(user.dispatchCompanyId ?? defaultDispatchCompanyByUserId[user.id])
-        ? user.dispatchCompanyId ?? defaultDispatchCompanyByUserId[user.id]
-        : undefined,
-    skills: user.skills.flatMap((skill) => {
-      const name = initialSkillAliasMap[skill.name] ?? skill.name;
-      return validSkillNames.has(name) ? [{ ...skill, name }] : [];
-    }),
-    certifications: user.certifications.flatMap((certification) => {
-      const name = initialQualificationAliasMap[certification.name] ?? certification.name;
-      return validQualificationNames.has(name) ? [{ ...certification, name }] : [];
-    }),
-  }));
-}
-
-function readInitialUsers() {
-  try {
-    const raw = localStorage.getItem(USER_STORAGE_KEY);
-    if (!raw) {
-      return normalizeUsersWithMasterData(initialUsers, defaultSkillNameSet, defaultQualificationNameSet, defaultDispatchCompanyIdSet);
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return normalizeUsersWithMasterData(initialUsers, defaultSkillNameSet, defaultQualificationNameSet, defaultDispatchCompanyIdSet);
-    }
-    return normalizeUsersWithMasterData(parsed as User[], defaultSkillNameSet, defaultQualificationNameSet, defaultDispatchCompanyIdSet);
-  } catch {
-    return normalizeUsersWithMasterData(initialUsers, defaultSkillNameSet, defaultQualificationNameSet, defaultDispatchCompanyIdSet);
-  }
-}
-
-
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -298,6 +236,40 @@ const empTypeColor: Record<string, string> = {
   "派遣": "bg-orange-500/15 text-orange-400",
 };
 
+const formatUnitPrice = (value: number) => `¥${value.toLocaleString("ja-JP")}`;
+
+function CapabilityIconChip({
+  title,
+  tone,
+  iconKey,
+  sizeClass = "h-5 w-5",
+  iconSizeClass = "h-3 w-3",
+  roundedClass = "rounded-md",
+}: {
+  title: string;
+  tone: CapabilityTone;
+  iconKey?: MasterIconKey;
+  sizeClass?: string;
+  iconSizeClass?: string;
+  roundedClass?: string;
+}) {
+  const toneClasses = getCapabilityToneClasses(tone);
+  const fallbackIconKey =
+    tone === "qualification" ? DEFAULT_QUALIFICATION_ICON_KEY : DEFAULT_SKILL_ICON_KEY;
+  const iconOption = getMasterIconOption(iconKey, fallbackIconKey);
+  const Icon = iconOption.icon;
+
+  return (
+    <div
+      title={title}
+      aria-label={title}
+      className={`${sizeClass} ${roundedClass} border flex items-center justify-center ${toneClasses.surfaceClass}`}
+    >
+      <Icon className={`${iconSizeClass} ${toneClasses.accentClass}`} />
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -309,6 +281,11 @@ export function UserManagement() {
   const masterQualificationNameSet = useMemo(() => new Set(qualifications.map((item) => item.name)), [qualifications]);
   const masterDispatchCompanyIdSet = useMemo(() => new Set(dispatchCompanies.map((item) => item.id)), [dispatchCompanies]);
   const dispatchCompanyMap = useMemo(() => new Map(dispatchCompanies.map((item) => [item.id, item])), [dispatchCompanies]);
+  const skillMasterMap = useMemo(() => new Map(skills.map((item) => [item.name, item])), [skills]);
+  const qualificationMasterMap = useMemo(
+    () => new Map(qualifications.map((item) => [item.name, item])),
+    [qualifications],
+  );
   const capabilityOptions = useMemo(
     () => Array.from(new Set([...skills.map((item) => item.name), ...qualifications.map((item) => item.name)])).sort((a, b) => a.localeCompare(b, "ja")),
     [skills, qualifications],
@@ -318,7 +295,7 @@ export function UserManagement() {
   const [activeTab, setActiveTab] = useState<"users" | "roles">("users");
 
   // User management state
-  const [users, setUsers] = useState<User[]>(() => readInitialUsers());
+  const [users, setUsers] = useState<User[]>(() => readUsersFromStorage());
   const [roles, setRoles] = useState<Role[]>(initialRoles);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterRole, setFilterRole] = useState("all");
@@ -327,12 +304,19 @@ export function UserManagement() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [filterSkill, setFilterSkill] = useState("all");
   const [showAddUser, setShowAddUser] = useState(false);
+  const [deploymentWorkersDraft, setDeploymentWorkersDraft] = useState(() => readDeploymentWorkers());
+  const deploymentWorkerNoteMap = useMemo(
+    () => new Map(deploymentWorkersDraft.map((worker) => [worker.id, worker.note ?? ""])),
+    [deploymentWorkersDraft],
+  );
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserRoleId, setNewUserRoleId] = useState(initialRoles[3]?.id ?? initialRoles[0]?.id ?? "");
   const [newUserEmploymentType, setNewUserEmploymentType] = useState<"正社員" | "パートナー" | "派遣">("正社員");
   const [newUserDispatchCompanyId, setNewUserDispatchCompanyId] = useState(defaultMasterData.dispatchCompanies[0]?.id ?? "");
   const [newUserStatus, setNewUserStatus] = useState<"active" | "inactive">("active");
+  const [newUserUnitPrice, setNewUserUnitPrice] = useState(String(DEFAULT_USER_UNIT_PRICE));
+  const [selectedUnitPriceDraft, setSelectedUnitPriceDraft] = useState("");
 
   // Role management state
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
@@ -351,6 +335,16 @@ export function UserManagement() {
 
   useEffect(() => {
     localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(users));
+  }, [users]);
+
+  useEffect(() => {
+    setDeploymentWorkersDraft((prev) => {
+      const draftNoteMap = new Map(prev.map((worker) => [worker.id, worker.note ?? ""]));
+      return readDeploymentWorkers().map((worker) => ({
+        ...worker,
+        note: draftNoteMap.get(worker.id) ?? worker.note ?? "",
+      }));
+    });
   }, [users]);
 
   useEffect(() => {
@@ -387,6 +381,11 @@ export function UserManagement() {
   const selectedRole = selectedRoleId ? roles.find((r) => r.id === selectedRoleId) : null;
   const getRoleName = (roleId: string) => roles.find((r) => r.id === roleId)?.name ?? "不明";
   const getRoleColor = (roleId: string) => roles.find((r) => r.id === roleId)?.color ?? "text-gray-400";
+
+  useEffect(() => {
+    setSelectedUnitPriceDraft(selectedUser ? String(selectedUser.unitPrice) : "");
+  }, [selectedUser]);
+
   const resetNewUserForm = () => {
     setNewUserName("");
     setNewUserEmail("");
@@ -394,12 +393,35 @@ export function UserManagement() {
     setNewUserEmploymentType("正社員");
     setNewUserDispatchCompanyId("");
     setNewUserStatus("active");
+    setNewUserUnitPrice(String(DEFAULT_USER_UNIT_PRICE));
+  };
+
+  const updateDeploymentWorkerNoteDraft = (workerId: string, note: string) => {
+    setDeploymentWorkersDraft((prev) =>
+      prev.map((worker) => (worker.id === workerId ? { ...worker, note } : worker)),
+    );
+  };
+
+  const commitDeploymentWorkerNote = (workerId: string) => {
+    const nextWorkers = deploymentWorkersDraft.map((worker) =>
+      worker.id === workerId ? { ...worker, note: (worker.note ?? "").trim() } : worker,
+    );
+
+    setDeploymentWorkersDraft(nextWorkers);
+    writeDeploymentWorkerNotes(
+      Object.fromEntries(nextWorkers.map((worker) => [worker.id, worker.note ?? ""])),
+    );
+    showToast("配置備考を更新しました");
   };
 
   // User actions
   const addNewUser = () => {
     const name = newUserName.trim();
     const email = newUserEmail.trim();
+    const parsedUnitPrice = Number(newUserUnitPrice);
+    const nextUnitPrice = Number.isFinite(parsedUnitPrice) && parsedUnitPrice >= 0
+      ? Math.round(parsedUnitPrice)
+      : DEFAULT_USER_UNIT_PRICE;
 
     if (!name || !email || !newUserRoleId) return;
     if (newUserEmploymentType === "派遣" && !newUserDispatchCompanyId) return;
@@ -416,6 +438,7 @@ export function UserManagement() {
       ...prev,
       {
         id: nextId,
+        deploymentWorkerId: buildDeploymentWorkerIdFromUserId(nextId, nextNumber - 1),
         name,
         email,
         avatar,
@@ -425,6 +448,7 @@ export function UserManagement() {
         createdAt: new Date().toISOString().slice(0, 10),
         mfaEnabled: false,
         employmentType: newUserEmploymentType,
+        unitPrice: nextUnitPrice,
         dispatchCompanyId: newUserEmploymentType === "派遣" ? newUserDispatchCompanyId : undefined,
         skills: [],
         certifications: [],
@@ -434,6 +458,25 @@ export function UserManagement() {
     setShowAddUser(false);
     resetNewUserForm();
     showToast("ユーザーを追加しました");
+  };
+
+  const updateUserUnitPrice = (userId: string, unitPrice: number) => {
+    setUsers((prev) => prev.map((u) => (
+      u.id === userId ? { ...u, unitPrice } : u
+    )));
+  };
+
+  const commitUserUnitPrice = (userId: string) => {
+    const parsedUnitPrice = Number(selectedUnitPriceDraft);
+    const nextUnitPrice = Number.isFinite(parsedUnitPrice) && parsedUnitPrice >= 0
+      ? Math.round(parsedUnitPrice)
+      : DEFAULT_USER_UNIT_PRICE;
+
+    if (selectedUser?.unitPrice !== nextUnitPrice) {
+      updateUserUnitPrice(userId, nextUnitPrice);
+      showToast("単価を更新しました");
+    }
+    setSelectedUnitPriceDraft(String(nextUnitPrice));
   };
 
   const toggleUserStatus = (userId: string) => {
@@ -664,7 +707,7 @@ export function UserManagement() {
               </select>
             </div>
 
-            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_0.8fr_auto]">
+            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_140px_120px_auto]">
               {newUserEmploymentType === "派遣" ? (
                 <select value={newUserDispatchCompanyId} onChange={(e) => setNewUserDispatchCompanyId(e.target.value)} className={`${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}>
                   <option value="">{dispatchCompanies.length === 0 ? "派遣会社マスタが未登録です" : "派遣会社を選択"}</option>
@@ -677,6 +720,19 @@ export function UserManagement() {
                   派遣以外の雇用形態では派遣会社の指定は不要です
                 </div>
               )}
+
+              <label className={`relative flex items-center rounded-lg border ${c.border} ${c.bgCard}`}>
+                <input
+                  type="number"
+                  min="0"
+                  step="10"
+                  placeholder="単価"
+                  value={newUserUnitPrice}
+                  onChange={(e) => setNewUserUnitPrice(e.target.value)}
+                  className={`w-full bg-transparent rounded-lg px-3 py-2 pr-12 text-[13px] ${c.textPrimary} outline-none`}
+                />
+                <span className={`pointer-events-none absolute right-3 text-[11px] ${c.textMuted}`}>円/時</span>
+              </label>
 
               <select value={newUserStatus} onChange={(e) => setNewUserStatus(e.target.value as "active" | "inactive")} className={`${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}>
                 <option value="active">有効</option>
@@ -779,7 +835,7 @@ export function UserManagement() {
               <table className="w-full">
                 <thead className={`sticky top-0 z-10 ${c.bgCard}`}>
                   <tr className={`border-b ${c.border}`}>
-                    {["ユーザー", "スキル・資格", "ロール", "雇用形態", "ステータス", "MFA", "最終ログイン", "操作"].map((h) => (
+                    {["ユーザー", "スキル・資格", "ロール", "雇用形態", "単価", "ステータス", "MFA", "最終ログイン", "操作"].map((h) => (
                       <th key={h} className={`text-left text-[11px] ${c.textMuted} px-4 py-3 whitespace-nowrap`}>{h === "操作" ? "" : h}</th>
                     ))}
                   </tr>
@@ -808,14 +864,20 @@ export function UserManagement() {
                         <td className="px-4 py-3">
                           <div className="flex flex-wrap gap-1 max-w-[140px]">
                             {user.skills.slice(0, 2).map(s => (
-                              <div key={s.name} className="w-5 h-5 rounded-md bg-violet-500/10 flex items-center justify-center text-violet-500" title={s.name}>
-                                <Award className="w-3 h-3" />
-                              </div>
+                              <CapabilityIconChip
+                                key={s.name}
+                                title={s.name}
+                                tone="skill"
+                                iconKey={skillMasterMap.get(s.name)?.iconKey}
+                              />
                             ))}
                             {user.certifications.slice(0, 1).map(c => (
-                              <div key={c.name} className="w-5 h-5 rounded-md bg-emerald-500/10 flex items-center justify-center text-emerald-500" title={c.name}>
-                                <ShieldCheck className="w-3 h-3" />
-                              </div>
+                              <CapabilityIconChip
+                                key={c.name}
+                                title={c.name}
+                                tone="qualification"
+                                iconKey={qualificationMasterMap.get(c.name)?.iconKey}
+                              />
                             ))}
                             {(user.skills.length + user.certifications.length) > 3 && (
                               <span className={`text-[10px] ${c.textMuted} self-center ml-1`}>+{user.skills.length + user.certifications.length - 3}</span>
@@ -842,6 +904,12 @@ export function UserManagement() {
                                 {user.dispatchCompanyId ? dispatchCompanyMap.get(user.dispatchCompanyId)?.name ?? "会社未設定" : "会社未設定"}
                               </span>
                             )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex flex-col gap-0.5">
+                            <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{formatUnitPrice(user.unitPrice)}</span>
+                            <span className={`text-[10px] ${c.textMuted}`}>個別設定</span>
                           </div>
                         </td>
                         <td className="px-4 py-3">
@@ -901,6 +969,32 @@ export function UserManagement() {
 
                 {/* Status & Actions */}
                 <div className="space-y-3">
+                  <div className={`p-3 rounded-lg ${c.bgSurface} space-y-2`}>
+                    <div className="flex items-center justify-between">
+                      <span className={`text-[12px] ${c.textSecondary}`}>個別単価</span>
+                      <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{formatUnitPrice(selectedUser.unitPrice)}</span>
+                    </div>
+                    <label className={`relative block`}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="10"
+                        value={selectedUnitPriceDraft}
+                        onChange={(e) => setSelectedUnitPriceDraft(e.target.value)}
+                        onBlur={() => commitUserUnitPrice(selectedUser.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            e.currentTarget.blur();
+                          }
+                        }}
+                        className={`w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 pr-14 text-[13px] ${c.textPrimary} outline-none`}
+                      />
+                      <span className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] ${c.textMuted}`}>円/時</span>
+                    </label>
+                    <p className={`text-[10px] ${c.textMuted}`}>未入力や不正値は {DEFAULT_USER_UNIT_PRICE} 円/時で保存します</p>
+                  </div>
+
                   <div className={`flex items-center justify-between p-3 rounded-lg ${c.bgSurface}`}>
                     <span className={`text-[12px] ${c.textSecondary}`}>ステータス</span>
                     <div className="flex items-center gap-2">
@@ -983,6 +1077,14 @@ export function UserManagement() {
                             <button onClick={() => removeSkillFromUser(selectedUser.id, skill.name)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-rose-500/10 rounded text-rose-400 transition-all">
                               <Trash2 className="w-3 h-3" />
                             </button>
+                            <CapabilityIconChip
+                              title={skill.name}
+                              tone="skill"
+                              iconKey={skillMasterMap.get(skill.name)?.iconKey}
+                              sizeClass="h-7 w-7"
+                              iconSizeClass="h-4 w-4"
+                              roundedClass="rounded-lg"
+                            />
                             <span className={`text-[13px] ${c.textSecondary}`}>{skill.name}</span>
                           </div>
                           <div className="flex gap-0.5">
@@ -1003,8 +1105,16 @@ export function UserManagement() {
                         </button>
                         <div className="absolute top-full left-0 w-full mt-1 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl shadow-2xl opacity-0 invisible group-hover/add:opacity-100 group-hover/add:visible p-2 z-20 space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar">
                           {skills.filter((item) => !selectedUser.skills.find((skill) => skill.name === item.name)).map((item) => (
-                            <button key={item.id} onClick={() => addSkillToUser(selectedUser.id, item.name)} className={`w-full text-left px-3 py-2 rounded-lg text-xs ${c.textSecondary} hover:bg-violet-500/10 hover:text-violet-500 transition-all`}>
-                              {item.name}
+                            <button key={item.id} onClick={() => addSkillToUser(selectedUser.id, item.name)} className={`w-full text-left px-3 py-2 rounded-lg text-xs ${c.textSecondary} hover:bg-violet-500/10 hover:text-violet-500 transition-all flex items-center gap-2`}>
+                              <CapabilityIconChip
+                                title={item.name}
+                                tone="skill"
+                                iconKey={item.iconKey}
+                                sizeClass="h-6 w-6"
+                                iconSizeClass="h-3.5 w-3.5"
+                                roundedClass="rounded-lg"
+                              />
+                              <span>{item.name}</span>
                             </button>
                           ))}
                         </div>
@@ -1019,6 +1129,14 @@ export function UserManagement() {
                             <button onClick={() => removeCertFromUser(selectedUser.id, cert.name)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-rose-500/10 rounded text-rose-400 transition-all">
                               <Trash2 className="w-3 h-3" />
                             </button>
+                            <CapabilityIconChip
+                              title={cert.name}
+                              tone="qualification"
+                              iconKey={qualificationMasterMap.get(cert.name)?.iconKey}
+                              sizeClass="h-7 w-7"
+                              iconSizeClass="h-4 w-4"
+                              roundedClass="rounded-lg"
+                            />
                             <div>
                               <div className={`text-[12px] ${c.textPrimary} font-bold`}>{cert.name}</div>
                               <div className={`text-[10px] ${c.textMuted}`}>{cert.expiry}まで</div>
@@ -1034,17 +1152,64 @@ export function UserManagement() {
                         </button>
                         <div className="absolute top-full left-0 w-full mt-1 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl shadow-2xl opacity-0 invisible group-hover/addcert:opacity-100 group-hover/addcert:visible p-2 z-20 space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar">
                           {qualifications.filter((item) => !selectedUser.certifications.find((certification) => certification.name === item.name)).map((item) => (
-                            <button key={item.id} onClick={() => addCertToUser(selectedUser.id, item.name)} className={`w-full text-left px-3 py-2 rounded-lg text-xs ${c.textSecondary} hover:bg-emerald-500/10 hover:text-emerald-500 transition-all`}>
-                              {item.name}
+                            <button key={item.id} onClick={() => addCertToUser(selectedUser.id, item.name)} className={`w-full text-left px-3 py-2 rounded-lg text-xs ${c.textSecondary} hover:bg-emerald-500/10 hover:text-emerald-500 transition-all flex items-center gap-2`}>
+                              <CapabilityIconChip
+                                title={item.name}
+                                tone="qualification"
+                                iconKey={item.iconKey}
+                                sizeClass="h-6 w-6"
+                                iconSizeClass="h-3.5 w-3.5"
+                                roundedClass="rounded-lg"
+                              />
+                              <span>{item.name}</span>
                             </button>
                           ))}
                         </div>
                       </div>
                     </div>
+
+                    <div className={`rounded-xl border ${c.borderCard} ${c.bgSurface} p-3`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className={`text-[12px] font-semibold ${c.textPrimary}`}>配置備考</div>
+                          <div className={`mt-1 text-[10px] ${c.textMuted}`}>
+                            現場配置の人員カードに表示する備考です
+                          </div>
+                        </div>
+                        {selectedUser.deploymentWorkerId ? (
+                          <span className={`text-[10px] ${c.textMuted}`}>現場配置連携済み</span>
+                        ) : (
+                          <span className={`text-[10px] ${c.textDimmed}`}>未連携</span>
+                        )}
+                      </div>
+
+                      {selectedUser.deploymentWorkerId ? (
+                        <input
+                          type="text"
+                          value={deploymentWorkerNoteMap.get(selectedUser.deploymentWorkerId) ?? ""}
+                          onChange={(event) =>
+                            updateDeploymentWorkerNoteDraft(selectedUser.deploymentWorkerId!, event.target.value)
+                          }
+                          onBlur={() => commitDeploymentWorkerNote(selectedUser.deploymentWorkerId!)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              event.currentTarget.blur();
+                            }
+                          }}
+                          placeholder="例: 梱包担当"
+                          className={`mt-3 w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}
+                        />
+                      ) : (
+                        <div className={`mt-3 rounded-lg border border-dashed ${c.border} px-3 py-2 text-[11px] ${c.textMuted}`}>
+                          このユーザーは現場配置カード用の作業者データに未連携です
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Performance */}
-                  <div className="mt-6 grid grid-cols-2 gap-3">
+                  <div className="mt-6 grid grid-cols-3 gap-3">
                     <div className={`${c.bgSurface} p-3 rounded-2xl text-center border-2 border-transparent hover:border-cyan-500/20 transition-all`}>
                       <div className="text-[18px] font-black text-cyan-400">{selectedUser.performance.uph}</div>
                       <div className="text-[10px] text-gray-400 font-bold uppercase">平均UPH</div>
@@ -1052,6 +1217,10 @@ export function UserManagement() {
                     <div className={`${c.bgSurface} p-3 rounded-2xl text-center border-2 border-transparent hover:border-emerald-500/20 transition-all`}>
                       <div className="text-[18px] font-black text-emerald-400">{selectedUser.performance.attendanceRate}%</div>
                       <div className="text-[10px] text-gray-400 font-bold uppercase">出勤率</div>
+                    </div>
+                    <div className={`${c.bgSurface} p-3 rounded-2xl text-center border-2 border-transparent hover:border-amber-500/20 transition-all`}>
+                      <div className="text-[18px] font-black text-amber-400 tabular-nums">{formatUnitPrice(selectedUser.unitPrice)}</div>
+                      <div className="text-[10px] text-gray-400 font-bold uppercase">単価</div>
                     </div>
                   </div>
                 </div>

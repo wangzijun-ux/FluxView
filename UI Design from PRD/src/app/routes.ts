@@ -1,5 +1,4 @@
 import { createBrowserRouter } from "react-router";
-import { Layout } from "./components/Layout";
 import { Dashboard } from "./components/Dashboard";
 import { MasterManagement } from "./components/MasterManagement";
 import { WorkflowManagement } from "./components/WorkflowManagement";
@@ -9,22 +8,20 @@ import { CostAnalysis } from "./components/CostAnalysis";
 import { NotificationManagement } from "./components/NotificationManagement";
 import { SettingsPage } from "./components/SettingsPage";
 import { UserManagement } from "./components/UserManagement";
-import { WorkerView } from "./components/WorkerView";
-import { WorkerBandView } from "./components/WorkerBandView";
 import { LiveCommand } from "./components/LiveCommand";
 import { SubmissionRecords } from "./components/SubmissionRecords";
 import { ProcessSummary } from "./components/ProcessSummary";
 import { AttendanceManagement } from "./components/AttendanceManagement";
-import { Login } from "./components/Login";
+import { ProtectedLayout, ProtectedLogin, ProtectedWorkerBandView, ProtectedWorkerView } from "./components/ProtectedDemoViews";
 
 export const router = createBrowserRouter([
   {
     path: "/login",
-    Component: Login,
+    Component: ProtectedLogin,
   },
   {
     path: "/",
-    Component: Layout,
+    Component: ProtectedLayout,
     children: [
       { index: true, Component: Dashboard },
       { path: "master-management", Component: MasterManagement },
@@ -39,8 +36,8 @@ export const router = createBrowserRouter([
       { path: "notifications", Component: NotificationManagement },
       { path: "user-management", Component: UserManagement },
       { path: "settings", Component: SettingsPage },
-      { path: "worker", Component: WorkerView },
-      { path: "worker-band", Component: WorkerBandView },
+      { path: "worker", Component: ProtectedWorkerView },
+      { path: "worker-band", Component: ProtectedWorkerBandView },
     ],
   },
 ]);
