@@ -539,7 +539,7 @@ export function WorkerView() {
 
               <button
                 type="submit"
-                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 text-[14px] font-semibold text-white"
+                className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-4 text-[14px] font-semibold text-white"
               >
                 <LogIn className="h-4 w-4" />
                 ログインして作業開始
@@ -786,7 +786,7 @@ export function WorkerView() {
                       <button
                         type="button"
                         onClick={() => updateTaskStatus(displayInputTask.id, "working")}
-                        className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-blue-600 px-3 text-[12px] font-semibold text-white"
+                        className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-3 text-[12px] font-semibold text-white"
                       >
                         <Play className="h-4 w-4" />
                         作業を再開
@@ -798,7 +798,7 @@ export function WorkerView() {
                       onClick={() => submitTaskQuantity(displayInputTask.id)}
                       className={`inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl px-3 text-[12px] font-semibold ${
                         activeInputStatus === "working" && activeInputQuantity > 0
-                          ? "bg-cyan-500 text-white"
+                          ? "bg-[#155DFC] text-white"
                           : `${c.bgSurface} ${c.textMuted}`
                       }`}
                     >
@@ -837,7 +837,7 @@ export function WorkerView() {
                       setSelectedTaskId(activeInputTask.id);
                       setCurrentScreen("input");
                     }}
-                    className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-3 py-2 text-[12px] font-semibold text-white"
+                    className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-3 py-2 text-[12px] font-semibold text-white"
                   >
                     作業数入力へ
                     <ChevronRight className="h-4 w-4" />
@@ -910,7 +910,7 @@ export function WorkerView() {
                                     setSelectedTaskId(task.id);
                                     setCurrentScreen("input");
                                   }}
-                                  className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-[13px] font-semibold text-white"
+                                  className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[13px] font-semibold text-white"
                                 >
                                   作業数入力を開く
                                   <ChevronRight className="h-4 w-4" />
@@ -923,7 +923,7 @@ export function WorkerView() {
                                     setSelectedTaskId(task.id);
                                     setCurrentScreen("input");
                                   }}
-                                  className="inline-flex items-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-[13px] font-semibold text-white"
+                                  className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[13px] font-semibold text-white"
                                 >
                                   <Play className="h-4 w-4" />
                                   この工程を開始
@@ -969,7 +969,7 @@ export function WorkerView() {
               <button
                 type="button"
                 onClick={() => setDismissedAnnouncementId(primaryAnnouncement.id)}
-                className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-3 text-[14px] font-semibold text-white"
+                className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[14px] font-semibold text-white"
               >
                 確認して閉じる
                 <ChevronRight className="h-4 w-4" />

@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   Clock3,
   MessageSquareText,
-  Search,
   Send,
   Star,
   Users,
@@ -23,6 +22,30 @@ function toDateInput(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function enumerateDateKeys(startDateKey: string, endDateKey: string) {
+  const parseDateKey = (value: string) => {
+    const [year, month, day] = value.split("-").map(Number);
+    if (!year || !month || !day) return null;
+    return new Date(year, month - 1, day);
+  };
+
+  const startDate = parseDateKey(startDateKey);
+  const endDate = parseDateKey(endDateKey);
+  if (!startDate || !endDate) return [startDateKey];
+
+  const rangeStart = startDate <= endDate ? startDate : endDate;
+  const rangeEnd = startDate <= endDate ? endDate : startDate;
+  const cursor = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), rangeStart.getDate());
+  const keys: string[] = [];
+
+  while (cursor <= rangeEnd) {
+    keys.push(toDateInput(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return keys;
 }
 
 function formatDateTime(value?: string) {
@@ -51,6 +74,76 @@ function latestActivityTime(record: WorkerSubmissionRecord) {
   return record.lastReportedAt ?? record.completedAt ?? record.startedAt ?? "";
 }
 
+type SubmissionRecordGroup = {
+  id: string;
+  summaryRecord: WorkerSubmissionRecord;
+  detailRecords: WorkerSubmissionRecord[];
+  submissionCount: number;
+};
+
+function buildSubmissionGroupId(record: WorkerSubmissionRecord) {
+  return [record.dateKey, record.workerId, record.stepId, record.scheduledStartTime, record.scheduledEndTime].join("::");
+}
+
+function buildSubmissionRecordGroups(records: WorkerSubmissionRecord[]) {
+  const grouped = new Map<string, WorkerSubmissionRecord[]>();
+
+  records.forEach((record) => {
+    const groupId = buildSubmissionGroupId(record);
+    const bucket = grouped.get(groupId) ?? [];
+    bucket.push(record);
+    grouped.set(groupId, bucket);
+  });
+
+  return Array.from(grouped.entries())
+    .map(([groupId, groupRecords]) => {
+      const detailRecords = groupRecords
+        .slice()
+        .sort(
+          (left, right) =>
+            new Date(latestActivityTime(left) || 0).getTime() - new Date(latestActivityTime(right) || 0).getTime(),
+        );
+      const latestRecord = groupRecords
+        .slice()
+        .sort(
+          (left, right) =>
+            new Date(latestActivityTime(right) || 0).getTime() - new Date(latestActivityTime(left) || 0).getTime(),
+        )[0];
+
+      const summaryRecord = {
+        ...latestRecord,
+        id: groupId,
+        startedAt: detailRecords.find((record) => record.startedAt)?.startedAt,
+        completedAt:
+          groupRecords
+            .map((record) => record.completedAt)
+            .filter((value): value is string => Boolean(value))
+            .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] ?? undefined,
+        lastReportedAt:
+          groupRecords
+            .map((record) => record.lastReportedAt)
+            .filter((value): value is string => Boolean(value))
+            .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] ?? undefined,
+        reportedQuantity: groupRecords.reduce((sum, record) => sum + record.reportedQuantity, 0),
+        pausedMinutes: Math.max(...groupRecords.map((record) => record.pausedMinutes ?? 0)),
+      } satisfies WorkerSubmissionRecord;
+
+      return {
+        id: groupId,
+        summaryRecord,
+        detailRecords,
+        submissionCount: detailRecords.length,
+      } satisfies SubmissionRecordGroup;
+    })
+    .sort(
+      (left, right) =>
+        new Date(latestActivityTime(right.summaryRecord) || 0).getTime() -
+          new Date(latestActivityTime(left.summaryRecord) || 0).getTime() ||
+        left.summaryRecord.workerName.localeCompare(right.summaryRecord.workerName, "ja") ||
+        left.summaryRecord.processName.localeCompare(right.summaryRecord.processName, "ja"),
+    );
+}
+
 function sortRecords(records: WorkerSubmissionRecord[]) {
   return records.slice().sort((left, right) => {
     const leftTime = latestActivityTime(left);
@@ -76,6 +169,15 @@ function toMinutesOfDay(value?: string) {
 function formatDurationHours(totalMinutes: number | null) {
   if (totalMinutes === null || totalMinutes <= 0) return "-";
   return `${(totalMinutes / 60).toFixed(1)}h`;
+}
+
+function formatActualPlanned(actual: string, planned: string) {
+  return `${actual} (${planned})`;
+}
+
+function formatUphValue(value: number | null) {
+  if (value === null) return "-";
+  return value.toFixed(1);
 }
 
 function formatVariance(minutes: number | null) {
@@ -107,9 +209,7 @@ function buildRecordMetrics(record: WorkerSubmissionRecord, idealUph: number | n
       : null;
 
   const actualWorkingMinutes =
-    actualSpanMinutes !== null
-      ? Math.max(0, actualSpanMinutes - (record.pausedMinutes ?? 0))
-      : null;
+    actualSpanMinutes !== null ? Math.max(0, actualSpanMinutes - (record.pausedMinutes ?? 0)) : null;
 
   const startVariance =
     scheduledStartMinutes !== null && actualStartMinutes !== null
@@ -123,9 +223,7 @@ function buildRecordMetrics(record: WorkerSubmissionRecord, idealUph: number | n
 
   const actualUph = calculateUph(record.reportedQuantity, actualWorkingMinutes);
   const uphAchievement =
-    idealUph !== null && actualUph !== null && idealUph > 0
-      ? (actualUph / idealUph) * 100
-      : null;
+    idealUph !== null && actualUph !== null && idealUph > 0 ? (actualUph / idealUph) * 100 : null;
 
   return {
     scheduledDurationMinutes,
@@ -195,22 +293,20 @@ export function SubmissionRecords() {
   const c = useThemeColors();
   const { selectedSiteId, sites, workflows, shippers, processes } = useMasterData();
 
-  const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
-  const [keyword, setKeyword] = useState("");
+  const [periodStart, setPeriodStart] = useState(() => toDateInput(new Date()));
+  const [periodEnd, setPeriodEnd] = useState(() => toDateInput(new Date()));
+  const [filterShipperName, setFilterShipperName] = useState("all");
+  const [filterWorkflowName, setFilterWorkflowName] = useState("all");
   const [filterProcessName, setFilterProcessName] = useState("all");
   const [filterWorkerId, setFilterWorkerId] = useState("all");
   const [filterStatus, setFilterStatus] = useState<WorkerSubmissionRecord["status"] | "all">("all");
   const [filterRank, setFilterRank] = useState<"all" | "S" | "A" | "B" | "C">("all");
   const [reviewStore, setReviewStore] = useState(() => readSubmissionReviewStore());
+  const [expandedGroupIds, setExpandedGroupIds] = useState<string[]>([]);
 
   useEffect(() => {
     writeSubmissionReviewStore(reviewStore);
   }, [reviewStore]);
-
-  const siteName = useMemo(
-    () => sites.find((site) => site.id === selectedSiteId)?.name ?? "拠点未選択",
-    [sites, selectedSiteId],
-  );
 
   const stepUphMap = useMemo(
     () =>
@@ -222,19 +318,43 @@ export function SubmissionRecords() {
     [workflows, selectedSiteId],
   );
 
+  const dateKeys = useMemo(() => enumerateDateKeys(periodStart, periodEnd), [periodStart, periodEnd]);
+
   const records = useMemo(
     () =>
       sortRecords(
-        buildWorkerSubmissionRecords({
-          dateKey: selectedDate,
-          selectedSiteId,
-          sites,
-          workflows,
-          shippers,
-          processes,
-        }),
+        dateKeys.flatMap((dateKey) =>
+          buildWorkerSubmissionRecords({
+            dateKey,
+            selectedSiteId,
+            sites,
+            workflows,
+            shippers,
+            processes,
+          }),
+        ),
       ),
-    [selectedDate, selectedSiteId, sites, workflows, shippers, processes],
+    [dateKeys, selectedSiteId, sites, workflows, shippers, processes],
+  );
+
+  const shipperOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          records.map((record) => [record.shipperName, { id: record.shipperName, label: record.shipperName }]),
+        ).values(),
+      ),
+    [records],
+  );
+
+  const workflowOptions = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          records.map((record) => [record.workflowName, { id: record.workflowName, label: record.workflowName }]),
+        ).values(),
+      ),
+    [records],
   );
 
   const processOptions = useMemo(
@@ -250,21 +370,46 @@ export function SubmissionRecords() {
   const filteredByProcess = useMemo(
     () =>
       records.filter((record) => {
+        if (filterShipperName !== "all" && record.shipperName !== filterShipperName) return false;
+        if (filterWorkflowName !== "all" && record.workflowName !== filterWorkflowName) return false;
         if (filterProcessName !== "all" && record.processName !== filterProcessName) return false;
         return true;
       }),
-    [records, filterProcessName],
+    [records, filterShipperName, filterWorkflowName, filterProcessName],
   );
+
+  const groupedRecords = useMemo(() => buildSubmissionRecordGroups(filteredByProcess), [filteredByProcess]);
 
   const workerOptions = useMemo(
     () =>
       Array.from(
         new Map(
-          filteredByProcess.map((record) => [record.workerId, { id: record.workerId, label: record.workerName }]),
+          groupedRecords.map((group) => [
+            group.summaryRecord.workerId,
+            { id: group.summaryRecord.workerId, label: group.summaryRecord.workerName },
+          ]),
         ).values(),
       ),
-    [filteredByProcess],
+    [groupedRecords],
   );
+
+  useEffect(() => {
+    if (filterShipperName !== "all" && !shipperOptions.some((option) => option.id === filterShipperName)) {
+      setFilterShipperName("all");
+    }
+  }, [filterShipperName, shipperOptions]);
+
+  useEffect(() => {
+    if (filterWorkflowName !== "all" && !workflowOptions.some((option) => option.id === filterWorkflowName)) {
+      setFilterWorkflowName("all");
+    }
+  }, [filterWorkflowName, workflowOptions]);
+
+  useEffect(() => {
+    if (filterProcessName !== "all" && !processOptions.some((option) => option.id === filterProcessName)) {
+      setFilterProcessName("all");
+    }
+  }, [filterProcessName, processOptions]);
 
   useEffect(() => {
     if (filterWorkerId !== "all" && !workerOptions.some((worker) => worker.id === filterWorkerId)) {
@@ -272,69 +417,58 @@ export function SubmissionRecords() {
     }
   }, [filterWorkerId, workerOptions]);
 
-  const visibleRecords = useMemo(() => {
-    const normalizedKeyword = keyword.trim().toLowerCase();
-
-    return filteredByProcess.filter((record) => {
-      const review = resolveReviewEntry(reviewStore, record.id);
+  const visibleGroups = useMemo(() => {
+    return groupedRecords.filter((group) => {
+      const record = group.summaryRecord;
+      const review = resolveReviewEntry(reviewStore, group.id);
 
       if (filterWorkerId !== "all" && record.workerId !== filterWorkerId) return false;
       if (filterStatus !== "all" && record.status !== filterStatus) return false;
       if (filterRank !== "all" && review.rank !== filterRank) return false;
-
-      if (!normalizedKeyword) return true;
-
-      const haystack = [
-        record.workerName,
-        record.workflowName,
-        record.processName,
-        record.shipperName,
-        review.comment,
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      return haystack.includes(normalizedKeyword);
+      return true;
     });
-  }, [filteredByProcess, filterWorkerId, filterStatus, filterRank, keyword, reviewStore]);
+  }, [groupedRecords, filterWorkerId, filterStatus, filterRank, reviewStore]);
+
+  useEffect(() => {
+    setExpandedGroupIds((prev) => prev.filter((id) => visibleGroups.some((group) => group.id === id)));
+  }, [visibleGroups]);
 
   const totals = useMemo(() => {
-    const completedCount = visibleRecords.filter((record) => record.status === "completed").length;
-    const workingCount = visibleRecords.filter((record) => record.status === "working").length;
-    const uniqueWorkers = new Set(visibleRecords.map((record) => record.workerId)).size;
-    const totalQuantity = visibleRecords.reduce((sum, record) => sum + record.reportedQuantity, 0);
+    const completedCount = visibleGroups.filter((group) => group.summaryRecord.status === "completed").length;
+    const workingCount = visibleGroups.filter((group) => group.summaryRecord.status === "working").length;
+    const uniqueWorkers = new Set(visibleGroups.map((group) => group.summaryRecord.workerId)).size;
+    const totalQuantity = visibleGroups.reduce((sum, group) => sum + group.summaryRecord.reportedQuantity, 0);
+    const logCount = visibleGroups.reduce((sum, group) => sum + group.submissionCount, 0);
 
     return {
       completedCount,
       workingCount,
       uniqueWorkers,
       totalQuantity,
-      recordCount: visibleRecords.length,
+      recordCount: logCount,
     };
-  }, [visibleRecords]);
+  }, [visibleGroups]);
 
   const inputClass = `h-10 w-full rounded-xl border px-3 text-[13px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`;
   const tableInputClass = `h-9 w-full rounded-lg border px-3 text-[12px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`;
   const cardClass = `${c.bgCard} border ${c.border} rounded-2xl`;
   const thClass = `sticky top-0 z-10 border-b px-3 py-3 text-left text-[11px] font-semibold ${c.border} ${c.bgPanel} ${c.textSecondary}`;
   const tdClass = `border-b px-3 py-3 align-top text-[12px] ${c.borderCard}`;
-  const metaLabelClass = `text-[10px] font-medium ${c.textMuted}`;
-  const metaValueClass = `text-[12px] ${c.textPrimary}`;
 
   const summaryCards = [
     {
       icon: Send,
       label: "送信ログ数",
       value: `${totals.recordCount.toLocaleString("ja-JP")} 件`,
-      sub: "現在の絞り込み結果",
+      sub: "表示中の個別送信ログ",
       color: "text-cyan-500",
       bg: "bg-cyan-500/10",
     },
     {
       icon: CheckCircle2,
-      label: "完了ログ",
+      label: "完了工程数",
       value: `${totals.completedCount.toLocaleString("ja-JP")} 件`,
-      sub: "完了済みの送信実績",
+      sub: "完了ステータスの工程集約行",
       color: "text-emerald-500",
       bg: "bg-emerald-500/10",
     },
@@ -348,9 +482,9 @@ export function SubmissionRecords() {
     },
     {
       icon: Clock3,
-      label: "実績数合計",
+      label: "実績数量",
       value: `${totals.totalQuantity.toLocaleString("ja-JP")} 件`,
-      sub: "ログに記録された実績数",
+      sub: "表示中ログの送信数量合計",
       color: "text-amber-500",
       bg: "bg-amber-500/10",
     },
@@ -360,28 +494,72 @@ export function SubmissionRecords() {
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-6">
       <div className={`${cardClass} shrink-0`}>
         <div className={`flex flex-col gap-4 border-b px-5 py-4 ${c.border}`}>
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className={`text-lg font-semibold ${c.textPrimary}`}>送信実績</div>
-              <div className={`text-sm ${c.textSecondary}`}>
-                大量の送信ログを一覧で比較できるよう、予定と実績の差分とUPHを表形式で管理します。
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-8">
+            <div className="grid gap-1 xl:col-span-2">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>作業期間</span>
+              <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
+                <input
+                  type="date"
+                  value={periodStart}
+                  onChange={(event) => setPeriodStart(event.target.value)}
+                  className={inputClass}
+                />
+                <span className={`text-xs ${c.textMuted}`}>~</span>
+                <input
+                  type="date"
+                  value={periodEnd}
+                  onChange={(event) => setPeriodEnd(event.target.value)}
+                  className={inputClass}
+                />
               </div>
             </div>
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>拠点: {siteName}</span>
-              <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>対象日: {selectedDate}</span>
-            </div>
-          </div>
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <label className="grid gap-1">
-              <span className={`text-xs font-medium ${c.textSecondary}`}>対象日</span>
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(event) => setSelectedDate(event.target.value)}
+              <span className={`text-xs font-medium ${c.textSecondary}`}>作業者</span>
+              <select
+                value={filterWorkerId}
+                onChange={(event) => setFilterWorkerId(event.target.value)}
                 className={inputClass}
-              />
+              >
+                <option value="all">すべて</option>
+                {workerOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="grid gap-1">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>荷主</span>
+              <select
+                value={filterShipperName}
+                onChange={(event) => setFilterShipperName(event.target.value)}
+                className={inputClass}
+              >
+                <option value="all">すべて</option>
+                {shipperOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="grid gap-1">
+              <span className={`text-xs font-medium ${c.textSecondary}`}>業務</span>
+              <select
+                value={filterWorkflowName}
+                onChange={(event) => setFilterWorkflowName(event.target.value)}
+                className={inputClass}
+              >
+                <option value="all">すべて</option>
+                {workflowOptions.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <label className="grid gap-1">
@@ -393,22 +571,6 @@ export function SubmissionRecords() {
               >
                 <option value="all">すべて</option>
                 {processOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="grid gap-1">
-              <span className={`text-xs font-medium ${c.textSecondary}`}>作業者</span>
-              <select
-                value={filterWorkerId}
-                onChange={(event) => setFilterWorkerId(event.target.value)}
-                className={inputClass}
-              >
-                <option value="all">すべて</option>
-                {workerOptions.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
                   </option>
@@ -446,19 +608,6 @@ export function SubmissionRecords() {
               </select>
             </label>
           </div>
-
-          <label className="grid gap-1">
-            <span className={`text-xs font-medium ${c.textSecondary}`}>検索</span>
-            <div className="relative">
-              <Search className={`pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${c.textMuted}`} />
-              <input
-                value={keyword}
-                onChange={(event) => setKeyword(event.target.value)}
-                placeholder="作業者名 / 業務名 / 工程名 / 荷主名 / コメントで検索"
-                className={`${inputClass} pl-10`}
-              />
-            </div>
-          </label>
         </div>
 
         <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-4">
@@ -484,23 +633,30 @@ export function SubmissionRecords() {
       </div>
 
       <div className={`${cardClass} min-h-0 flex-1 overflow-hidden`}>
-        {visibleRecords.length === 0 ? (
+        {visibleGroups.length === 0 ? (
           <div className="flex h-full items-center justify-center p-10 text-center">
             <div>
               <MessageSquareText className={`mx-auto h-6 w-6 ${c.textMuted}`} />
               <div className={`mt-3 text-base font-medium ${c.textPrimary}`}>表示できる送信ログがありません</div>
               <div className={`mt-2 text-sm ${c.textSecondary}`}>
-                対象日や絞り込み条件を変更して確認してください。
+                作業期間や絞り込み条件を変更して確認してください。
               </div>
             </div>
           </div>
         ) : (
           <div className="h-full overflow-auto">
-            <table className="min-w-[1480px] w-full border-collapse">
+            <table className="min-w-[1620px] w-full border-collapse">
               <thead>
                 <tr>
-                  <th className={thClass}>作業者</th>
-                  <th className={thClass}>業務情報</th>
+                  <th className={thClass}>
+                    <div className="grid grid-cols-[1.75rem_minmax(0,1fr)] items-center gap-2">
+                      <span aria-hidden="true" />
+                      <span>作業者</span>
+                    </div>
+                  </th>
+                  <th className={thClass}>荷主</th>
+                  <th className={thClass}>業務</th>
+                  <th className={thClass}>工程</th>
                   <th className={thClass}>状態</th>
                   <th className={thClass}>開始</th>
                   <th className={thClass}>終了</th>
@@ -513,118 +669,203 @@ export function SubmissionRecords() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRecords.map((record) => {
-                  const review = resolveReviewEntry(reviewStore, record.id);
+                {visibleGroups.map((group) => {
+                  const record = group.summaryRecord;
+                  const review = resolveReviewEntry(reviewStore, group.id);
                   const idealUph = stepUphMap.get(record.stepId) ?? null;
                   const metrics = buildRecordMetrics(record, idealUph);
+                  const isExpanded = expandedGroupIds.includes(group.id);
+                  let cumulativeQuantity = 0;
 
                   return (
-                    <tr key={record.id} className={c.bgCard}>
-                      <td className={tdClass}>
-                        <div className={`font-semibold ${c.textPrimary}`}>{record.workerName}</div>
-                      </td>
+                    <Fragment key={group.id}>
+                      <tr className={c.bgCard}>
+                        <td className={tdClass}>
+                          <div className="flex items-start gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedGroupIds((prev) =>
+                                  prev.includes(group.id)
+                                    ? prev.filter((id) => id !== group.id)
+                                    : [...prev, group.id],
+                                )
+                              }
+                              className={`mt-0.5 inline-flex h-7 w-7 items-center justify-center rounded-lg border bg-sky-50 text-sky-600 transition hover:bg-sky-100 ${c.borderCard}`}
+                              aria-expanded={isExpanded}
+                              aria-label={isExpanded ? "送信明細を閉じる" : "送信明細を開く"}
+                            >
+                              <span className="text-base font-semibold leading-none">{isExpanded ? "-" : "+"}</span>
+                            </button>
+                            <div>
+                              <div className={`font-semibold ${c.textPrimary}`}>{record.workerName}</div>
+                              <div className={`mt-1 text-[11px] ${c.textMuted}`}>送信 {group.submissionCount} 回</div>
+                            </div>
+                          </div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <div className={`font-medium ${c.textPrimary}`}>{record.workflowName}</div>
-                        <div className={`mt-1 text-[11px] ${c.textSecondary}`}>{record.shipperName}</div>
-                        <div className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>
-                          {record.processName}
-                        </div>
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`font-medium ${c.textPrimary}`}>{record.shipperName}</div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(record.status)}`}>
-                          {statusLabel(record.status)}
-                        </span>
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`font-medium ${c.textPrimary}`}>{record.workflowName}</div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <div className={metaLabelClass}>予定</div>
-                        <div className={metaValueClass}>{record.scheduledStartTime}</div>
-                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
-                        <div className={metaValueClass}>{formatClock(record.startedAt)}</div>
-                        <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${varianceTone(metrics.startVariance)}`}>
-                          {formatVariance(metrics.startVariance)}
-                        </div>
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`inline-flex rounded-full px-2 py-0.5 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>
+                            {record.processName}
+                          </div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <div className={metaLabelClass}>予定</div>
-                        <div className={metaValueClass}>{record.scheduledEndTime}</div>
-                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
-                        <div className={metaValueClass}>{record.completedAt ? formatClock(record.completedAt) : "-"}</div>
-                        <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${varianceTone(metrics.endVariance)}`}>
-                          {formatVariance(metrics.endVariance)}
-                        </div>
-                      </td>
+                        <td className={tdClass}>
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(record.status)}`}>
+                            {statusLabel(record.status)}
+                          </span>
+                        </td>
 
-                      <td className={tdClass}>
-                        <div className={metaLabelClass}>予定</div>
-                        <div className={metaValueClass}>{formatDurationHours(metrics.scheduledDurationMinutes)}</div>
-                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
-                        <div className={metaValueClass}>{formatDurationHours(metrics.actualWorkingMinutes)}</div>
-                        {!record.completedAt && record.startedAt ? (
-                          <div className={`mt-1 text-[10px] ${c.textMuted}`}>最新送信時点</div>
-                        ) : null}
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`font-medium ${c.textPrimary}`}>
+                            {formatActualPlanned(formatClock(record.startedAt), record.scheduledStartTime)}
+                          </div>
+                          <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${varianceTone(metrics.startVariance)}`}>
+                            {formatVariance(metrics.startVariance)}
+                          </div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <div className={metaLabelClass}>理想</div>
-                        <div className={metaValueClass}>
-                          {idealUph !== null ? idealUph.toLocaleString("ja-JP") : "-"}
-                        </div>
-                        <div className={`mt-2 ${metaLabelClass}`}>実績</div>
-                        <div className={metaValueClass}>
-                          {metrics.actualUph !== null ? metrics.actualUph.toFixed(1) : "-"}
-                        </div>
-                        <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${uphTone(metrics.uphAchievement)}`}>
-                          {metrics.uphAchievement !== null ? `${metrics.uphAchievement.toFixed(0)}%` : "-"}
-                        </div>
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`font-medium ${c.textPrimary}`}>
+                            {formatActualPlanned(
+                              record.completedAt ? formatClock(record.completedAt) : "-",
+                              record.scheduledEndTime,
+                            )}
+                          </div>
+                          <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${varianceTone(metrics.endVariance)}`}>
+                            {formatVariance(metrics.endVariance)}
+                          </div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <div className={`font-semibold ${c.textPrimary}`}>
-                          {record.reportedQuantity.toLocaleString("ja-JP")} 件
-                        </div>
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`font-medium ${c.textPrimary}`}>
+                            {formatActualPlanned(
+                              formatDurationHours(metrics.actualWorkingMinutes),
+                              formatDurationHours(metrics.scheduledDurationMinutes),
+                            )}
+                          </div>
+                          {!record.completedAt && record.startedAt ? (
+                            <div className={`mt-1 text-[10px] ${c.textMuted}`}>最新送信時点</div>
+                          ) : null}
+                        </td>
 
-                      <td className={tdClass}>
-                        <select
-                          value={review.rank}
-                          onChange={(event) =>
-                            setReviewStore((prev) =>
-                              updateSubmissionReview(prev, record.id, { rank: event.target.value as "S" | "A" | "B" | "C" }),
-                            )
-                          }
-                          className={tableInputClass}
-                        >
-                          <option value="S">S</option>
-                          <option value="A">A</option>
-                          <option value="B">B</option>
-                          <option value="C">C</option>
-                        </select>
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`font-medium ${c.textPrimary}`}>
+                            {formatActualPlanned(formatUphValue(metrics.actualUph), formatUphValue(idealUph))}
+                          </div>
+                          <div className={`mt-2 inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${uphTone(metrics.uphAchievement)}`}>
+                            {metrics.uphAchievement !== null ? `${metrics.uphAchievement.toFixed(0)}%` : "-"}
+                          </div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <input
-                          value={review.comment}
-                          onChange={(event) =>
-                            setReviewStore((prev) =>
-                              updateSubmissionReview(prev, record.id, { comment: event.target.value }),
-                            )
-                          }
-                          placeholder="コメント入力"
-                          className={tableInputClass}
-                        />
-                      </td>
+                        <td className={tdClass}>
+                          <div className={`font-semibold ${c.textPrimary}`}>
+                            {record.reportedQuantity.toLocaleString("ja-JP")} 件
+                          </div>
+                        </td>
 
-                      <td className={tdClass}>
-                        <div className={`flex items-center gap-2 ${c.textMuted}`}>
-                          <Star className="h-4 w-4" />
-                          <span>{review.updatedAt ? formatDateTime(review.updatedAt) : "-"}</span>
-                        </div>
-                      </td>
-                    </tr>
+                        <td className={tdClass}>
+                          <select
+                            value={review.rank}
+                            onChange={(event) =>
+                              setReviewStore((prev) =>
+                                updateSubmissionReview(prev, group.id, {
+                                  rank: event.target.value as "S" | "A" | "B" | "C",
+                                }),
+                              )
+                            }
+                            className={tableInputClass}
+                          >
+                            <option value="S">S</option>
+                            <option value="A">A</option>
+                            <option value="B">B</option>
+                            <option value="C">C</option>
+                          </select>
+                        </td>
+
+                        <td className={tdClass}>
+                          <input
+                            value={review.comment}
+                            onChange={(event) =>
+                              setReviewStore((prev) =>
+                                updateSubmissionReview(prev, group.id, { comment: event.target.value }),
+                              )
+                            }
+                            placeholder="コメント入力"
+                            className={tableInputClass}
+                          />
+                        </td>
+
+                        <td className={tdClass}>
+                          <div className={`flex items-center gap-2 ${c.textMuted}`}>
+                            <Star className="h-4 w-4" />
+                            <span>{review.updatedAt ? formatDateTime(review.updatedAt) : "-"}</span>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {isExpanded ? (
+                        <tr className={c.bgCard}>
+                          <td colSpan={13} className={`border-b px-4 py-4 ${c.borderCard}`}>
+                            <div className={`rounded-2xl border ${c.borderCard} ${c.bgPanel}`}>
+                              <div className={`border-b px-4 py-3 text-xs font-semibold ${c.border} ${c.textSecondary}`}>
+                                送信記録詳細
+                              </div>
+                              <div className="overflow-auto">
+                                <table className="min-w-[560px] w-full text-left text-[12px]">
+                                  <thead className={`${c.bgSurface} ${c.textSecondary}`}>
+                                    <tr>
+                                      <th className="px-4 py-2.5 font-medium">回数</th>
+                                      <th className="px-4 py-2.5 font-medium">送信時刻</th>
+                                      <th className="px-4 py-2.5 font-medium">送信数</th>
+                                      <th className="px-4 py-2.5 font-medium">累計</th>
+                                      <th className="px-4 py-2.5 font-medium">状態</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {group.detailRecords.map((detailRecord, index) => {
+                                      cumulativeQuantity += detailRecord.reportedQuantity;
+
+                                      return (
+                                        <tr key={detailRecord.id} className={`border-t ${c.borderCard}`}>
+                                          <td className="px-4 py-2.5">{index + 1}</td>
+                                          <td className="px-4 py-2.5">
+                                            {formatDateTime(
+                                              detailRecord.lastReportedAt ??
+                                                detailRecord.completedAt ??
+                                                detailRecord.startedAt,
+                                            )}
+                                          </td>
+                                          <td className="px-4 py-2.5 font-medium text-cyan-500">
+                                            {detailRecord.reportedQuantity.toLocaleString("ja-JP")} 件
+                                          </td>
+                                          <td className="px-4 py-2.5">
+                                            {cumulativeQuantity.toLocaleString("ja-JP")} 件
+                                          </td>
+                                          <td className="px-4 py-2.5">
+                                            <span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${statusTone(detailRecord.status)}`}>
+                                              {statusLabel(detailRecord.status)}
+                                            </span>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   );
                 })}
               </tbody>

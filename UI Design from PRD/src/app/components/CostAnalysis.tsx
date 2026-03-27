@@ -446,7 +446,7 @@ export function CostAnalysis() {
             <button
               type="button"
               onClick={() => setViewType("shipper")}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-[13px] font-medium ${viewType === "shipper" ? "bg-cyan-600 text-white shadow" : c.textSecondary}`}
+              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-[13px] font-medium ${viewType === "shipper" ? "bg-[#155DFC] text-white shadow" : c.textSecondary}`}
             >
               <Briefcase className="h-4 w-4" />
               荷主
@@ -454,7 +454,7 @@ export function CostAnalysis() {
             <button
               type="button"
               onClick={() => setViewType("process")}
-              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-[13px] font-medium ${viewType === "process" ? "bg-cyan-600 text-white shadow" : c.textSecondary}`}
+              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-[13px] font-medium ${viewType === "process" ? "bg-[#155DFC] text-white shadow" : c.textSecondary}`}
             >
               <Layers className="h-4 w-4" />
               工程

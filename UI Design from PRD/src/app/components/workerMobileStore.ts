@@ -209,11 +209,11 @@ function normalizeNotifications(records: WorkerNotificationRecord[]) {
     .sort((left, right) => new Date(right.deliverAt).getTime() - new Date(left.deliverAt).getTime());
 }
 
-function findAssignedStepId(snapshot: SnapshotLike, workerId: string) {
-  for (const [stepId, workerIds] of Object.entries(snapshot)) {
-    if (workerIds.some((candidate) => candidate === workerId)) return stepId;
-  }
-  return null;
+function findAssignedStepIds(snapshot: SnapshotLike, workerId: string) {
+  return Object.entries(snapshot)
+    .filter(([, workerIds]) => workerIds.some((candidate) => candidate === workerId))
+    .map(([stepId]) => stepId)
+    .sort((left, right) => left.localeCompare(right, "ja"));
 }
 
 function normalizeWorkerTaskSubmissionLog(
@@ -947,7 +947,11 @@ export function pushAssignmentChangeNotifications(params: {
         ...Object.values(nextSnapshot).flat(),
       ].filter((workerId): workerId is string => Boolean(workerId)),
     ),
-  ).filter((workerId) => findAssignedStepId(previousSnapshot, workerId) !== findAssignedStepId(nextSnapshot, workerId));
+  ).filter((workerId) => {
+    const previousStepIds = findAssignedStepIds(previousSnapshot, workerId);
+    const nextStepIds = findAssignedStepIds(nextSnapshot, workerId);
+    return previousStepIds.join("|") !== nextStepIds.join("|");
+  });
 
   if (changedWorkerIds.length === 0) return;
 
@@ -962,18 +966,36 @@ export function pushAssignmentChangeNotifications(params: {
     const worker = workerMap.get(workerId);
     if (!worker) return [];
 
-    const previousStep = stepMap.get(findAssignedStepId(previousSnapshot, workerId) ?? "");
-    const nextStepId = findAssignedStepId(nextSnapshot, workerId);
-    const nextStep = stepMap.get(nextStepId ?? "");
+    const previousStepIds = findAssignedStepIds(previousSnapshot, workerId);
+    const nextStepIds = findAssignedStepIds(nextSnapshot, workerId);
+    const previousSteps = previousStepIds
+      .map((stepId) => stepMap.get(stepId))
+      .filter((step): step is { workflowName: string; processName: string } => Boolean(step));
+    const nextSteps = nextStepIds
+      .map((stepId) => stepMap.get(stepId))
+      .filter((step): step is { workflowName: string; processName: string } => Boolean(step));
 
-    const changeMessage = nextStep
-      ? effectiveTime + " から " + nextStep.workflowName + " / " + nextStep.processName + " を開始します。"
+    const nextLabel =
+      nextSteps.length === 1
+        ? `${nextSteps[0].workflowName} / ${nextSteps[0].processName}`
+        : nextSteps.length > 1
+          ? `${nextSteps[0].workflowName} / ${nextSteps[0].processName} ほか`
+          : "";
+    const previousLabel =
+      previousSteps.length === 1
+        ? `${previousSteps[0].workflowName} / ${previousSteps[0].processName}`
+        : previousSteps.length > 1
+          ? `${previousSteps[0].workflowName} / ${previousSteps[0].processName} ほか`
+          : "";
+
+    const changeMessage = nextLabel
+      ? effectiveTime + " から " + nextLabel + " を開始します。"
       : effectiveTime + " の配置が変更されました。";
-    const moveDetail = previousStep && nextStep
-      ? previousStep.workflowName + " / " + previousStep.processName + " → " + nextStep.workflowName + " / " + nextStep.processName
+    const moveDetail = previousLabel && nextLabel
+      ? previousLabel + " → " + nextLabel
       : changeMessage;
-    const reminderMessage = nextStep
-      ? effectiveTime + " に " + nextStep.workflowName + " / " + nextStep.processName + " へ移動してください。"
+    const reminderMessage = nextLabel
+      ? effectiveTime + " に " + nextLabel + " へ移動してください。"
       : effectiveTime + " の配置変更があります。";
 
     return [

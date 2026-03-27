@@ -25,7 +25,6 @@ const pageLabels: Record<string, string> = {
   "/attendance": "シフト管理",
   "/cost-analysis": "コスト分析",
   "/dispatch": "派遣管理",
-  "/workflow-management": "業務管理",
   "/master-management": "マスタ管理",
   "/user-management": "ユーザー管理",
   "/notifications": "通知管理",
@@ -41,7 +40,6 @@ const pageSubtitles: Record<string, string> = {
   "/attendance": "月次シフトの作成・取込・調整を行います。",
   "/cost-analysis": "雇用区分別の原価と予算差異を分析します。",
   "/dispatch": "派遣会社別の予定・実績・稼働率を管理します。",
-  "/workflow-management": "拠点に紐づく業務と工程設定を管理します。",
   "/master-management": "荷主・拠点・資格・スキル・派遣会社を管理します。",
   "/user-management": "ユーザー管理とロール・権限設定を行います。",
   "/notifications": "通知作成・配信状況・既読状況を管理します。",
@@ -57,8 +55,11 @@ export function TopBar() {
   const activeSite = sites.find((site) => site.id === selectedSiteId) ?? sites[0];
   const workflowCount = activeSite ? workflows.filter((workflow) => workflow.siteId === activeSite.id).length : workflows.length;
   const notificationCount = Math.max(1, workflowCount);
-  const pageLabel = pageLabels[location.pathname] ?? "FluxView";
-  const pageSubtitle = pageSubtitles[location.pathname] ?? `${activeSite?.name ?? "拠点未選択"} | 業務 ${workflowCount} 件`;
+  const isSiteDetailPage = location.pathname.startsWith("/master/sites/");
+  const pageLabel = isSiteDetailPage ? "拠点詳細" : pageLabels[location.pathname] ?? "FluxView";
+  const pageSubtitle = isSiteDetailPage
+    ? `${activeSite?.name ?? "拠点未選択"} | 契約荷主と拠点設定を管理します。`
+    : pageSubtitles[location.pathname] ?? `${activeSite?.name ?? "拠点未選択"} | 業務 ${workflowCount} 件`;
   return (
     <AppBar
       position="sticky"
@@ -66,6 +67,7 @@ export function TopBar() {
       elevation={0}
       sx={{
         top: 0,
+        zIndex: 40,
         backdropFilter: "blur(14px)",
         bgcolor: isDark ? alpha("#0f172a", 0.84) : alpha("#ffffff", 0.84),
         borderBottom: 1,

@@ -1,4 +1,4 @@
-﻿import {
+import {
   Activity,
   BarChart3,
   Bell,
@@ -8,7 +8,7 @@
   ChevronRight,
   Clock,
   Database,
-  GitBranch,
+  Factory,
   HardHat,
   LayoutDashboard,
   LogOut,
@@ -35,12 +35,15 @@ import { alpha } from "@mui/material/styles";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { clearDemoAccess } from "../lib/demoAccess";
+import { useMasterData } from "./MasterDataContext";
 import { useTheme } from "./ThemeContext";
 
 type NavItem = {
   icon: typeof LayoutDashboard;
   label: string;
-  path: string;
+  path?: string;
+  getPath?: (selectedSiteId: string) => string;
+  isActive?: (pathname: string) => boolean;
 };
 
 const navItems: NavItem[] = [
@@ -52,7 +55,12 @@ const navItems: NavItem[] = [
   { icon: Clock, label: "シフト管理", path: "/attendance" },
   { icon: PieChart, label: "コスト分析", path: "/cost-analysis" },
   { icon: Building2, label: "派遣管理", path: "/dispatch" },
-  { icon: GitBranch, label: "業務管理", path: "/workflow-management" },
+  {
+    icon: Factory,
+    label: "拠点詳細",
+    getPath: (selectedSiteId) => (selectedSiteId ? `/master/sites/${selectedSiteId}` : "/master-management"),
+    isActive: (pathname) => pathname.startsWith("/master/sites/"),
+  },
   { icon: Database, label: "マスタ管理", path: "/master-management" },
   { icon: UserCog, label: "ユーザー管理", path: "/user-management" },
   { icon: Bell, label: "通知管理", path: "/notifications" },
@@ -64,6 +72,7 @@ export function Sidebar() {
   const navigate = useNavigate();
   const location = useLocation();
   const { isDark } = useTheme();
+  const { selectedSiteId } = useMasterData();
 
   const sidebarWidth = collapsed ? 84 : 264;
 
@@ -134,11 +143,14 @@ export function Sidebar() {
         <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 1.25, py: 1.5 }}>
           <List disablePadding sx={{ display: "grid", gap: 0.5 }}>
             {navItems.map((item) => {
-              const isActive = location.pathname === item.path;
+              const targetPath = item.getPath ? item.getPath(selectedSiteId) : item.path ?? "/";
+              const isActive = item.isActive
+                ? item.isActive(location.pathname)
+                : location.pathname === targetPath;
               const Icon = item.icon;
               const content = (
                 <ListItemButton
-                  onClick={() => navigate(item.path)}
+                  onClick={() => navigate(targetPath)}
                   selected={isActive}
                   sx={{
                     minHeight: 42,
@@ -194,11 +206,11 @@ export function Sidebar() {
               );
 
               return collapsed ? (
-                <Tooltip key={item.path} title={item.label} placement="right">
+                <Tooltip key={item.label} title={item.label} placement="right">
                   {content}
                 </Tooltip>
               ) : (
-                <Box key={item.path}>{content}</Box>
+                <Box key={item.label}>{content}</Box>
               );
             })}
           </List>
@@ -217,11 +229,13 @@ export function Sidebar() {
               }}
             >
               <Stack direction="row" spacing={1.25} alignItems="center" justifyContent={collapsed ? "center" : "flex-start"}>
-                <Avatar sx={{ width: 34, height: 34, backgroundImage: "linear-gradient(135deg, #0891b2, #2563eb)" }}>AD</Avatar>
+                <Avatar sx={{ width: 34, height: 34, backgroundImage: "linear-gradient(135deg, #0891b2, #2563eb)" }}>
+                  AD
+                </Avatar>
                 {!collapsed && (
                   <Box sx={{ minWidth: 0 }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 700 }} noWrap>
-                      管理者
+                      管理者 太郎
                     </Typography>
                     <Typography variant="caption" color="text.secondary" noWrap>
                       システム管理者
@@ -245,7 +259,9 @@ export function Sidebar() {
                 <ListItemIcon sx={{ minWidth: collapsed ? 0 : 34, color: "inherit", justifyContent: "center" }}>
                   <HardHat size={18} />
                 </ListItemIcon>
-                {!collapsed && <ListItemText primary="作業者ビュー" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />}
+                {!collapsed && (
+                  <ListItemText primary="作業者ビュー" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />
+                )}
               </ListItemButton>
             </Tooltip>
 
@@ -263,7 +279,12 @@ export function Sidebar() {
                 <ListItemIcon sx={{ minWidth: collapsed ? 0 : 34, color: "inherit", justifyContent: "center" }}>
                   <Activity size={18} />
                 </ListItemIcon>
-                {!collapsed && <ListItemText primary="作業者ビュー（バンド）" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />}
+                {!collapsed && (
+                  <ListItemText
+                    primary="作業者ビュー（バンド）"
+                    primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }}
+                  />
+                )}
               </ListItemButton>
             </Tooltip>
 
@@ -284,7 +305,9 @@ export function Sidebar() {
                 <ListItemIcon sx={{ minWidth: collapsed ? 0 : 34, color: "inherit", justifyContent: "center" }}>
                   <LogOut size={18} />
                 </ListItemIcon>
-                {!collapsed && <ListItemText primary="ログアウト" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />}
+                {!collapsed && (
+                  <ListItemText primary="ログアウト" primaryTypographyProps={{ fontSize: 14, fontWeight: 600 }} />
+                )}
               </ListItemButton>
             </Tooltip>
 

@@ -48,7 +48,7 @@ export function SchedulePlanner() {
           <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600/20 border border-violet-500/30 text-violet-300 text-[13px] hover:bg-violet-600/30 transition-all">
             <Zap className="w-4 h-4" />AI推奨シフト生成
           </button>
-          <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-600 text-white text-[13px] hover:bg-cyan-500 transition-all">
+          <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#155DFC] text-white text-[13px] hover:bg-[#0F4FE3] transition-all">
             <Plus className="w-4 h-4" />シフト追加
           </button>
         </div>

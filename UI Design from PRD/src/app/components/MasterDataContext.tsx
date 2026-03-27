@@ -10,13 +10,15 @@ import {
 } from "react";
 import {
   type AreaMaster,
-  type DispatchCompany,
   defaultMasterData,
+  type DispatchCompany,
   type MasterDataSnapshot,
   type ProcessMaster,
   type QualificationMaster,
   type Shipper,
   type Site,
+  type SiteLayoutArea,
+  type SiteShipperRelation,
   type SkillMaster,
   type WorkflowDefinition,
   type WorkflowStepSetting,
@@ -26,17 +28,28 @@ import {
   DEFAULT_SKILL_ICON_KEY,
   normalizeMasterIconKey,
 } from "./masterIconOptions";
+import {
+  getPrimaryShipperForSite,
+  getShippersForSite as listShippersForSite,
+  getSiteShipperRelationsForSite as listRelationsForSite,
+  migrateSiteShipperRelations,
+  resolveSiteShipperRelationStatus,
+} from "./siteShipperUtils";
 import { ensureDemoWorkerSubmissionData } from "./workerMobileStore";
 
-const STORAGE_KEY = "fluxview-master-data-v3";
-const LEGACY_STORAGE_KEY = "fluxview-master-data-v2";
-const SELECTED_SITE_KEY = "fluxview-selected-site-v1";
+const STORAGE_KEY = "fluxview-master-data-v4";
+const LEGACY_STORAGE_KEYS = ["fluxview-master-data-v3", "fluxview-master-data-v2"];
+const SITE_SHIPPER_RELATIONS_STORAGE_KEY = "siteShipperRelations";
+const SELECTED_SITE_KEY = "selectedSiteId";
+const LEGACY_SELECTED_SITE_KEY = "fluxview-selected-site-v1";
 
 interface MasterDataContextType {
   shippers: Shipper[];
   setShippers: Dispatch<SetStateAction<Shipper[]>>;
   sites: Site[];
   setSites: Dispatch<SetStateAction<Site[]>>;
+  siteShipperRelations: SiteShipperRelation[];
+  setSiteShipperRelations: Dispatch<SetStateAction<SiteShipperRelation[]>>;
   areas: AreaMaster[];
   setAreas: Dispatch<SetStateAction<AreaMaster[]>>;
   qualifications: QualificationMaster[];
@@ -51,6 +64,9 @@ interface MasterDataContextType {
   setWorkflows: Dispatch<SetStateAction<WorkflowDefinition[]>>;
   selectedSiteId: string;
   setSelectedSiteId: Dispatch<SetStateAction<string>>;
+  getSiteShipperRelationsForSite: (siteId: string) => SiteShipperRelation[];
+  getShippersForSite: (siteId: string) => Shipper[];
+  getPrimaryShipperForSite: (siteId: string) => Shipper | null;
   resetMasterData: () => void;
 }
 
@@ -71,6 +87,110 @@ const defaultSkillById = new Map(
 const defaultSkillByName = new Map(
   defaultMasterData.skills.map((item) => [item.name, item]),
 );
+
+function formatDateInput(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function addYears(date: Date, years: number) {
+  const next = new Date(date);
+  next.setFullYear(next.getFullYear() + years);
+  return next;
+}
+
+function buildDefaultSiteLayoutAreas(siteId: string): SiteLayoutArea[] {
+  return [
+    {
+      id: `${siteId}-area-main`,
+      name: "メインエリア",
+      description: "主要な作業エリア",
+    },
+  ];
+}
+
+function normalizeSiteLayoutAreas(value: unknown, siteId: string): SiteLayoutArea[] {
+  if (!Array.isArray(value)) return buildDefaultSiteLayoutAreas(siteId);
+
+  return value
+    .map((rawArea, index) => {
+      const area = rawArea as Partial<SiteLayoutArea>;
+      const fallback = buildDefaultSiteLayoutAreas(siteId)[0];
+      return {
+        id: typeof area.id === "string" && area.id.trim() ? area.id.trim() : `${siteId}-area-${index + 1}`,
+        name: typeof area.name === "string" && area.name.trim() ? area.name.trim() : `${fallback.name} ${index + 1}`,
+        description: typeof area.description === "string" ? area.description.trim() : "",
+      } satisfies SiteLayoutArea;
+    })
+    .filter((area) => area.name.length > 0);
+}
+
+function readStorageSnapshot() {
+  const candidateKeys = [STORAGE_KEY, ...LEGACY_STORAGE_KEYS];
+
+  for (const key of candidateKeys) {
+    const raw = localStorage.getItem(key);
+    if (!raw) continue;
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return parsed as Partial<MasterDataSnapshot> & { areas?: AreaMaster[] };
+      }
+    } catch {
+      // Ignore broken storage and continue to the next candidate.
+    }
+  }
+
+  return null;
+}
+
+function normalizeShippers(value: unknown): Shipper[] {
+  const source = asArray(value, defaultMasterData.shippers);
+
+  return source.map((rawShipper, index) => {
+    const shipper = rawShipper as Partial<Shipper>;
+    const fallback = defaultMasterData.shippers[index];
+
+    return {
+      id: typeof shipper.id === "string" && shipper.id.trim() ? shipper.id : fallback?.id ?? `shipper-${index + 1}`,
+      name: typeof shipper.name === "string" && shipper.name.trim() ? shipper.name.trim() : fallback?.name ?? `荷主 ${index + 1}`,
+      status: shipper.status === "inactive" ? "inactive" : "active",
+      code: typeof shipper.code === "string" ? shipper.code.trim() : fallback?.code ?? "",
+      contactPerson:
+        typeof shipper.contactPerson === "string"
+          ? shipper.contactPerson.trim()
+          : fallback?.contactPerson ?? "",
+      notes: typeof shipper.notes === "string" ? shipper.notes.trim() : fallback?.notes ?? "",
+    } satisfies Shipper;
+  });
+}
+
+function normalizeSites(value: unknown): Site[] {
+  const source = asArray(value, defaultMasterData.sites);
+
+  return source.map((rawSite, index) => {
+    const site = rawSite as Partial<Site>;
+    const fallback = defaultMasterData.sites[index];
+    const resolvedSiteId =
+      typeof site.id === "string" && site.id.trim() ? site.id : fallback?.id ?? `site-${index + 1}`;
+
+    return {
+      id: resolvedSiteId,
+      name: typeof site.name === "string" && site.name.trim() ? site.name.trim() : fallback?.name ?? `拠点 ${index + 1}`,
+      address: typeof site.address === "string" && site.address.trim() ? site.address.trim() : fallback?.address ?? "住所未設定",
+      shipperId: typeof site.shipperId === "string" && site.shipperId.trim() ? site.shipperId : fallback?.shipperId,
+      layoutAreas:
+        Array.isArray(site.layoutAreas)
+          ? normalizeSiteLayoutAreas(site.layoutAreas, resolvedSiteId)
+          : Array.isArray(fallback?.layoutAreas)
+            ? normalizeSiteLayoutAreas(fallback.layoutAreas, resolvedSiteId)
+            : buildDefaultSiteLayoutAreas(resolvedSiteId),
+    } satisfies Site;
+  });
+}
 
 function normalizeQualifications(value: unknown): QualificationMaster[] {
   const source = asArray(value, defaultMasterData.qualifications);
@@ -117,12 +237,18 @@ function normalizeSkills(value: unknown): SkillMaster[] {
 }
 
 function buildCompatAreas(sites: Site[]): AreaMaster[] {
-  return sites.map((site) => ({
-    id: site.id,
-    siteId: site.id,
-    name: site.name,
-    description: site.address ?? "",
-  }));
+  return sites.flatMap((site) => {
+    const layoutAreas = Array.isArray(site.layoutAreas)
+      ? normalizeSiteLayoutAreas(site.layoutAreas, site.id)
+      : buildDefaultSiteLayoutAreas(site.id);
+
+    return layoutAreas.map((area) => ({
+      id: area.id,
+      siteId: site.id,
+      name: area.name,
+      description: area.description,
+    }));
+  });
 }
 
 function normalizeWorkflowSteps(value: unknown): WorkflowStepSetting[] {
@@ -130,9 +256,20 @@ function normalizeWorkflowSteps(value: unknown): WorkflowStepSetting[] {
 
   return value.map((rawStep, index) => {
     const step = rawStep as Partial<WorkflowStepSetting>;
+    const normalizedLayoutAreaIds = Array.isArray(step.layoutAreaIds)
+      ? step.layoutAreaIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : typeof (step as { layoutAreaId?: string }).layoutAreaId === "string" &&
+          (step as { layoutAreaId?: string }).layoutAreaId?.trim()
+        ? [(step as { layoutAreaId?: string }).layoutAreaId!.trim()]
+        : [];
     return {
       id: typeof step.id === "string" && step.id.trim() ? step.id : `step-${Date.now()}-${index}`,
       processId: typeof step.processId === "string" ? step.processId : "",
+      previousStepId:
+        typeof step.previousStepId === "string" && step.previousStepId.trim().length > 0
+          ? step.previousStepId.trim()
+          : undefined,
+      layoutAreaIds: normalizedLayoutAreaIds,
       requiredQualificationIds: asArray(step.requiredQualificationIds, []),
       requiredSkillIds: asArray(step.requiredSkillIds, []),
       standardHeadcount: typeof step.standardHeadcount === "number" ? step.standardHeadcount : 1,
@@ -167,22 +304,32 @@ function normalizeWorkflows(
   shippers: Shipper[],
   sites: Site[],
   legacyAreas: Array<{ id?: string; name?: string }>,
+  siteShipperRelations: SiteShipperRelation[],
   fallback: WorkflowDefinition[],
 ) {
   const source = Array.isArray(value) ? value : fallback;
 
   return source.map((rawWorkflow, index) => {
     const workflow = rawWorkflow as Partial<WorkflowDefinition> & { areaId?: string };
+    const siteId =
+      typeof workflow.siteId === "string" && workflow.siteId
+        ? workflow.siteId
+        : typeof workflow.areaId === "string" && workflow.areaId
+          ? workflow.areaId
+          : sites[0]?.id ?? "";
+    const shipperId =
+      typeof workflow.shipperId === "string" && workflow.shipperId
+        ? workflow.shipperId
+        : getPrimaryShipperForSite(siteId, shippers, siteShipperRelations)?.id ??
+          sites.find((site) => site.id === siteId)?.shipperId ??
+          shippers[0]?.id ??
+          "";
+
     return {
       id: typeof workflow.id === "string" && workflow.id.trim() ? workflow.id : `workflow-${Date.now()}-${index}`,
-      name: normalizeWorkflowName(workflow, shippers, sites, legacyAreas),
-      shipperId: typeof workflow.shipperId === "string" ? workflow.shipperId : shippers[0]?.id ?? "",
-      siteId:
-        typeof workflow.siteId === "string" && workflow.siteId
-          ? workflow.siteId
-          : typeof workflow.areaId === "string" && workflow.areaId
-            ? workflow.areaId
-            : sites[0]?.id ?? "",
+      name: normalizeWorkflowName({ ...workflow, siteId, shipperId }, shippers, sites, legacyAreas),
+      shipperId,
+      siteId,
       steps: normalizeWorkflowSteps(workflow.steps),
       updatedAt:
         typeof workflow.updatedAt === "string" && workflow.updatedAt
@@ -192,32 +339,132 @@ function normalizeWorkflows(
   });
 }
 
+function normalizeSiteShipperRelations(
+  value: unknown,
+  sites: Site[],
+  shippers: Shipper[],
+  workflows: WorkflowDefinition[],
+) {
+  const source = Array.isArray(value) ? value : [];
+  const siteIds = new Set(sites.map((site) => site.id));
+  const shipperIds = new Set(shippers.map((shipper) => shipper.id));
+  const defaultStartDate = formatDateInput(new Date());
+  const defaultEndDate = formatDateInput(addYears(new Date(), 1));
+
+  const normalized = source
+    .map((rawRelation) => {
+      const relation = rawRelation as Partial<SiteShipperRelation>;
+      if (
+        typeof relation.siteId !== "string" ||
+        !siteIds.has(relation.siteId) ||
+        typeof relation.shipperId !== "string" ||
+        !shipperIds.has(relation.shipperId)
+      ) {
+        return null;
+      }
+
+      const status = relation.status === "suspended" || relation.status === "expired" ? relation.status : "active";
+
+      return {
+        id: typeof relation.id === "string" && relation.id.trim() ? relation.id : `${relation.siteId}-${relation.shipperId}`,
+        siteId: relation.siteId,
+        shipperId: relation.shipperId,
+        contractStartDate:
+          typeof relation.contractStartDate === "string" && relation.contractStartDate
+            ? relation.contractStartDate
+            : defaultStartDate,
+        contractEndDate:
+          typeof relation.contractEndDate === "string" && relation.contractEndDate
+            ? relation.contractEndDate
+            : defaultEndDate,
+        contactPerson: typeof relation.contactPerson === "string" ? relation.contactPerson : "",
+        contactTel: typeof relation.contactTel === "string" ? relation.contactTel : "",
+        contactEmail: typeof relation.contactEmail === "string" ? relation.contactEmail : "",
+        dedicatedProcessIds: asArray(relation.dedicatedProcessIds, []),
+        priceConfig: asArray(relation.priceConfig, []),
+        notes: typeof relation.notes === "string" ? relation.notes : "",
+        status,
+        createdAt:
+          typeof relation.createdAt === "string" && relation.createdAt
+            ? relation.createdAt
+            : new Date().toISOString(),
+        updatedAt:
+          typeof relation.updatedAt === "string" && relation.updatedAt
+            ? relation.updatedAt
+            : new Date().toISOString(),
+      } satisfies SiteShipperRelation;
+    })
+    .filter((relation): relation is SiteShipperRelation => Boolean(relation));
+
+  return migrateSiteShipperRelations(sites, workflows, normalized);
+}
+
 function readInitialData(): MasterDataSnapshot {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (!raw) return defaultMasterData;
-    const parsed = JSON.parse(raw);
-    const shippers = asArray(parsed.shippers, defaultMasterData.shippers);
-    const sites = asArray(parsed.sites, defaultMasterData.sites);
+    const parsed = readStorageSnapshot();
+    if (!parsed) {
+      return {
+        ...defaultMasterData,
+        sites: normalizeSites(defaultMasterData.sites),
+      };
+    }
+
+    const shippers = normalizeShippers(parsed.shippers);
+    const sites = normalizeSites(parsed.sites);
     const legacyAreas = asArray(parsed.areas, []);
+    const rawRelations = (() => {
+      const dedicated = localStorage.getItem(SITE_SHIPPER_RELATIONS_STORAGE_KEY);
+
+      if (dedicated) {
+        try {
+          return JSON.parse(dedicated);
+        } catch {
+          // Ignore broken dedicated relation storage and fall back to the snapshot payload.
+        }
+      }
+
+      return parsed.siteShipperRelations;
+    })();
+
+    const provisionalWorkflows = normalizeWorkflows(
+      parsed.workflows,
+      shippers,
+      sites,
+      legacyAreas,
+      [],
+      defaultMasterData.workflows,
+    );
+    const siteShipperRelations = normalizeSiteShipperRelations(rawRelations, sites, shippers, provisionalWorkflows);
+    const workflows = normalizeWorkflows(
+      parsed.workflows,
+      shippers,
+      sites,
+      legacyAreas,
+      siteShipperRelations,
+      defaultMasterData.workflows,
+    );
 
     return {
       shippers,
       sites,
+      siteShipperRelations: normalizeSiteShipperRelations(rawRelations, sites, shippers, workflows),
       qualifications: normalizeQualifications(parsed.qualifications),
       skills: normalizeSkills(parsed.skills),
       dispatchCompanies: asArray(parsed.dispatchCompanies, defaultMasterData.dispatchCompanies),
       processes: asArray(parsed.processes, defaultMasterData.processes),
-      workflows: normalizeWorkflows(parsed.workflows, shippers, sites, legacyAreas, defaultMasterData.workflows),
+      workflows,
     };
   } catch {
-    return defaultMasterData;
+    return {
+      ...defaultMasterData,
+      sites: normalizeSites(defaultMasterData.sites),
+    };
   }
 }
 
 function readInitialSelectedSiteId(sites: Site[]) {
   try {
-    const raw = localStorage.getItem(SELECTED_SITE_KEY);
+    const raw = localStorage.getItem(SELECTED_SITE_KEY) ?? localStorage.getItem(LEGACY_SELECTED_SITE_KEY);
     if (raw && sites.some((site) => site.id === raw)) return raw;
   } catch {
     // Ignore localStorage errors and fall back to the first site.
@@ -247,6 +494,7 @@ export function MasterDataProvider({ children }: { children: ReactNode }) {
 
   const [shippers, setShippers] = useState<Shipper[]>(initial.shippers);
   const [sites, setSites] = useState<Site[]>(initial.sites);
+  const [siteShipperRelations, setSiteShipperRelations] = useState<SiteShipperRelation[]>(initial.siteShipperRelations);
   const [qualifications, setQualifications] = useState<QualificationMaster[]>(initial.qualifications);
   const [skills, setSkills] = useState<SkillMaster[]>(initial.skills);
   const [dispatchCompanies, setDispatchCompanies] = useState<DispatchCompany[]>(initial.dispatchCompanies);
@@ -270,24 +518,53 @@ export function MasterDataProvider({ children }: { children: ReactNode }) {
       const resolved = typeof value === "function"
         ? (value as (current: WorkflowDefinition[]) => WorkflowDefinition[])(compatPrev)
         : value;
-      return normalizeWorkflows(resolved, shippers, sites, areas, prev);
+
+      return normalizeWorkflows(resolved, shippers, sites, areas, siteShipperRelations, prev);
     });
   };
 
   useEffect(() => {
+    setSiteShipperRelations((prev) => {
+      const siteIds = new Set(sites.map((site) => site.id));
+      const shipperIds = new Set(shippers.map((shipper) => shipper.id));
+      const next = prev.filter(
+        (relation) => siteIds.has(relation.siteId) && shipperIds.has(relation.shipperId),
+      );
+
+      return next.length === prev.length ? prev : next;
+    });
+  }, [sites, shippers]);
+
+  useEffect(() => {
+    setSites((prev) => {
+      const next = prev.map((site) => {
+        const primaryShipperId = getPrimaryShipperForSite(site.id, shippers, siteShipperRelations)?.id;
+        return site.shipperId === primaryShipperId ? site : { ...site, shipperId: primaryShipperId };
+      });
+
+      return next.every((site, index) => site === prev[index]) ? prev : next;
+    });
+  }, [shippers, siteShipperRelations]);
+
+  useEffect(() => {
     localStorage.setItem(
       STORAGE_KEY,
-        JSON.stringify({
-          shippers,
-          sites,
-          qualifications,
-          skills,
-          dispatchCompanies,
-          processes,
-          workflows: workflowState,
-        }),
-      );
-  }, [shippers, sites, qualifications, skills, dispatchCompanies, processes, workflowState]);
+      JSON.stringify({
+        shippers,
+        sites,
+        siteShipperRelations,
+        qualifications,
+        skills,
+        dispatchCompanies,
+        processes,
+        workflows: workflowState,
+      }),
+    );
+    localStorage.setItem(
+      SITE_SHIPPER_RELATIONS_STORAGE_KEY,
+      JSON.stringify(siteShipperRelations),
+    );
+  }, [shippers, sites, siteShipperRelations, qualifications, skills, dispatchCompanies, processes, workflowState]);
 
   useEffect(() => {
     if (selectedSiteId && sites.some((site) => site.id === selectedSiteId)) return;
@@ -304,6 +581,8 @@ export function MasterDataProvider({ children }: { children: ReactNode }) {
       setShippers,
       sites,
       setSites,
+      siteShipperRelations,
+      setSiteShipperRelations,
       areas,
       setAreas,
       qualifications,
@@ -318,9 +597,19 @@ export function MasterDataProvider({ children }: { children: ReactNode }) {
       setWorkflows,
       selectedSiteId,
       setSelectedSiteId,
+      getSiteShipperRelationsForSite: (siteId: string) =>
+        listRelationsForSite(siteShipperRelations, siteId).map((relation) => ({
+          ...relation,
+          status: resolveSiteShipperRelationStatus(relation),
+        })),
+      getShippersForSite: (siteId: string) =>
+        listShippersForSite(siteId, shippers, siteShipperRelations),
+      getPrimaryShipperForSite: (siteId: string) =>
+        getPrimaryShipperForSite(siteId, shippers, siteShipperRelations),
       resetMasterData: () => {
         setShippers(defaultMasterData.shippers);
-        setSites(defaultMasterData.sites);
+        setSites(normalizeSites(defaultMasterData.sites));
+        setSiteShipperRelations(defaultMasterData.siteShipperRelations);
         setQualifications(defaultMasterData.qualifications);
         setSkills(defaultMasterData.skills);
         setDispatchCompanies(defaultMasterData.dispatchCompanies);
@@ -329,7 +618,18 @@ export function MasterDataProvider({ children }: { children: ReactNode }) {
         setSelectedSiteId(defaultMasterData.sites[0]?.id ?? "");
       },
     }),
-    [shippers, sites, areas, qualifications, skills, dispatchCompanies, processes, workflows, selectedSiteId],
+    [
+      shippers,
+      sites,
+      siteShipperRelations,
+      areas,
+      qualifications,
+      skills,
+      dispatchCompanies,
+      processes,
+      workflows,
+      selectedSiteId,
+    ],
   );
 
   return <MasterDataContext.Provider value={value}>{children}</MasterDataContext.Provider>;

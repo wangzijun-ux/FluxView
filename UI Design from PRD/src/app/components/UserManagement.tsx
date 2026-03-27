@@ -21,6 +21,7 @@ import {
   ToggleRight,
   Award,
 } from "lucide-react";
+import { Autocomplete, Chip, TextField } from "@mui/material";
 import { useThemeColors } from "./ThemeContext";
 import { useMasterData } from "./MasterDataContext";
 import { defaultMasterData } from "./masterStore";
@@ -96,6 +97,15 @@ interface User {
     uph: number;
     attendanceRate: number;
   };
+}
+
+interface ManagementTeam {
+  id: string;
+  name: string;
+  description: string;
+  memberUserIds: string[];
+  themeColor: string;
+  createdAt: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -237,6 +247,90 @@ const empTypeColor: Record<string, string> = {
 };
 
 const formatUnitPrice = (value: number) => `¥${value.toLocaleString("ja-JP")}`;
+const TEAM_STORAGE_KEY = "fluxview-management-teams-v1";
+const TEAM_COLOR_OPTIONS = [
+  {
+    id: "blue",
+    name: "ブルー",
+    avatarClass: "bg-[#EEF4FF] text-[#155DFC] border border-[#B7CDFF]",
+    accentClass: "bg-[#155DFC]",
+    chipClass: "border-[#B7CDFF] bg-[#EEF4FF] text-[#155DFC]",
+  },
+  {
+    id: "emerald",
+    name: "グリーン",
+    avatarClass: "bg-emerald-50 text-emerald-600 border border-emerald-200",
+    accentClass: "bg-emerald-500",
+    chipClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  },
+  {
+    id: "violet",
+    name: "バイオレット",
+    avatarClass: "bg-violet-50 text-violet-600 border border-violet-200",
+    accentClass: "bg-violet-500",
+    chipClass: "border-violet-200 bg-violet-50 text-violet-700",
+  },
+  {
+    id: "amber",
+    name: "アンバー",
+    avatarClass: "bg-amber-50 text-amber-600 border border-amber-200",
+    accentClass: "bg-amber-500",
+    chipClass: "border-amber-200 bg-amber-50 text-amber-700",
+  },
+  {
+    id: "rose",
+    name: "ローズ",
+    avatarClass: "bg-rose-50 text-rose-600 border border-rose-200",
+    accentClass: "bg-rose-500",
+    chipClass: "border-rose-200 bg-rose-50 text-rose-700",
+  },
+  {
+    id: "slate",
+    name: "グレー",
+    avatarClass: "bg-slate-100 text-slate-500 border border-slate-200",
+    accentClass: "bg-slate-400",
+    chipClass: "border-slate-200 bg-slate-100 text-slate-600",
+  },
+] as const;
+const DEFAULT_TEAM_COLOR_ID = TEAM_COLOR_OPTIONS[0].id;
+
+function getTeamColorOption(colorId?: string) {
+  return TEAM_COLOR_OPTIONS.find((option) => option.id === colorId) ?? TEAM_COLOR_OPTIONS[0];
+}
+
+function readTeamsFromStorage(): ManagementTeam[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(TEAM_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item) =>
+          item &&
+          typeof item.id === "string" &&
+          typeof item.name === "string" &&
+          typeof item.description === "string" &&
+          Array.isArray(item.memberUserIds) &&
+          typeof item.createdAt === "string",
+      )
+      .map((item, index) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        memberUserIds: item.memberUserIds,
+        themeColor:
+          typeof item.themeColor === "string" && TEAM_COLOR_OPTIONS.some((option) => option.id === item.themeColor)
+            ? item.themeColor
+            : TEAM_COLOR_OPTIONS[index % TEAM_COLOR_OPTIONS.length].id,
+        createdAt: item.createdAt,
+      }));
+  } catch {
+    return [];
+  }
+}
 
 function CapabilityIconChip({
   title,
@@ -270,6 +364,73 @@ function CapabilityIconChip({
   );
 }
 
+function CompactMultiSelect({
+  options,
+  selectedIds,
+  onChange,
+  placeholder,
+}: {
+  options: Array<{ id: string; name: string }>;
+  selectedIds: string[];
+  onChange: (ids: string[]) => void;
+  placeholder: string;
+}) {
+  const selectedOptions = options.filter((option) => selectedIds.includes(option.id));
+
+  return (
+    <div className="min-w-0">
+      <Autocomplete
+        multiple
+        size="small"
+        options={options}
+        value={selectedOptions}
+        disableCloseOnSelect
+        limitTags={3}
+        isOptionEqualToValue={(option, value) => option.id === value.id}
+        getOptionLabel={(option) => option.name}
+        onChange={(_, values) => onChange(values.map((value) => value.id))}
+        renderTags={(value, getTagProps) =>
+          value.map((option, index) => (
+            <Chip
+              {...getTagProps({ index })}
+              key={option.id}
+              label={option.name}
+              size="small"
+              sx={{
+                borderRadius: "9999px",
+                border: "1px solid #CFE8E4",
+                bgcolor: "#EAF7F4",
+                color: "#315B55",
+                ".MuiChip-deleteIcon": { color: "#8AA9A2" },
+              }}
+            />
+          ))
+        }
+        renderInput={(params) => (
+          <TextField
+            {...params}
+            placeholder={placeholder}
+            sx={{
+              "& .MuiOutlinedInput-root": {
+                minHeight: 40,
+                borderRadius: "12px",
+                fontSize: 13,
+                bgcolor: "#FFFFFF",
+                alignItems: "center",
+                paddingTop: "3px",
+                paddingBottom: "3px",
+              },
+              "& .MuiOutlinedInput-input": {
+                paddingY: "6px",
+              },
+            }}
+          />
+        )}
+      />
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
@@ -292,18 +453,19 @@ export function UserManagement() {
   );
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<"users" | "roles">("users");
+  const [activeTab, setActiveTab] = useState<"users" | "roles" | "teams">("users");
 
   // User management state
   const [users, setUsers] = useState<User[]>(() => readUsersFromStorage());
   const [roles, setRoles] = useState<Role[]>(initialRoles);
+  const [teams, setTeams] = useState<ManagementTeam[]>(() => readTeamsFromStorage());
   const [searchTerm, setSearchTerm] = useState("");
   const [filterRole, setFilterRole] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterEmpType, setFilterEmpType] = useState("all");
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const [userDialogMode, setUserDialogMode] = useState<"create" | "edit" | null>(null);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [filterSkill, setFilterSkill] = useState("all");
-  const [showAddUser, setShowAddUser] = useState(false);
   const [deploymentWorkersDraft, setDeploymentWorkersDraft] = useState(() => readDeploymentWorkers());
   const deploymentWorkerNoteMap = useMemo(
     () => new Map(deploymentWorkersDraft.map((worker) => [worker.id, worker.note ?? ""])),
@@ -311,12 +473,13 @@ export function UserManagement() {
   );
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
-  const [newUserRoleId, setNewUserRoleId] = useState(initialRoles[3]?.id ?? initialRoles[0]?.id ?? "");
+  const [newUserRoleIds, setNewUserRoleIds] = useState<string[]>(
+    initialRoles[3]?.id ?? initialRoles[0]?.id ?? "" ? [initialRoles[3]?.id ?? initialRoles[0]?.id ?? ""] : [],
+  );
   const [newUserEmploymentType, setNewUserEmploymentType] = useState<"正社員" | "パートナー" | "派遣">("正社員");
   const [newUserDispatchCompanyId, setNewUserDispatchCompanyId] = useState(defaultMasterData.dispatchCompanies[0]?.id ?? "");
   const [newUserStatus, setNewUserStatus] = useState<"active" | "inactive">("active");
   const [newUserUnitPrice, setNewUserUnitPrice] = useState(String(DEFAULT_USER_UNIT_PRICE));
-  const [selectedUnitPriceDraft, setSelectedUnitPriceDraft] = useState("");
 
   // Role management state
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
@@ -324,6 +487,13 @@ export function UserManagement() {
   const [showAddRole, setShowAddRole] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleDesc, setNewRoleDesc] = useState("");
+  const [teamSearchTerm, setTeamSearchTerm] = useState("");
+  const [teamDialogMode, setTeamDialogMode] = useState<"create" | "edit" | null>(null);
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+  const [newTeamName, setNewTeamName] = useState("");
+  const [newTeamDescription, setNewTeamDescription] = useState("");
+  const [newTeamMemberIds, setNewTeamMemberIds] = useState<string[]>([]);
+  const [newTeamThemeColor, setNewTeamThemeColor] = useState<string>(DEFAULT_TEAM_COLOR_ID);
 
   // Toast
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -336,6 +506,10 @@ export function UserManagement() {
   useEffect(() => {
     localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(users));
   }, [users]);
+
+  useEffect(() => {
+    localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(teams));
+  }, [teams]);
 
   useEffect(() => {
     setDeploymentWorkersDraft((prev) => {
@@ -377,23 +551,116 @@ export function UserManagement() {
     });
   }, [users, searchTerm, filterRole, filterStatus, filterEmpType, filterSkill]);
 
-  const selectedUser = selectedUserId ? users.find((u) => u.id === selectedUserId) : null;
+  const selectedUser = userDialogMode === "edit" && editingUserId ? users.find((u) => u.id === editingUserId) : null;
   const selectedRole = selectedRoleId ? roles.find((r) => r.id === selectedRoleId) : null;
   const getRoleName = (roleId: string) => roles.find((r) => r.id === roleId)?.name ?? "不明";
   const getRoleColor = (roleId: string) => roles.find((r) => r.id === roleId)?.color ?? "text-gray-400";
-
-  useEffect(() => {
-    setSelectedUnitPriceDraft(selectedUser ? String(selectedUser.unitPrice) : "");
-  }, [selectedUser]);
+  const selectedTeam = teamDialogMode === "edit" && editingTeamId ? teams.find((team) => team.id === editingTeamId) : null;
+  const teamMemberOptions = useMemo(
+    () => users.map((user) => ({ id: user.id, name: `${user.name} (${user.email})` })),
+    [users],
+  );
+  const filteredTeams = useMemo(() => {
+    const keyword = teamSearchTerm.trim().toLowerCase();
+    if (!keyword) return teams;
+    return teams.filter((team) => {
+      const memberNames = team.memberUserIds
+        .map((memberId) => users.find((user) => user.id === memberId)?.name ?? "")
+        .join(" ");
+      return `${team.name} ${team.description} ${memberNames}`.toLowerCase().includes(keyword);
+    });
+  }, [teamSearchTerm, teams, users]);
+  const userTeamMap = useMemo(() => {
+    const map = new Map<string, ManagementTeam>();
+    teams.forEach((team) => {
+      team.memberUserIds.forEach((memberId) => {
+        if (!map.has(memberId)) {
+          map.set(memberId, team);
+        }
+      });
+    });
+    return map;
+  }, [teams]);
+  const getUserAvatarTone = (userId: string) => {
+    const team = userTeamMap.get(userId);
+    if (!team) {
+      return {
+        avatarClass: "bg-slate-100 text-slate-500 border border-slate-200",
+        chipClass: "border-slate-200 bg-slate-100 text-slate-600",
+      };
+    }
+    const option = getTeamColorOption(team.themeColor);
+    return {
+      avatarClass: option.avatarClass,
+      chipClass: option.chipClass,
+    };
+  };
 
   const resetNewUserForm = () => {
     setNewUserName("");
     setNewUserEmail("");
-    setNewUserRoleId(initialRoles[3]?.id ?? initialRoles[0]?.id ?? "");
+    setNewUserRoleIds(initialRoles[3]?.id ?? initialRoles[0]?.id ?? "" ? [initialRoles[3]?.id ?? initialRoles[0]?.id ?? ""] : []);
     setNewUserEmploymentType("正社員");
     setNewUserDispatchCompanyId("");
     setNewUserStatus("active");
     setNewUserUnitPrice(String(DEFAULT_USER_UNIT_PRICE));
+  };
+
+  const resetTeamForm = () => {
+    setNewTeamName("");
+    setNewTeamDescription("");
+    setNewTeamMemberIds([]);
+    setNewTeamThemeColor(DEFAULT_TEAM_COLOR_ID);
+  };
+
+  const openCreateTeamDialog = () => {
+    resetTeamForm();
+    setEditingTeamId(null);
+    setTeamDialogMode("create");
+  };
+
+  const openEditTeamDialog = (teamId: string) => {
+    const team = teams.find((item) => item.id === teamId);
+    if (!team) return;
+    setNewTeamName(team.name);
+    setNewTeamDescription(team.description);
+    setNewTeamMemberIds(team.memberUserIds);
+    setNewTeamThemeColor(team.themeColor ?? DEFAULT_TEAM_COLOR_ID);
+    setEditingTeamId(team.id);
+    setTeamDialogMode("edit");
+  };
+
+  const closeTeamDialog = () => {
+    setTeamDialogMode(null);
+    setEditingTeamId(null);
+    resetTeamForm();
+  };
+
+  const openCreateUserDialog = () => {
+    resetNewUserForm();
+    setEditingUserId(null);
+    setUserDialogMode("create");
+  };
+
+  const openEditUserDialog = (userId: string) => {
+    const user = users.find((item) => item.id === userId);
+    if (!user) return;
+
+    setNewUserName(user.name);
+    setNewUserEmail(user.email);
+    setNewUserRoleIds(user.roleIds.length > 0 ? user.roleIds : (initialRoles[3]?.id ?? initialRoles[0]?.id ?? "" ? [initialRoles[3]?.id ?? initialRoles[0]?.id ?? ""] : []));
+    setNewUserEmploymentType(user.employmentType);
+    setNewUserDispatchCompanyId(user.dispatchCompanyId ?? "");
+    setNewUserStatus(user.status === "locked" ? "inactive" : user.status);
+    setNewUserUnitPrice(String(user.unitPrice));
+    setEditingUserId(user.id);
+    setUserDialogMode("edit");
+  };
+
+  const closeUserDialog = () => {
+    setUserDialogMode(null);
+    setEditingUserId(null);
+    resetNewUserForm();
   };
 
   const updateDeploymentWorkerNoteDraft = (workerId: string, note: string) => {
@@ -415,7 +682,7 @@ export function UserManagement() {
   };
 
   // User actions
-  const addNewUser = () => {
+  const saveUserDialog = () => {
     const name = newUserName.trim();
     const email = newUserEmail.trim();
     const parsedUnitPrice = Number(newUserUnitPrice);
@@ -423,10 +690,32 @@ export function UserManagement() {
       ? Math.round(parsedUnitPrice)
       : DEFAULT_USER_UNIT_PRICE;
 
-    if (!name || !email || !newUserRoleId) return;
+    if (!name || !email || newUserRoleIds.length === 0) return;
     if (newUserEmploymentType === "派遣" && !newUserDispatchCompanyId) return;
-    if (users.some((user) => user.email.toLowerCase() === email.toLowerCase())) {
+    if (users.some((user) => user.id !== editingUserId && user.email.toLowerCase() === email.toLowerCase())) {
       showToast("同じメールアドレスのユーザーが存在します");
+      return;
+    }
+
+    if (userDialogMode === "edit" && editingUserId) {
+      setUsers((prev) =>
+        prev.map((user) => {
+          if (user.id !== editingUserId) return user;
+          return {
+            ...user,
+            name,
+            email,
+            avatar: Array.from(name)[0] ?? user.avatar,
+            roleIds: newUserRoleIds,
+            status: user.status === "locked" ? "locked" : newUserStatus,
+            employmentType: newUserEmploymentType,
+            unitPrice: nextUnitPrice,
+            dispatchCompanyId: newUserEmploymentType === "派遣" ? newUserDispatchCompanyId : undefined,
+          };
+        }),
+      );
+      showToast("ユーザーを更新しました");
+      closeUserDialog();
       return;
     }
 
@@ -442,7 +731,7 @@ export function UserManagement() {
         name,
         email,
         avatar,
-        roleIds: [newUserRoleId],
+        roleIds: newUserRoleIds,
         status: newUserStatus,
         lastLogin: "未ログイン",
         createdAt: new Date().toISOString().slice(0, 10),
@@ -455,28 +744,8 @@ export function UserManagement() {
         performance: { uph: 0, attendanceRate: 0 },
       },
     ]);
-    setShowAddUser(false);
-    resetNewUserForm();
+    closeUserDialog();
     showToast("ユーザーを追加しました");
-  };
-
-  const updateUserUnitPrice = (userId: string, unitPrice: number) => {
-    setUsers((prev) => prev.map((u) => (
-      u.id === userId ? { ...u, unitPrice } : u
-    )));
-  };
-
-  const commitUserUnitPrice = (userId: string) => {
-    const parsedUnitPrice = Number(selectedUnitPriceDraft);
-    const nextUnitPrice = Number.isFinite(parsedUnitPrice) && parsedUnitPrice >= 0
-      ? Math.round(parsedUnitPrice)
-      : DEFAULT_USER_UNIT_PRICE;
-
-    if (selectedUser?.unitPrice !== nextUnitPrice) {
-      updateUserUnitPrice(userId, nextUnitPrice);
-      showToast("単価を更新しました");
-    }
-    setSelectedUnitPriceDraft(String(nextUnitPrice));
   };
 
   const toggleUserStatus = (userId: string) => {
@@ -488,25 +757,65 @@ export function UserManagement() {
     showToast("ステータスを更新しました");
   };
 
+  const saveTeamDialog = () => {
+    const name = newTeamName.trim();
+    const description = newTeamDescription.trim();
+    if (!name) return;
+
+    if (
+      teams.some(
+        (team) => team.id !== editingTeamId && team.name.trim().toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      showToast("同じ名前のチームが既に存在します");
+      return;
+    }
+
+    if (teamDialogMode === "edit" && editingTeamId) {
+      setTeams((prev) =>
+        prev.map((team) =>
+          team.id === editingTeamId
+            ? {
+                ...team,
+                name,
+                description,
+                memberUserIds: newTeamMemberIds,
+                themeColor: newTeamThemeColor,
+              }
+            : team,
+        ),
+      );
+      showToast("チームを更新しました");
+      closeTeamDialog();
+      return;
+    }
+
+    setTeams((prev) => [
+      ...prev,
+      {
+        id: `team-${Date.now()}`,
+        name,
+        description,
+        memberUserIds: newTeamMemberIds,
+        themeColor: newTeamThemeColor,
+        createdAt: new Date().toISOString().slice(0, 10),
+      },
+    ]);
+    showToast("チームを追加しました");
+    closeTeamDialog();
+  };
+
+  const deleteTeam = (teamId: string) => {
+    const team = teams.find((item) => item.id === teamId);
+    if (!team) return;
+    setTeams((prev) => prev.filter((item) => item.id !== teamId));
+    if (editingTeamId === teamId) closeTeamDialog();
+    showToast(`チーム「${team.name}」を削除しました`);
+  };
+
   const unlockUser = (userId: string) => {
     setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, status: "active" } : u));
     showToast("ロックを解除しました");
-  };
-
-  const changeUserRole = (userId: string, targetRoleId: string) => {
-    setUsers((prev) => prev.map((u) => {
-      if (u.id !== userId) return u;
-      const has = u.roleIds.includes(targetRoleId);
-      const nextRoles = has
-        ? u.roleIds.filter(r => r !== targetRoleId)
-        : [...u.roleIds, targetRoleId];
-
-      // Prevent deleting last role
-      if (nextRoles.length === 0) return u;
-
-      return { ...u, roleIds: nextRoles };
-    }));
-    showToast("ロールを更新しました");
   };
 
   const addSkillToUser = (userId: string, skillName: string) => {
@@ -644,12 +953,29 @@ export function UserManagement() {
     locked: users.filter((u) => u.status === "locked").length,
     mfaEnabled: users.filter((u) => u.mfaEnabled).length,
     roles: roles.length,
+    teams: teams.length,
+    teamMembers: new Set(teams.flatMap((team) => team.memberUserIds)).size,
+    emptyTeams: teams.filter((team) => team.memberUserIds.length === 0).length,
   };
+  const cardClass = `${c.bgCard} border ${c.border} rounded-2xl shadow-[0_20px_48px_-36px_rgba(15,23,42,0.35)]`;
+  const panelClass = `rounded-2xl border ${c.borderCard} ${c.bgPanel}`;
+  const surfaceCardClass = `rounded-xl border ${c.borderCard} ${c.bgSurface}`;
+  const inputClass = `w-full rounded-xl border px-3 py-2.5 text-[13px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary} placeholder:${c.textDimmed}`;
+  const selectClass = `${inputClass} cursor-pointer ${c.textSecondary}`;
+  const filterSelectClass = `h-10 min-w-[124px] rounded-xl border px-3 text-[12px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textSecondary} cursor-pointer`;
+  const primaryButtonClass =
+    "inline-flex h-10 items-center justify-center gap-2 rounded-xl px-4 text-[13px] font-semibold text-white transition hover:bg-[#0F4FE3]";
+  const secondaryButtonClass = `inline-flex h-10 items-center justify-center gap-2 rounded-xl border px-4 text-[13px] font-semibold transition ${c.borderCard} ${c.bgCard} ${c.textSecondary} hover:border-[#B7CDFF] hover:text-[#155DFC]`;
+  const userDialogSaveDisabled =
+    !newUserName.trim() ||
+    !newUserEmail.trim() ||
+    newUserRoleIds.length === 0 ||
+    (newUserEmploymentType === "派遣" && !newUserDispatchCompanyId);
 
   /* ================================================================ */
 
   return (
-    <div className={`h-full flex flex-col ${c.isDark ? "bg-[#0d0d1a]" : "bg-gray-50"} relative`}>
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden p-6">
 
       {/* Toast */}
       {toastMsg && (
@@ -662,130 +988,94 @@ export function UserManagement() {
       )}
 
       {/* Header */}
-      <div className={`${c.bgCard} border-b ${c.border} px-6 py-4`}>
-        <div className="flex items-center justify-end">
-          <div className="flex items-center gap-3">
-            {activeTab === "users" && (
-              <button onClick={() => setShowAddUser(!showAddUser)}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-cyan-600 text-white text-[13px] hover:bg-cyan-500 transition-all">
+      <div className={`${cardClass} shrink-0`}>
+        <div className={`flex flex-col gap-4 border-b px-5 py-4 ${c.border}`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => setActiveTab("users")}
+                className={`inline-flex h-[42px] items-center gap-2 rounded-full border px-4 text-[13px] font-semibold transition-all ${
+                  activeTab === "users"
+                    ? "border-[#155DFC] bg-[#155DFC] text-white shadow-[0_12px_32px_-18px_rgba(21,93,252,0.9)]"
+                    : `${c.borderCard} bg-white/85 ${c.textSecondary} hover:border-[#B7CDFF] hover:text-[#155DFC]`
+                }`}
+              >
+                <Users className="h-4 w-4" />
+                ユーザー一覧
+              </button>
+              <button
+                onClick={() => setActiveTab("roles")}
+                className={`inline-flex h-[42px] items-center gap-2 rounded-full border px-4 text-[13px] font-semibold transition-all ${
+                  activeTab === "roles"
+                    ? "border-violet-500 bg-violet-600 text-white shadow-[0_12px_32px_-18px_rgba(124,58,237,0.9)]"
+                    : `${c.borderCard} bg-white/85 ${c.textSecondary} hover:border-violet-200 hover:text-violet-700`
+                }`}
+              >
+                <Shield className="h-4 w-4" />
+                ロール・権限設定
+              </button>
+              <button
+                onClick={() => setActiveTab("teams")}
+                className={`inline-flex h-[42px] items-center gap-2 rounded-full border px-4 text-[13px] font-semibold transition-all ${
+                  activeTab === "teams"
+                    ? "border-[#155DFC] bg-[#155DFC] text-white shadow-[0_12px_32px_-18px_rgba(21,93,252,0.9)]"
+                    : `${c.borderCard} bg-white/85 ${c.textSecondary} hover:border-[#B7CDFF] hover:text-[#155DFC]`
+                }`}
+              >
+                <Users className="h-4 w-4" />
+                チーム
+              </button>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {activeTab === "users" && (
+                <button onClick={openCreateUserDialog} className={`${primaryButtonClass} bg-[#155DFC]`}>
                 <UserPlus className="w-4 h-4" />ユーザー追加
-              </button>
-            )}
-            {activeTab === "roles" && (
-              <button onClick={() => setShowAddRole(!showAddRole)}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 text-white text-[13px] hover:bg-violet-500 transition-all">
-                <Plus className="w-4 h-4" />ロール追加
-              </button>
-            )}
-          </div>
-        </div>
-
-        {activeTab === "users" && showAddUser && (
-          <div className={`mt-4 rounded-xl border ${c.border} ${c.bgSurface} p-4`}>
-            <div className="grid gap-3 md:grid-cols-[1.1fr_1.1fr_0.9fr_0.9fr]">
-              <input
-                type="text"
-                placeholder="氏名"
-                value={newUserName}
-                onChange={(e) => setNewUserName(e.target.value)}
-                className={`w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}
-              />
-              <input
-                type="email"
-                placeholder="メールアドレス"
-                value={newUserEmail}
-                onChange={(e) => setNewUserEmail(e.target.value)}
-                className={`w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}
-              />
-              <select value={newUserRoleId} onChange={(e) => setNewUserRoleId(e.target.value)} className={`${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}>
-                {roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-              </select>
-              <select value={newUserEmploymentType} onChange={(e) => setNewUserEmploymentType(e.target.value as "正社員" | "パートナー" | "派遣")} className={`${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}>
-                <option value="正社員">正社員</option>
-                <option value="パートナー">パートナー</option>
-                <option value="派遣">派遣</option>
-              </select>
-            </div>
-
-            <div className="mt-3 grid gap-3 md:grid-cols-[1fr_140px_120px_auto]">
-              {newUserEmploymentType === "派遣" ? (
-                <select value={newUserDispatchCompanyId} onChange={(e) => setNewUserDispatchCompanyId(e.target.value)} className={`${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}>
-                  <option value="">{dispatchCompanies.length === 0 ? "派遣会社マスタが未登録です" : "派遣会社を選択"}</option>
-                  {dispatchCompanies.map((company) => (
-                    <option key={company.id} value={company.id}>{company.name}</option>
-                  ))}
-                </select>
-              ) : (
-                <div className={`flex items-center rounded-lg border ${c.border} ${c.bgCard} px-3 text-[12px] ${c.textMuted}`}>
-                  派遣以外の雇用形態では派遣会社の指定は不要です
-                </div>
-              )}
-
-              <label className={`relative flex items-center rounded-lg border ${c.border} ${c.bgCard}`}>
-                <input
-                  type="number"
-                  min="0"
-                  step="10"
-                  placeholder="単価"
-                  value={newUserUnitPrice}
-                  onChange={(e) => setNewUserUnitPrice(e.target.value)}
-                  className={`w-full bg-transparent rounded-lg px-3 py-2 pr-12 text-[13px] ${c.textPrimary} outline-none`}
-                />
-                <span className={`pointer-events-none absolute right-3 text-[11px] ${c.textMuted}`}>円/時</span>
-              </label>
-
-              <select value={newUserStatus} onChange={(e) => setNewUserStatus(e.target.value as "active" | "inactive")} className={`${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}>
-                <option value="active">有効</option>
-                <option value="inactive">無効</option>
-              </select>
-
-              <div className="flex items-center justify-end gap-2">
-                <button onClick={() => { setShowAddUser(false); resetNewUserForm(); }} className={`px-3 py-2 rounded-lg text-[12px] ${c.textMuted}`}>キャンセル</button>
-                <button
-                  onClick={addNewUser}
-                  disabled={!newUserName.trim() || !newUserEmail.trim() || !newUserRoleId || (newUserEmploymentType === "派遣" && !newUserDispatchCompanyId)}
-                  className="px-4 py-2 rounded-lg bg-cyan-600 text-white text-[12px] disabled:opacity-30 hover:bg-cyan-500 transition-all"
-                >
-                  登録
                 </button>
-              </div>
+              )}
+              {activeTab === "roles" && (
+                <button onClick={() => setShowAddRole(!showAddRole)} className={`${primaryButtonClass} bg-violet-600`}>
+                <Plus className="w-4 h-4" />ロール追加
+                </button>
+              )}
+              {activeTab === "teams" && (
+                <button onClick={openCreateTeamDialog} className={`${primaryButtonClass} bg-[#155DFC]`}>
+                  <Plus className="w-4 h-4" />チーム追加
+                </button>
+              )}
             </div>
           </div>
-        )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-5 gap-3 mt-4">
-          {[
-            { icon: Users, label: "総ユーザー", value: stats.total, iconColor: "text-cyan-400", bgIcon: "bg-cyan-500/10" },
-            { icon: ShieldCheck, label: "有効", value: stats.active, iconColor: "text-emerald-400", bgIcon: "bg-emerald-500/10" },
-            { icon: ShieldAlert, label: "ロック中", value: stats.locked, iconColor: "text-red-400", bgIcon: "bg-red-500/10" },
-            { icon: Key, label: "MFA有効", value: stats.mfaEnabled, iconColor: "text-amber-400", bgIcon: "bg-amber-500/10" },
-            { icon: Shield, label: "ロール数", value: stats.roles, iconColor: "text-violet-400", bgIcon: "bg-violet-500/10" },
-          ].map((s) => (
-            <div key={s.label} className={`${c.bgSurface} rounded-xl p-3 flex items-center gap-3`}>
-              <div className={`w-9 h-9 rounded-lg ${s.bgIcon} flex items-center justify-center`}>
-                <s.icon className={`w-4 h-4 ${s.iconColor}`} />
-              </div>
-              <div>
-                <div className={`text-[11px] ${c.textMuted}`}>{s.label}</div>
-                <div className={`text-[20px] ${c.textPrimary} tabular-nums`}>{s.value}</div>
-              </div>
-            </div>
-          ))}
         </div>
 
-        {/* Tabs */}
-        <div className="flex items-center gap-0 mt-4 -mb-4">
-          <button onClick={() => setActiveTab("users")}
-            className={`flex items-center gap-2 px-5 py-3 text-[13px] transition-all border-b-2 ${activeTab === "users" ? `${c.textPrimary} border-cyan-500` : `${c.textMuted} border-transparent`
-              }`}>
-            <Users className="w-4 h-4" />ユーザー一覧
-          </button>
-          <button onClick={() => setActiveTab("roles")}
-            className={`flex items-center gap-2 px-5 py-3 text-[13px] transition-all border-b-2 ${activeTab === "roles" ? `${c.textPrimary} border-violet-500` : `${c.textMuted} border-transparent`
-              }`}>
-            <Shield className="w-4 h-4" />ロール・権限設定
-          </button>
+        <div className="overflow-x-auto px-5 py-5">
+          <div className="flex min-w-max gap-3">
+            {(activeTab === "teams"
+              ? [
+                  { icon: Users, label: "総チーム", value: stats.teams, iconColor: "text-[#155DFC]", bgIcon: "bg-[#155DFC]/10" },
+                  { icon: UserPlus, label: "所属ユーザー", value: stats.teamMembers, iconColor: "text-emerald-400", bgIcon: "bg-emerald-500/10" },
+                  { icon: ShieldAlert, label: "空チーム", value: stats.emptyTeams, iconColor: "text-amber-400", bgIcon: "bg-amber-500/10" },
+                ]
+              : [
+                  { icon: Users, label: "総ユーザー", value: stats.total, iconColor: "text-cyan-400", bgIcon: "bg-cyan-500/10" },
+                  { icon: ShieldCheck, label: "有効", value: stats.active, iconColor: "text-emerald-400", bgIcon: "bg-emerald-500/10" },
+                  { icon: ShieldAlert, label: "ロック中", value: stats.locked, iconColor: "text-red-400", bgIcon: "bg-red-500/10" },
+                  { icon: Key, label: "MFA有効", value: stats.mfaEnabled, iconColor: "text-amber-400", bgIcon: "bg-amber-500/10" },
+                  { icon: Shield, label: "ロール数", value: stats.roles, iconColor: "text-violet-400", bgIcon: "bg-violet-500/10" },
+                ]).map((s) => (
+              <div key={s.label} className={`w-[188px] shrink-0 rounded-2xl border p-4 ${c.borderCard} ${c.bgPanel}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className={`text-xs ${c.textSecondary}`}>{s.label}</div>
+                    <div className={`mt-1 text-lg font-semibold ${c.textPrimary} tabular-nums`}>{s.value}</div>
+                  </div>
+                  <div className={`rounded-xl p-2 ${s.bgIcon}`}>
+                    <s.icon className={`h-5 w-5 ${s.iconColor}`} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -793,450 +1083,794 @@ export function UserManagement() {
       {/* USERS TAB                           */}
       {/* ═══════════════════════════════════ */}
       {activeTab === "users" && (
-        <div className="flex-1 flex overflow-hidden">
+        <div className="min-h-0 flex-1 pt-4">
+          <div className="grid h-full min-h-0 gap-4 grid-cols-1">
           {/* User List */}
           <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Filters */}
-            <div className={`px-5 py-3 border-b ${c.border} flex items-center gap-3 ${c.bgCard}`}>
-              <div className="relative flex-1 max-w-[300px]">
-                <Search className={`w-4 h-4 ${c.textMuted} absolute left-3 top-1/2 -translate-y-1/2`} />
-                <input type="text" placeholder="名前・メール・IDで検索..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-                  className={`w-full ${c.bgSurface} border ${c.border} rounded-lg pl-10 pr-4 py-2 text-[13px] ${c.textPrimary} focus:border-cyan-500/50 outline-none`} />
+            <div className={`${cardClass} flex-1 overflow-hidden`}>
+              {/* Filters */}
+              <div className={`border-b px-5 py-4 ${c.border}`}>
+                <div className="grid items-center gap-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(4,minmax(120px,0.72fr))_auto]">
+                  <div className="relative min-w-0">
+                    <Search className={`w-4 h-4 ${c.textMuted} absolute left-3 top-1/2 -translate-y-1/2`} />
+                    <input
+                      type="text"
+                      placeholder="名前・メール・IDで検索..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className={`${inputClass} pl-10 pr-4`}
+                    />
+                  </div>
+                  <select
+                    value={filterRole}
+                    onChange={(e) => setFilterRole(e.target.value)}
+                    className={filterSelectClass}
+                  >
+                    <option value="all">全ロール</option>
+                    {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </select>
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className={filterSelectClass}
+                  >
+                    <option value="all">全ステータス</option>
+                    <option value="active">有効</option>
+                    <option value="inactive">無効</option>
+                    <option value="locked">ロック</option>
+                  </select>
+                  <select
+                    value={filterEmpType}
+                    onChange={(e) => setFilterEmpType(e.target.value)}
+                    className={filterSelectClass}
+                  >
+                    <option value="all">全雇用形態</option>
+                    <option value="正社員">正社員</option>
+                    <option value="パートナー">パートナー</option>
+                    <option value="派遣">派遣</option>
+                  </select>
+                  <select
+                    value={filterSkill}
+                    onChange={(e) => setFilterSkill(e.target.value)}
+                    className={`${filterSelectClass} min-w-[138px]`}
+                  >
+                    <option value="all">全スキル・資格</option>
+                    {capabilityOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                  <span className={`justify-self-end inline-flex items-center rounded-full border px-3 py-1 text-[12px] ${c.borderCard} ${c.textMuted} ${c.bgPanel}`}>
+                    {filteredUsers.length}件
+                  </span>
+                </div>
               </div>
-              <select value={filterRole} onChange={(e) => setFilterRole(e.target.value)}
-                className={`${c.bgSurface} border ${c.border} rounded-lg px-3 py-2 text-[12px] ${c.textSecondary} outline-none cursor-pointer`}>
-                <option value="all">全ロール</option>
-                {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
-              <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}
-                className={`${c.bgSurface} border ${c.border} rounded-lg px-3 py-2 text-[12px] ${c.textSecondary} outline-none cursor-pointer`}>
-                <option value="all">全ステータス</option>
-                <option value="active">有効</option>
-                <option value="inactive">無効</option>
-                <option value="locked">ロック</option>
-              </select>
-              <select value={filterEmpType} onChange={(e) => setFilterEmpType(e.target.value)}
-                className={`${c.bgSurface} border ${c.border} rounded-lg px-3 py-2 text-[12px] ${c.textSecondary} outline-none cursor-pointer`}>
-                <option value="all">全雇用形態</option>
-                <option value="正社員">正社員</option>
-                <option value="パートナー">パートナー</option>
-                <option value="派遣">派遣</option>
-              </select>
-              <select value={filterSkill} onChange={(e) => setFilterSkill(e.target.value)}
-                className={`${c.bgSurface} border ${c.border} rounded-lg px-3 py-2 text-[12px] ${c.textSecondary} outline-none cursor-pointer max-w-[150px]`}>
-                <option value="all">全スキル・資格</option>
-                {capabilityOptions.map((name) => <option key={name} value={name}>{name}</option>)}
-              </select>
-              <span className={`text-[12px] ${c.textMuted} ml-auto`}>{filteredUsers.length}件</span>
+
+              {/* Table */}
+              <div className="flex-1 overflow-auto">
+                <table className="w-full">
+                  <thead className={`sticky top-0 z-10 backdrop-blur ${c.bgSurface}`}>
+                    <tr className={`border-b ${c.border}`}>
+                      {["ユーザー", "スキル・資格", "ロール", "雇用形態", "単価", "ステータス", "MFA", "最終ログイン", "操作"].map((h) => (
+                        <th key={h} className={`text-left text-[11px] font-medium ${c.textMuted} px-5 py-3.5 whitespace-nowrap`}>
+                          {h === "操作" ? "" : h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredUsers.map((user) => {
+                      const st = statusConfig[user.status];
+                      const avatarTone = getUserAvatarTone(user.id);
+                      return (
+                        <tr
+                          key={user.id}
+                          onClick={() => openEditUserDialog(user.id)}
+                          className={`border-b ${c.border} cursor-pointer transition-colors ${
+                            c.isDark
+                              ? "hover:bg-slate-900/60"
+                              : "hover:bg-slate-50"
+                          }`}
+                        >
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-[13px] shrink-0 ${avatarTone.avatarClass}`}>
+                                {user.avatar}
+                              </div>
+                              <div className="min-w-0">
+                                <div className={`text-[13px] font-medium ${c.textPrimary}`}>{user.name}</div>
+                                <div className={`truncate text-[11px] ${c.textMuted}`}>{user.email}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex max-w-[140px] flex-wrap gap-1.5">
+                              {user.skills.slice(0, 2).map(s => (
+                                <CapabilityIconChip
+                                  key={s.name}
+                                  title={s.name}
+                                  tone="skill"
+                                  iconKey={skillMasterMap.get(s.name)?.iconKey}
+                                />
+                              ))}
+                              {user.certifications.slice(0, 1).map(c => (
+                                <CapabilityIconChip
+                                  key={c.name}
+                                  title={c.name}
+                                  tone="qualification"
+                                  iconKey={qualificationMasterMap.get(c.name)?.iconKey}
+                                />
+                              ))}
+                              {(user.skills.length + user.certifications.length) > 3 && (
+                                <span className={`text-[10px] ${c.textMuted} self-center ml-1`}>+{user.skills.length + user.certifications.length - 3}</span>
+                              )}
+                              {(user.skills.length === 0 && user.certifications.length === 0) && (
+                                <span className={`text-[10px] ${c.textDimmed}`}>未登録</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 whitespace-nowrap">
+                            <div className="flex flex-wrap gap-1.5">
+                              {user.roleIds.map(rid => (
+                                <span key={rid} className={`text-[10px] px-2.5 py-1 rounded-full bg-gray-500/5 ${getRoleColor(rid)}`}>
+                                  {getRoleName(rid)}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 whitespace-nowrap">
+                            <div className="flex flex-col gap-1">
+                              <span className={`inline-flex w-fit text-[11px] px-2.5 py-1 rounded-full ${empTypeColor[user.employmentType] ?? ""}`}>{user.employmentType}</span>
+                              {user.employmentType === "派遣" && (
+                                <span className={`text-[10px] ${c.textMuted}`}>
+                                  {user.dispatchCompanyId ? dispatchCompanyMap.get(user.dispatchCompanyId)?.name ?? "会社未設定" : "会社未設定"}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-5 py-4 whitespace-nowrap">
+                            <div className="flex flex-col gap-0.5">
+                              <span className={`text-[12px] font-medium ${c.textPrimary} tabular-nums`}>{formatUnitPrice(user.unitPrice)}</span>
+                              <span className={`text-[10px] ${c.textMuted}`}>個別設定</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            <div className="flex items-center gap-1.5">
+                              <div className={`w-2 h-2 rounded-full ${st.dot}`} />
+                              <span className={`text-[11px] px-2.5 py-1 rounded-full ${st.bg} ${st.text}`}>{st.label}</span>
+                            </div>
+                          </td>
+                          <td className="px-5 py-4">
+                            {user.mfaEnabled ? (
+                              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                            ) : (
+                              <span className={`text-[11px] ${c.textDimmed}`}>—</span>
+                            )}
+                          </td>
+                          <td className={`px-5 py-4 text-[12px] ${c.textSecondary} tabular-nums`}>{user.lastLogin}</td>
+                          <td className="px-5 py-4">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openEditUserDialog(user.id);
+                              }}
+                              className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${
+                                c.isDark
+                                  ? `border-slate-800 text-slate-400 hover:border-slate-600 hover:bg-slate-900`
+                                  : `border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-100`
+                              }`}
+                            >
+                              <MoreHorizontal className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredUsers.length === 0 && (
+                      <tr>
+                        <td colSpan={9} className="px-5 py-12 text-center">
+                          <div className={`text-[13px] ${c.textMuted}`}>条件に一致するユーザーが見つかりません。</div>
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          </div>
+        </div>
+      )}
+
+      {userDialogMode && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+          onClick={closeUserDialog}
+        >
+          <div
+            className={`${cardClass} flex max-h-[calc(100vh-40px)] w-full max-w-5xl flex-col overflow-hidden`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={`flex items-start justify-between gap-4 border-b px-6 py-5 ${c.border}`}>
+              <div>
+                <div className={`text-lg font-semibold ${c.textPrimary}`}>
+                  {userDialogMode === "create" ? "ユーザーを追加" : "ユーザーを編集"}
+                </div>
+                <div className={`mt-1 text-[12px] ${c.textMuted}`}>
+                  {userDialogMode === "create"
+                    ? "基本情報を入力して新しいユーザーを登録します。"
+                    : "ユーザーの基本情報と現場スキルをまとめて編集します。"}
+                </div>
+              </div>
+              <button type="button" onClick={closeUserDialog} className={`${c.textMuted} transition hover:opacity-70`}>
+                <X className="h-4 w-4" />
+              </button>
             </div>
 
-            {/* Table */}
-            <div className="flex-1 overflow-y-auto">
-              <table className="w-full">
-                <thead className={`sticky top-0 z-10 ${c.bgCard}`}>
-                  <tr className={`border-b ${c.border}`}>
-                    {["ユーザー", "スキル・資格", "ロール", "雇用形態", "単価", "ステータス", "MFA", "最終ログイン", "操作"].map((h) => (
-                      <th key={h} className={`text-left text-[11px] ${c.textMuted} px-4 py-3 whitespace-nowrap`}>{h === "操作" ? "" : h}</th>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              <div className="grid gap-5">
+                <div className={`${panelClass} p-4`}>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>氏名</span>
+                      <input
+                        type="text"
+                        value={newUserName}
+                        onChange={(event) => setNewUserName(event.target.value)}
+                        placeholder="氏名を入力"
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>メールアドレス</span>
+                      <input
+                        type="email"
+                        value={newUserEmail}
+                        onChange={(event) => setNewUserEmail(event.target.value)}
+                        placeholder="メールアドレスを入力"
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="grid gap-1.5 md:col-span-2 xl:col-span-3">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>付与ロール</span>
+                      <CompactMultiSelect
+                        options={roles.map((role) => ({ id: role.id, name: role.name }))}
+                        selectedIds={newUserRoleIds}
+                        onChange={setNewUserRoleIds}
+                        placeholder="ロールを選択"
+                      />
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>雇用形態</span>
+                      <select
+                        value={newUserEmploymentType}
+                        onChange={(event) => setNewUserEmploymentType(event.target.value as "正社員" | "パートナー" | "派遣")}
+                        className={selectClass}
+                      >
+                        <option value="正社員">正社員</option>
+                        <option value="パートナー">パートナー</option>
+                        <option value="派遣">派遣</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>ステータス</span>
+                      <select value={newUserStatus} onChange={(event) => setNewUserStatus(event.target.value as "active" | "inactive")} className={selectClass}>
+                        <option value="active">有効</option>
+                        <option value="inactive">無効</option>
+                      </select>
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>単価</span>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min="0"
+                          step="10"
+                          value={newUserUnitPrice}
+                          onChange={(event) => setNewUserUnitPrice(event.target.value)}
+                          placeholder="単価"
+                          className={`${inputClass} pr-12`}
+                        />
+                        <span className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] ${c.textMuted}`}>円/時</span>
+                      </div>
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>派遣会社</span>
+                      {newUserEmploymentType === "派遣" ? (
+                        <select value={newUserDispatchCompanyId} onChange={(event) => setNewUserDispatchCompanyId(event.target.value)} className={selectClass}>
+                          <option value="">{dispatchCompanies.length === 0 ? "派遣会社マスタが未登録です" : "派遣会社を選択"}</option>
+                          {dispatchCompanies.map((company) => (
+                            <option key={company.id} value={company.id}>{company.name}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className={`flex h-10 items-center rounded-xl border px-3 text-[12px] ${c.borderCard} ${c.bgInput} ${c.textMuted}`}>
+                          派遣以外の雇用形態では派遣会社の指定は不要です
+                        </div>
+                      )}
+                    </label>
+                  </div>
+                </div>
+
+                {selectedUser && (
+                  <>
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <div className={`${panelClass} p-4`}>
+                        <div className={`text-[11px] ${c.textMuted}`}>ユーザーID</div>
+                        <div className={`mt-1 text-[14px] font-semibold ${c.textPrimary}`}>{selectedUser.id}</div>
+                      </div>
+                      <div className={`${panelClass} p-4`}>
+                        <div className={`text-[11px] ${c.textMuted}`}>最終ログイン</div>
+                        <div className={`mt-1 text-[14px] font-semibold ${c.textPrimary} tabular-nums`}>{selectedUser.lastLogin}</div>
+                      </div>
+                      <div className={`${panelClass} p-4`}>
+                        <div className={`text-[11px] ${c.textMuted}`}>作成日</div>
+                        <div className={`mt-1 text-[14px] font-semibold ${c.textPrimary} tabular-nums`}>{selectedUser.createdAt}</div>
+                      </div>
+                      <div className={`${panelClass} p-4`}>
+                        <div className={`text-[11px] ${c.textMuted}`}>MFA</div>
+                        <div className="mt-1 flex items-center gap-2">
+                          {selectedUser.mfaEnabled ? (
+                            <>
+                              <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                              <span className="text-[14px] font-semibold text-emerald-400">有効</span>
+                            </>
+                          ) : (
+                            <>
+                              <ShieldAlert className="h-4 w-4 text-amber-400" />
+                              <span className="text-[14px] font-semibold text-amber-400">無効</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-2">
+                      <div className={`${panelClass} p-4`}>
+                        <h4 className={`mb-4 flex items-center gap-2 text-[12px] font-black uppercase tracking-widest ${c.textMuted}`}>
+                          <Award className="h-4 w-4 text-violet-400" />
+                          スキル
+                        </h4>
+                        <div className="space-y-2">
+                          {selectedUser.skills.map((skill) => (
+                            <div key={skill.name} className="group flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <button onClick={() => removeSkillFromUser(selectedUser.id, skill.name)} className="rounded p-1 text-rose-400 opacity-0 transition group-hover:opacity-100 hover:bg-rose-500/10">
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                                <CapabilityIconChip
+                                  title={skill.name}
+                                  tone="skill"
+                                  iconKey={skillMasterMap.get(skill.name)?.iconKey}
+                                  sizeClass="h-7 w-7"
+                                  iconSizeClass="h-4 w-4"
+                                  roundedClass="rounded-lg"
+                                />
+                                <span className={`text-[13px] ${c.textSecondary}`}>{skill.name}</span>
+                              </div>
+                              <div className="flex gap-0.5">
+                                {[1, 2, 3, 4, 5].map((level) => (
+                                  <button
+                                    key={level}
+                                    onClick={() => updateSkillLevel(selectedUser.id, skill.name, level)}
+                                    className={`h-1.5 w-1.5 rounded-full transition-all ${level <= skill.level ? "bg-violet-500 hover:bg-violet-400" : "bg-gray-200 hover:bg-gray-300 dark:bg-gray-800"}`}
+                                  />
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                          <div className="relative group/addskill">
+                            <button className={`w-full rounded-xl border-2 border-dashed px-3 py-2 text-[11px] font-bold ${c.textMuted} transition hover:border-violet-500/30 hover:text-violet-500`}>
+                              <Plus className="mr-1 inline h-3 w-3" /> スキルを追加
+                            </button>
+                            <div className={`absolute top-full left-0 z-20 mt-1 max-h-[200px] w-full overflow-y-auto rounded-xl border p-2 opacity-0 invisible shadow-2xl transition group-hover/addskill:visible group-hover/addskill:opacity-100 ${c.bgCard} ${c.borderCard}`}>
+                              <div className="space-y-1">
+                                {skills.filter((item) => !selectedUser.skills.find((skill) => skill.name === item.name)).map((item) => (
+                                  <button key={item.id} onClick={() => addSkillToUser(selectedUser.id, item.name)} className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition ${c.textSecondary} hover:bg-violet-500/10 hover:text-violet-500`}>
+                                    <CapabilityIconChip
+                                      title={item.name}
+                                      tone="skill"
+                                      iconKey={item.iconKey}
+                                      sizeClass="h-6 w-6"
+                                      iconSizeClass="h-3.5 w-3.5"
+                                      roundedClass="rounded-lg"
+                                    />
+                                    <span>{item.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={`${panelClass} p-4`}>
+                        <h4 className={`mb-4 flex items-center gap-2 text-[12px] font-black uppercase tracking-widest ${c.textMuted}`}>
+                          <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                          資格
+                        </h4>
+                        <div className="space-y-2">
+                          {selectedUser.certifications.map((cert) => (
+                            <div key={cert.name} className={`group flex items-center justify-between rounded-xl border p-2 ${c.borderCard} ${c.bgSurface}`}>
+                              <div className="flex items-center gap-3">
+                                <button onClick={() => removeCertFromUser(selectedUser.id, cert.name)} className="rounded p-1 text-rose-400 opacity-0 transition group-hover:opacity-100 hover:bg-rose-500/10">
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                                <CapabilityIconChip
+                                  title={cert.name}
+                                  tone="qualification"
+                                  iconKey={qualificationMasterMap.get(cert.name)?.iconKey}
+                                  sizeClass="h-7 w-7"
+                                  iconSizeClass="h-4 w-4"
+                                  roundedClass="rounded-lg"
+                                />
+                                <div>
+                                  <div className={`text-[12px] font-bold ${c.textPrimary}`}>{cert.name}</div>
+                                  <div className={`text-[10px] ${c.textMuted}`}>{cert.expiry}まで</div>
+                                </div>
+                              </div>
+                              <ShieldCheck className={`h-4 w-4 ${cert.status === "valid" ? "text-emerald-500" : "text-amber-500"}`} />
+                            </div>
+                          ))}
+                          <div className="relative group/addcert">
+                            <button className={`w-full rounded-xl border-2 border-dashed px-3 py-2 text-[11px] font-bold ${c.textMuted} transition hover:border-emerald-500/30 hover:text-emerald-500`}>
+                              <Plus className="mr-1 inline h-3 w-3" /> 資格証を登録
+                            </button>
+                            <div className={`absolute top-full left-0 z-20 mt-1 max-h-[200px] w-full overflow-y-auto rounded-xl border p-2 opacity-0 invisible shadow-2xl transition group-hover/addcert:visible group-hover/addcert:opacity-100 ${c.bgCard} ${c.borderCard}`}>
+                              <div className="space-y-1">
+                                {qualifications.filter((item) => !selectedUser.certifications.find((certification) => certification.name === item.name)).map((item) => (
+                                  <button key={item.id} onClick={() => addCertToUser(selectedUser.id, item.name)} className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs transition ${c.textSecondary} hover:bg-emerald-500/10 hover:text-emerald-500`}>
+                                    <CapabilityIconChip
+                                      title={item.name}
+                                      tone="qualification"
+                                      iconKey={item.iconKey}
+                                      sizeClass="h-6 w-6"
+                                      iconSizeClass="h-3.5 w-3.5"
+                                      roundedClass="rounded-lg"
+                                    />
+                                    <span>{item.name}</span>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                      <div className={`${panelClass} p-4`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className={`text-[12px] font-semibold ${c.textPrimary}`}>配置備考</div>
+                            <div className={`mt-1 text-[10px] ${c.textMuted}`}>現場配置の人員カードに表示する備考です</div>
+                          </div>
+                          {selectedUser.deploymentWorkerId ? (
+                            <span className={`text-[10px] ${c.textMuted}`}>現場配置連携済み</span>
+                          ) : (
+                            <span className={`text-[10px] ${c.textDimmed}`}>未連携</span>
+                          )}
+                        </div>
+                        {selectedUser.deploymentWorkerId ? (
+                          <input
+                            type="text"
+                            value={deploymentWorkerNoteMap.get(selectedUser.deploymentWorkerId) ?? ""}
+                            onChange={(event) => updateDeploymentWorkerNoteDraft(selectedUser.deploymentWorkerId!, event.target.value)}
+                            onBlur={() => commitDeploymentWorkerNote(selectedUser.deploymentWorkerId!)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                event.currentTarget.blur();
+                              }
+                            }}
+                            placeholder="例: 梱包担当"
+                            className={`mt-3 ${inputClass}`}
+                          />
+                        ) : (
+                          <div className={`mt-3 rounded-lg border border-dashed px-3 py-2 text-[11px] ${c.borderCard} ${c.textMuted}`}>
+                            このユーザーは現場配置カード用の作業者データに未連携です
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className={`${panelClass} p-3 text-center`}>
+                          <div className="text-[18px] font-black text-cyan-400">{selectedUser.performance.uph}</div>
+                          <div className="text-[10px] font-bold uppercase text-gray-400">平均UPH</div>
+                        </div>
+                        <div className={`${panelClass} p-3 text-center`}>
+                          <div className="text-[18px] font-black text-emerald-400">{selectedUser.performance.attendanceRate}%</div>
+                          <div className="text-[10px] font-bold uppercase text-gray-400">出勤率</div>
+                        </div>
+                        <div className={`${panelClass} p-3 text-center`}>
+                          <div className="text-[18px] font-black tabular-nums text-amber-400">{formatUnitPrice(selectedUser.unitPrice)}</div>
+                          <div className="text-[10px] font-bold uppercase text-gray-400">単価</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <button className={`flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-2 text-[12px] transition ${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`}>
+                        <Mail className="h-3.5 w-3.5" />パスワードリセットメール送信
+                      </button>
+                      <button className={`flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-2 text-[12px] transition ${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:opacity-80`}>
+                        <Clock className="h-3.5 w-3.5" />アクセスログ表示
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className={`flex items-center justify-end gap-2 border-t px-6 py-4 ${c.border}`}>
+              <button type="button" onClick={closeUserDialog} className={secondaryButtonClass}>
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={saveUserDialog}
+                disabled={userDialogSaveDisabled}
+                className={`${primaryButtonClass} bg-[#155DFC] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-100`}
+              >
+                {userDialogMode === "create" ? "追加" : "保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {teamDialogMode && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4"
+          onClick={closeTeamDialog}
+        >
+          <div
+            className={`${cardClass} flex max-h-[calc(100vh-40px)] w-full max-w-3xl flex-col overflow-hidden`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className={`flex items-start justify-between gap-4 border-b px-6 py-5 ${c.border}`}>
+              <div>
+                <div className={`text-lg font-semibold ${c.textPrimary}`}>
+                  {teamDialogMode === "create" ? "チームを追加" : "チームを編集"}
+                </div>
+                <div className={`mt-1 text-[12px] ${c.textMuted}`}>
+                  管理チーム名、説明、所属メンバーを設定します。
+                </div>
+              </div>
+              <button type="button" onClick={closeTeamDialog} className={`${c.textMuted} transition hover:opacity-70`}>
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              <div className="grid gap-5">
+                <div className={`${panelClass} p-4`}>
+                  <div className="grid gap-4">
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>チーム名</span>
+                      <input
+                        type="text"
+                        value={newTeamName}
+                        onChange={(event) => setNewTeamName(event.target.value)}
+                        placeholder="例: 朝礼運営チーム"
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>説明</span>
+                      <textarea
+                        value={newTeamDescription}
+                        onChange={(event) => setNewTeamDescription(event.target.value)}
+                        rows={3}
+                        placeholder="チームの役割や担当範囲を入力"
+                        className={`${inputClass} resize-none py-3`}
+                      />
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>メンバー</span>
+                      <CompactMultiSelect
+                        options={teamMemberOptions}
+                        selectedIds={newTeamMemberIds}
+                        onChange={setNewTeamMemberIds}
+                        placeholder="メンバーを選択"
+                      />
+                    </label>
+                    <div className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>テーマカラー</span>
+                      <div className="flex flex-wrap gap-2">
+                        {TEAM_COLOR_OPTIONS.map((option) => {
+                          const selected = newTeamThemeColor === option.id;
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => setNewTeamThemeColor(option.id)}
+                              className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[12px] transition ${
+                                selected
+                                  ? "border-[#155DFC] bg-[#EEF4FF] text-[#155DFC]"
+                                  : `${c.borderCard} ${c.bgSurface} ${c.textSecondary}`
+                              }`}
+                            >
+                              <span className={`inline-flex h-4 w-4 rounded-full ${option.accentClass}`} />
+                              {option.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className={`${panelClass} p-4`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className={`text-[12px] font-semibold ${c.textPrimary}`}>選択中のメンバー</div>
+                    <div className={`text-[11px] ${c.textMuted}`}>{newTeamMemberIds.length}名</div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {newTeamMemberIds.length > 0 ? (
+                      newTeamMemberIds.map((memberId) => {
+                        const member = users.find((user) => user.id === memberId);
+                        if (!member) return null;
+                        return (
+                          <span
+                            key={memberId}
+                            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] ${c.borderCard} ${c.bgSurface} ${c.textPrimary}`}
+                          >
+                            <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] ${getUserAvatarTone(member.id).avatarClass}`}>
+                              {member.avatar}
+                            </span>
+                            {member.name}
+                          </span>
+                        );
+                      })
+                    ) : (
+                      <div className={`text-[12px] ${c.textMuted}`}>まだメンバーが選択されていません</div>
+                    )}
+                  </div>
+                </div>
+
+                {selectedTeam ? (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className={`${panelClass} p-4`}>
+                      <div className={`text-[11px] ${c.textMuted}`}>チームID</div>
+                      <div className={`mt-1 text-[14px] font-semibold ${c.textPrimary}`}>{selectedTeam.id}</div>
+                    </div>
+                    <div className={`${panelClass} p-4`}>
+                      <div className={`text-[11px] ${c.textMuted}`}>作成日</div>
+                      <div className={`mt-1 text-[14px] font-semibold ${c.textPrimary} tabular-nums`}>{selectedTeam.createdAt}</div>
+                    </div>
+                    <div className={`${panelClass} p-4 md:col-span-2`}>
+                      <div className={`text-[11px] ${c.textMuted}`}>テーマカラー</div>
+                      <div className="mt-2">
+                        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] ${getTeamColorOption(selectedTeam.themeColor).chipClass}`}>
+                          <span className={`inline-flex h-4 w-4 rounded-full ${getTeamColorOption(selectedTeam.themeColor).accentClass}`} />
+                          {getTeamColorOption(selectedTeam.themeColor).name}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className={`flex items-center justify-end gap-2 border-t px-6 py-4 ${c.border}`}>
+              <button type="button" onClick={closeTeamDialog} className={secondaryButtonClass}>
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={saveTeamDialog}
+                disabled={!newTeamName.trim()}
+                className={`${primaryButtonClass} bg-[#155DFC] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-100`}
+              >
+                {teamDialogMode === "create" ? "追加" : "保存"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "teams" && (
+        <div className="min-h-0 flex-1 pt-4">
+          <div className={`${cardClass} flex h-full flex-col overflow-hidden`}>
+            <div className={`border-b px-5 py-4 ${c.border}`}>
+              <div className="grid items-center gap-3 xl:grid-cols-[minmax(260px,1fr)_auto]">
+                <div className="relative min-w-0">
+                  <Search className={`w-4 h-4 ${c.textMuted} absolute left-3 top-1/2 -translate-y-1/2`} />
+                  <input
+                    type="text"
+                    placeholder="チーム名・説明・メンバー名で検索..."
+                    value={teamSearchTerm}
+                    onChange={(event) => setTeamSearchTerm(event.target.value)}
+                    className={`${inputClass} pl-10 pr-4`}
+                  />
+                </div>
+                <div className={`justify-self-end text-[12px] ${c.textMuted}`}>{filteredTeams.length}件</div>
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-auto">
+              <table className="min-w-full border-collapse">
+                <thead className={`${c.bgSurface} ${c.textSecondary}`}>
+                  <tr>
+                    {["チーム", "説明", "メンバー", "作成日", "操作"].map((h) => (
+                      <th key={h} className={`border-b px-5 py-3 text-left text-[12px] font-semibold ${c.border}`}>
+                        {h}
+                      </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredUsers.map((user) => {
-                    const st = statusConfig[user.status];
-                    const isSelected = selectedUserId === user.id;
-                    return (
-                      <tr key={user.id} onClick={() => setSelectedUserId(isSelected ? null : user.id)}
-                        className={`border-b ${c.border} cursor-pointer transition-all ${isSelected ? "bg-cyan-500/5" : c.bgCardHover}`}>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-[13px] shrink-0 ${user.status === "active" ? "bg-gradient-to-br from-cyan-500/20 to-blue-500/20 text-cyan-400 border border-cyan-500/20"
-                              : user.status === "locked" ? "bg-red-500/10 text-red-400 border border-red-500/20"
-                                : "bg-gray-500/10 text-gray-400 border border-gray-500/20"
-                              }`}>
-                              {user.avatar}
-                            </div>
-                            <div>
-                              <div className={`text-[13px] ${c.textPrimary}`}>{user.name}</div>
-                              <div className={`text-[11px] ${c.textMuted}`}>{user.email}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex flex-wrap gap-1 max-w-[140px]">
-                            {user.skills.slice(0, 2).map(s => (
-                              <CapabilityIconChip
-                                key={s.name}
-                                title={s.name}
-                                tone="skill"
-                                iconKey={skillMasterMap.get(s.name)?.iconKey}
-                              />
-                            ))}
-                            {user.certifications.slice(0, 1).map(c => (
-                              <CapabilityIconChip
-                                key={c.name}
-                                title={c.name}
-                                tone="qualification"
-                                iconKey={qualificationMasterMap.get(c.name)?.iconKey}
-                              />
-                            ))}
-                            {(user.skills.length + user.certifications.length) > 3 && (
-                              <span className={`text-[10px] ${c.textMuted} self-center ml-1`}>+{user.skills.length + user.certifications.length - 3}</span>
-                            )}
-                            {(user.skills.length === 0 && user.certifications.length === 0) && (
-                              <span className={`text-[10px] ${c.textDimmed}`}>未登録</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <div className="flex flex-wrap gap-1">
-                            {user.roleIds.map(rid => (
-                              <span key={rid} className={`text-[10px] px-2 py-0.5 rounded-md bg-gray-500/5 ${getRoleColor(rid)}`}>
-                                {getRoleName(rid)}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <div className="flex flex-col gap-1">
-                            <span className={`inline-flex w-fit text-[11px] px-2 py-0.5 rounded-full ${empTypeColor[user.employmentType] ?? ""}`}>{user.employmentType}</span>
-                            {user.employmentType === "派遣" && (
-                              <span className={`text-[10px] ${c.textMuted}`}>
-                                {user.dispatchCompanyId ? dispatchCompanyMap.get(user.dispatchCompanyId)?.name ?? "会社未設定" : "会社未設定"}
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 whitespace-nowrap">
-                          <div className="flex flex-col gap-0.5">
-                            <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{formatUnitPrice(user.unitPrice)}</span>
-                            <span className={`text-[10px] ${c.textMuted}`}>個別設定</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${st.dot}`} />
-                            <span className={`text-[11px] px-2 py-0.5 rounded-full ${st.bg} ${st.text}`}>{st.label}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          {user.mfaEnabled ? (
-                            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  {filteredTeams.map((team) => (
+                    <tr
+                      key={team.id}
+                      className={`border-b transition ${c.border} ${c.bgCardHover}`}
+                    >
+                      <td className="px-5 py-4 align-top">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex h-3 w-3 rounded-full ${getTeamColorOption(team.themeColor).accentClass}`} />
+                          <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{team.name}</div>
+                        </div>
+                        <div className={`mt-1 text-[11px] ${c.textMuted}`}>{team.id}</div>
+                      </td>
+                      <td className={`px-5 py-4 align-top text-[12px] ${c.textSecondary}`}>
+                        {team.description || "説明未設定"}
+                      </td>
+                      <td className="px-5 py-4 align-top">
+                        <div className="flex flex-wrap gap-2">
+                          {team.memberUserIds.length > 0 ? (
+                            team.memberUserIds.map((memberId) => {
+                              const member = users.find((user) => user.id === memberId);
+                              if (!member) return null;
+                              return (
+                                <span
+                                  key={memberId}
+                                  className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] ${c.borderCard} ${c.bgSurface} ${c.textPrimary}`}
+                                >
+                                  <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${getUserAvatarTone(member.id).avatarClass}`}>
+                                    {member.avatar}
+                                  </span>
+                                  {member.name}
+                                </span>
+                              );
+                            })
                           ) : (
-                            <span className={`text-[11px] ${c.textDimmed}`}>—</span>
+                            <span className={`text-[11px] ${c.textMuted}`}>メンバー未設定</span>
                           )}
-                        </td>
-                        <td className={`px-4 py-3 text-[12px] ${c.textSecondary} tabular-nums`}>{user.lastLogin}</td>
-                        <td className="px-4 py-3">
-                          <button className={c.textDimmed}><MoreHorizontal className="w-4 h-4" /></button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                        </div>
+                      </td>
+                      <td className={`px-5 py-4 align-top text-[12px] tabular-nums ${c.textSecondary}`}>{team.createdAt}</td>
+                      <td className="px-5 py-4 align-top">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => openEditTeamDialog(team.id)}
+                            className={`inline-flex h-9 w-9 items-center justify-center rounded-xl border transition ${c.borderCard} ${c.bgCard} ${c.textSecondary} hover:border-[#B7CDFF] hover:text-[#155DFC]`}
+                            aria-label={`${team.name} を編集`}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteTeam(team.id)}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-rose-200 text-rose-500 transition hover:bg-rose-50 hover:text-rose-600"
+                            aria-label={`${team.name} を削除`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredTeams.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-5 py-12 text-center">
+                        <div className={`text-[13px] ${c.textMuted}`}>管理チームがまだ登録されていません。</div>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
-
-          {/* User Detail Panel */}
-          {selectedUser && (
-            <div className={`w-[320px] ${c.bgCard} border-l ${c.border} flex flex-col shrink-0 overflow-y-auto`}>
-              <div className={`p-5 border-b ${c.border}`}>
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className={`${c.textPrimary} text-[14px]`}>ユーザー詳細</h3>
-                  <button onClick={() => setSelectedUserId(null)} className={c.textMuted}><X className="w-4 h-4" /></button>
-                </div>
-
-                {/* Profile */}
-                <div className="text-center mb-5">
-                  <div className={`w-16 h-16 rounded-full flex items-center justify-center text-[22px] mx-auto mb-3 ${selectedUser.status === "active" ? "bg-gradient-to-br from-cyan-500/20 to-blue-500/20 text-cyan-400 border-2 border-cyan-500/20"
-                    : selectedUser.status === "locked" ? "bg-red-500/10 text-red-400 border-2 border-red-500/20"
-                      : "bg-gray-500/10 text-gray-400 border-2 border-gray-500/20"
-                    }`}>
-                    {selectedUser.avatar}
-                  </div>
-                  <div className={c.textPrimary}>{selectedUser.name}</div>
-                  <div className={`text-[12px] ${c.textMuted} mt-0.5`}>{selectedUser.email}</div>
-                  <div className="flex items-center justify-center gap-2 mt-2">
-                    <span className={`text-[11px] px-2 py-0.5 rounded-full ${empTypeColor[selectedUser.employmentType]}`}>{selectedUser.employmentType}</span>
-                    <span className={`text-[11px] ${c.textDimmed}`}>{selectedUser.id}</span>
-                  </div>
-                  {selectedUser.employmentType === "派遣" && (
-                    <div className={`mt-2 text-[11px] ${c.textMuted}`}>
-                      派遣会社: {selectedUser.dispatchCompanyId ? dispatchCompanyMap.get(selectedUser.dispatchCompanyId)?.name ?? "未設定" : "未設定"}
-                    </div>
-                  )}
-                </div>
-
-                {/* Status & Actions */}
-                <div className="space-y-3">
-                  <div className={`p-3 rounded-lg ${c.bgSurface} space-y-2`}>
-                    <div className="flex items-center justify-between">
-                      <span className={`text-[12px] ${c.textSecondary}`}>個別単価</span>
-                      <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{formatUnitPrice(selectedUser.unitPrice)}</span>
-                    </div>
-                    <label className={`relative block`}>
-                      <input
-                        type="number"
-                        min="0"
-                        step="10"
-                        value={selectedUnitPriceDraft}
-                        onChange={(e) => setSelectedUnitPriceDraft(e.target.value)}
-                        onBlur={() => commitUserUnitPrice(selectedUser.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            e.currentTarget.blur();
-                          }
-                        }}
-                        className={`w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 pr-14 text-[13px] ${c.textPrimary} outline-none`}
-                      />
-                      <span className={`pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] ${c.textMuted}`}>円/時</span>
-                    </label>
-                    <p className={`text-[10px] ${c.textMuted}`}>未入力や不正値は {DEFAULT_USER_UNIT_PRICE} 円/時で保存します</p>
-                  </div>
-
-                  <div className={`flex items-center justify-between p-3 rounded-lg ${c.bgSurface}`}>
-                    <span className={`text-[12px] ${c.textSecondary}`}>ステータス</span>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[12px] px-2 py-0.5 rounded-full ${statusConfig[selectedUser.status].bg} ${statusConfig[selectedUser.status].text}`}>
-                        {statusConfig[selectedUser.status].label}
-                      </span>
-                      {selectedUser.status === "locked" ? (
-                        <button onClick={() => unlockUser(selectedUser.id)} className="text-[11px] text-cyan-400 hover:underline">解除</button>
-                      ) : (
-                        <button onClick={() => toggleUserStatus(selectedUser.id)}
-                          className={`text-[11px] ${selectedUser.status === "active" ? "text-amber-400" : "text-emerald-400"} hover:underline`}>
-                          {selectedUser.status === "active" ? "無効化" : "有効化"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={`p-3 rounded-lg ${c.bgSurface} space-y-2`}>
-                    <div className={`text-[12px] ${c.textSecondary} mb-2`}>付与ロール</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {selectedUser.roleIds.map(rid => (
-                        <div key={rid} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${c.bgCard} border ${c.borderCard} ${getRoleColor(rid)}`}>
-                          <span className="text-[11px] font-bold">{getRoleName(rid)}</span>
-                          <button onClick={() => changeUserRole(selectedUser.id, rid)} className="hover:text-red-400 transition-all">
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="relative group/addrole pt-2">
-                      <button className="w-full py-1.5 border border-dashed border-gray-200 dark:border-gray-800 rounded-lg text-[10px] text-gray-400 hover:border-cyan-500/30 hover:text-cyan-500 transition-all">
-                        + ロールを追加
-                      </button>
-                      <div className="absolute bottom-full left-0 w-full mb-1 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl shadow-2xl opacity-0 invisible group-hover/addrole:opacity-100 group-hover/addrole:visible p-2 z-20 space-y-1">
-                        {roles.filter(r => !selectedUser.roleIds.includes(r.id)).map(r => (
-                          <button key={r.id} onClick={() => changeUserRole(selectedUser.id, r.id)} className={`w-full text-left px-3 py-2 rounded-lg text-xs ${c.textSecondary} hover:bg-cyan-500/10 hover:text-cyan-500 transition-all`}>
-                            {r.name}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className={`flex items-center justify-between p-3 rounded-lg ${c.bgSurface}`}>
-                    <span className={`text-[12px] ${c.textSecondary}`}>MFA (2要素認証)</span>
-                    <div className="flex items-center gap-1.5">
-                      {selectedUser.mfaEnabled ? (
-                        <><ShieldCheck className="w-4 h-4 text-emerald-400" /><span className="text-[11px] text-emerald-400">有効</span></>
-                      ) : (
-                        <><ShieldAlert className="w-4 h-4 text-amber-400" /><span className="text-[11px] text-amber-400">無効</span></>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className={`p-3 rounded-lg ${c.bgSurface} space-y-2`}>
-                    <div className="flex items-center justify-between">
-                      <span className={`text-[12px] ${c.textSecondary}`}>最終ログイン</span>
-                      <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{selectedUser.lastLogin}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className={`text-[12px] ${c.textSecondary}`}>作成日</span>
-                      <span className={`text-[12px] ${c.textPrimary} tabular-nums`}>{selectedUser.createdAt}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Operational Data (Skills & Performance) */}
-                <div className="mt-6 pt-6 border-t border-dashed border-gray-200 dark:border-gray-800">
-                  <h4 className={`text-[12px] ${c.textMuted} mb-4 flex items-center gap-2 uppercase tracking-widest font-black`}>
-                    <Award className="w-4 h-4 text-violet-400" />
-                    現場スキル・資格
-                  </h4>
-
-                  <div className="space-y-4">
-                    {/* Skills */}
-                    <div className="space-y-2">
-                      {selectedUser.skills.map(skill => (
-                        <div key={skill.name} className="flex items-center justify-between group">
-                          <div className="flex items-center gap-2">
-                            <button onClick={() => removeSkillFromUser(selectedUser.id, skill.name)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-rose-500/10 rounded text-rose-400 transition-all">
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                            <CapabilityIconChip
-                              title={skill.name}
-                              tone="skill"
-                              iconKey={skillMasterMap.get(skill.name)?.iconKey}
-                              sizeClass="h-7 w-7"
-                              iconSizeClass="h-4 w-4"
-                              roundedClass="rounded-lg"
-                            />
-                            <span className={`text-[13px] ${c.textSecondary}`}>{skill.name}</span>
-                          </div>
-                          <div className="flex gap-0.5">
-                            {[1, 2, 3, 4, 5].map(l => (
-                              <button
-                                key={l}
-                                onClick={() => updateSkillLevel(selectedUser.id, skill.name, l)}
-                                className={`w-1.5 h-1.5 rounded-full transition-all ${l <= skill.level ? 'bg-violet-500 hover:bg-violet-400' : 'bg-gray-200 dark:bg-gray-800 hover:bg-gray-300'}`}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-
-                      <div className="relative group/add">
-                        <button className="w-full py-2 border-2 border-dashed border-gray-100 dark:border-gray-800 rounded-xl text-[11px] text-gray-400 font-bold hover:border-violet-500/30 hover:text-violet-500 transition-all flex items-center justify-center gap-2">
-                          <Plus className="w-3 h-3" /> スキルを追加
-                        </button>
-                        <div className="absolute top-full left-0 w-full mt-1 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl shadow-2xl opacity-0 invisible group-hover/add:opacity-100 group-hover/add:visible p-2 z-20 space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar">
-                          {skills.filter((item) => !selectedUser.skills.find((skill) => skill.name === item.name)).map((item) => (
-                            <button key={item.id} onClick={() => addSkillToUser(selectedUser.id, item.name)} className={`w-full text-left px-3 py-2 rounded-lg text-xs ${c.textSecondary} hover:bg-violet-500/10 hover:text-violet-500 transition-all flex items-center gap-2`}>
-                              <CapabilityIconChip
-                                title={item.name}
-                                tone="skill"
-                                iconKey={item.iconKey}
-                                sizeClass="h-6 w-6"
-                                iconSizeClass="h-3.5 w-3.5"
-                                roundedClass="rounded-lg"
-                              />
-                              <span>{item.name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Certifications */}
-                    <div className="space-y-2">
-                      {selectedUser.certifications.map(cert => (
-                        <div key={cert.name} className={`p-2 rounded-xl border ${c.borderCard} bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between group`}>
-                          <div className="flex items-center gap-3">
-                            <button onClick={() => removeCertFromUser(selectedUser.id, cert.name)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-rose-500/10 rounded text-rose-400 transition-all">
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                            <CapabilityIconChip
-                              title={cert.name}
-                              tone="qualification"
-                              iconKey={qualificationMasterMap.get(cert.name)?.iconKey}
-                              sizeClass="h-7 w-7"
-                              iconSizeClass="h-4 w-4"
-                              roundedClass="rounded-lg"
-                            />
-                            <div>
-                              <div className={`text-[12px] ${c.textPrimary} font-bold`}>{cert.name}</div>
-                              <div className={`text-[10px] ${c.textMuted}`}>{cert.expiry}まで</div>
-                            </div>
-                          </div>
-                          <ShieldCheck className={`w-4 h-4 ${cert.status === 'valid' ? 'text-emerald-500' : 'text-amber-500'}`} />
-                        </div>
-                      ))}
-
-                      <div className="relative group/addcert">
-                        <button className="w-full py-2 border-2 border-dashed border-gray-100 dark:border-gray-800 rounded-xl text-[11px] text-gray-400 font-bold hover:border-violet-500/30 hover:text-violet-500 transition-all flex items-center justify-center gap-2">
-                          <Plus className="w-3 h-3" /> 資格証を登録
-                        </button>
-                        <div className="absolute top-full left-0 w-full mt-1 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl shadow-2xl opacity-0 invisible group-hover/addcert:opacity-100 group-hover/addcert:visible p-2 z-20 space-y-1 max-h-[200px] overflow-y-auto custom-scrollbar">
-                          {qualifications.filter((item) => !selectedUser.certifications.find((certification) => certification.name === item.name)).map((item) => (
-                            <button key={item.id} onClick={() => addCertToUser(selectedUser.id, item.name)} className={`w-full text-left px-3 py-2 rounded-lg text-xs ${c.textSecondary} hover:bg-emerald-500/10 hover:text-emerald-500 transition-all flex items-center gap-2`}>
-                              <CapabilityIconChip
-                                title={item.name}
-                                tone="qualification"
-                                iconKey={item.iconKey}
-                                sizeClass="h-6 w-6"
-                                iconSizeClass="h-3.5 w-3.5"
-                                roundedClass="rounded-lg"
-                              />
-                              <span>{item.name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className={`rounded-xl border ${c.borderCard} ${c.bgSurface} p-3`}>
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className={`text-[12px] font-semibold ${c.textPrimary}`}>配置備考</div>
-                          <div className={`mt-1 text-[10px] ${c.textMuted}`}>
-                            現場配置の人員カードに表示する備考です
-                          </div>
-                        </div>
-                        {selectedUser.deploymentWorkerId ? (
-                          <span className={`text-[10px] ${c.textMuted}`}>現場配置連携済み</span>
-                        ) : (
-                          <span className={`text-[10px] ${c.textDimmed}`}>未連携</span>
-                        )}
-                      </div>
-
-                      {selectedUser.deploymentWorkerId ? (
-                        <input
-                          type="text"
-                          value={deploymentWorkerNoteMap.get(selectedUser.deploymentWorkerId) ?? ""}
-                          onChange={(event) =>
-                            updateDeploymentWorkerNoteDraft(selectedUser.deploymentWorkerId!, event.target.value)
-                          }
-                          onBlur={() => commitDeploymentWorkerNote(selectedUser.deploymentWorkerId!)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              event.currentTarget.blur();
-                            }
-                          }}
-                          placeholder="例: 梱包担当"
-                          className={`mt-3 w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none`}
-                        />
-                      ) : (
-                        <div className={`mt-3 rounded-lg border border-dashed ${c.border} px-3 py-2 text-[11px] ${c.textMuted}`}>
-                          このユーザーは現場配置カード用の作業者データに未連携です
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Performance */}
-                  <div className="mt-6 grid grid-cols-3 gap-3">
-                    <div className={`${c.bgSurface} p-3 rounded-2xl text-center border-2 border-transparent hover:border-cyan-500/20 transition-all`}>
-                      <div className="text-[18px] font-black text-cyan-400">{selectedUser.performance.uph}</div>
-                      <div className="text-[10px] text-gray-400 font-bold uppercase">平均UPH</div>
-                    </div>
-                    <div className={`${c.bgSurface} p-3 rounded-2xl text-center border-2 border-transparent hover:border-emerald-500/20 transition-all`}>
-                      <div className="text-[18px] font-black text-emerald-400">{selectedUser.performance.attendanceRate}%</div>
-                      <div className="text-[10px] text-gray-400 font-bold uppercase">出勤率</div>
-                    </div>
-                    <div className={`${c.bgSurface} p-3 rounded-2xl text-center border-2 border-transparent hover:border-amber-500/20 transition-all`}>
-                      <div className="text-[18px] font-black text-amber-400 tabular-nums">{formatUnitPrice(selectedUser.unitPrice)}</div>
-                      <div className="text-[10px] text-gray-400 font-bold uppercase">単価</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="mt-5 space-y-2">
-                  <button className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-[12px] ${c.bgSurface} border ${c.borderCard} ${c.textSecondary} hover:opacity-80 transition-all`}>
-                    <Mail className="w-3.5 h-3.5" />パスワードリセットメール送信
-                  </button>
-                  <button className={`w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-[12px] ${c.bgSurface} border ${c.borderCard} ${c.textSecondary} hover:opacity-80 transition-all`}>
-                    <Clock className="w-3.5 h-3.5" />アクセスログ表示
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -1244,9 +1878,10 @@ export function UserManagement() {
       {/* ROLES TAB                           */}
       {/* ═══════════════════════════════════ */}
       {activeTab === "roles" && (
-        <div className="flex-1 flex overflow-hidden">
+        <div className="min-h-0 flex-1 pt-4">
+          <div className="grid h-full min-h-0 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
           {/* Role List */}
-          <div className={`w-[320px] ${c.bgCard} border-r ${c.border} flex flex-col shrink-0`}>
+          <div className={`${cardClass} flex flex-col overflow-hidden`}>
             <div className={`p-4 border-b ${c.border}`}>
               <h3 className={`${c.textPrimary} text-[14px] mb-1`}>ロール一覧</h3>
               <p className={`text-[11px] ${c.textMuted}`}>クリックして権限を編集</p>
@@ -1256,9 +1891,9 @@ export function UserManagement() {
             {showAddRole && (
               <div className={`p-4 border-b ${c.border} ${c.bgSurface}`}>
                 <input type="text" placeholder="ロール名" value={newRoleName} onChange={(e) => setNewRoleName(e.target.value)}
-                  className={`w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[13px] ${c.textPrimary} outline-none mb-2`} />
+                  className={`${inputClass} mb-2`} />
                 <input type="text" placeholder="説明（任意）" value={newRoleDesc} onChange={(e) => setNewRoleDesc(e.target.value)}
-                  className={`w-full ${c.bgCard} border ${c.border} rounded-lg px-3 py-2 text-[12px] ${c.textSecondary} outline-none mb-2`} />
+                  className={`${inputClass} mb-2 text-[12px] ${c.textSecondary}`} />
                 <div className="flex items-center gap-2">
                   <button onClick={addNewRole} disabled={!newRoleName.trim()}
                     className="flex-1 px-3 py-1.5 rounded-lg bg-violet-600 text-white text-[12px] disabled:opacity-30 hover:bg-violet-500 transition-all">作成</button>
@@ -1304,11 +1939,11 @@ export function UserManagement() {
           </div>
 
           {/* Permission Matrix */}
-          <div className="flex-1 flex flex-col overflow-hidden">
+          <div className={`${cardClass} flex flex-col overflow-hidden`}>
             {selectedRole ? (
               <>
                 {/* Role Header */}
-                <div className={`px-6 py-4 border-b ${c.border} ${c.bgCard}`}>
+                <div className={`px-6 py-4 border-b ${c.border}`}>
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="flex items-center gap-2">
@@ -1354,9 +1989,9 @@ export function UserManagement() {
                       const isExpanded = expandedCategories.has(cat);
 
                       return (
-                        <div key={cat} className={`rounded-xl border ${c.border} overflow-hidden`}>
+                        <div key={cat} className={`rounded-xl border ${c.borderCard} overflow-hidden ${c.bgPanel}`}>
                           {/* Category Header */}
-                          <div className={`flex items-center justify-between px-4 py-3 cursor-pointer ${c.bgCard} ${c.bgCardHover}`}
+                          <div className={`flex items-center justify-between px-4 py-3 cursor-pointer ${c.bgCardHover}`}
                             onClick={() => toggleCategory(cat)}>
                             <div className="flex items-center gap-3">
                               <button className={c.textMuted}>
@@ -1421,7 +2056,7 @@ export function UserManagement() {
                   </div>
 
                   {/* Assigned Users for this Role */}
-                  <div className={`mt-5 ${c.bgCard} rounded-xl border ${c.border} p-4`}>
+                  <div className={`mt-5 ${panelClass} p-4`}>
                     <h4 className={`text-[13px] ${c.textPrimary} mb-3 flex items-center gap-2`}>
                       <Users className="w-4 h-4 text-violet-400" />
                       このロールのユーザー
@@ -1429,10 +2064,10 @@ export function UserManagement() {
                     <div className="flex flex-wrap gap-2">
                       {users.filter((u) => u.roleIds.includes(selectedRole.id)).map((u) => {
                         const st = statusConfig[u.status];
+                        const avatarTone = getUserAvatarTone(u.id);
                         return (
                           <div key={u.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${c.border} ${c.bgSurface}`}>
-                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] ${u.status === "active" ? "bg-cyan-500/15 text-cyan-400" : "bg-gray-500/15 text-gray-400"
-                              }`}>{u.avatar}</div>
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] ${avatarTone.avatarClass}`}>{u.avatar}</div>
                             <span className={`text-[12px] ${c.textPrimary}`}>{u.name}</span>
                             <div className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
                           </div>
@@ -1455,6 +2090,7 @@ export function UserManagement() {
                 </div>
               </div>
             )}
+          </div>
           </div>
         </div>
       )}

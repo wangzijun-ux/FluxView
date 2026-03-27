@@ -323,7 +323,7 @@ export function NotificationManagement() {
             </div>
           ))}
         </div>
-        <button type="button" onClick={() => openCreate()} className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-cyan-500">
+        <button type="button" onClick={() => openCreate()} className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#155DFC] px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-[#0F4FE3]">
           <Plus className="h-4 w-4" />新規通知作成
         </button>
       </div>
@@ -334,7 +334,7 @@ export function NotificationManagement() {
           <input value={searchKeyword} onChange={(event) => setSearchKeyword(event.target.value)} placeholder="タイトル、本文、対象で検索" className={`w-full bg-transparent text-[13px] ${c.textPrimary} outline-none placeholder:text-slate-400`} />
         </div>
         {([{"key":"all","label":"すべて"},{"key":"move","label":"移動指示"},{"key":"announce","label":"全体連絡"},{"key":"safety","label":"安全注意"},{"key":"alert","label":"緊急"}] as const).map((filter) => (
-          <button key={filter.key} type="button" onClick={() => setSelectedType(filter.key)} className={`rounded-xl border px-3 py-2 text-[12px] transition ${selectedType === filter.key ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-400" : `${c.bgCard} ${c.border} ${c.textSecondary}`}`}>
+          <button key={filter.key} type="button" onClick={() => setSelectedType(filter.key)} className={`rounded-xl border px-3 py-2 text-[12px] transition ${selectedType === filter.key ? "border-[#155DFC]/30 bg-[#155DFC]/10 text-[#155DFC]" : `${c.bgCard} ${c.border} ${c.textSecondary}`}`}>
             {filter.label}
           </button>
         ))}
@@ -436,7 +436,7 @@ export function NotificationManagement() {
                 <button type="button" onClick={() => openCreate({ type: selected.type, title: selected.title, message: selected.message, targetMode: selected.targetMode, targetSiteId: selected.targetSiteId || defaultSiteId, targetUserIds: selected.targetUserIds, deliveryMode: selected.status === "scheduled" ? "scheduled" : "now", scheduledDate: selected.scheduledAt ? toDateInput(new Date(selected.scheduledAt)) : toDateInput(new Date()), scheduledTime: selected.scheduledAt ? toTimeInput(new Date(selected.scheduledAt)) : "09:00" })} className={`flex-1 rounded-xl border px-3 py-2 text-[13px] font-medium ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
                   <span className="inline-flex items-center gap-2"><Copy className="h-3.5 w-3.5" />複製</span>
                 </button>
-                <button type="button" onClick={resendSelected} className="flex-1 rounded-xl bg-cyan-600 px-3 py-2 text-[13px] font-semibold text-white transition hover:bg-cyan-500">
+                <button type="button" onClick={resendSelected} className="flex-1 rounded-xl bg-[#155DFC] px-3 py-2 text-[13px] font-semibold text-white transition hover:bg-[#0F4FE3]">
                   <span className="inline-flex items-center gap-2"><Send className="h-3.5 w-3.5" />再送信</span>
                 </button>
               </div>
@@ -475,7 +475,7 @@ export function NotificationManagement() {
                     <div>
                       <label className={`mb-2 block text-[12px] font-medium ${c.textMuted}`}>配信方法</label>
                       <div className="grid grid-cols-2 gap-2">
-                        <button type="button" onClick={() => setForm((prev) => ({ ...prev, deliveryMode: "now" }))} className={`min-h-[44px] rounded-xl border px-3 py-2 text-[13px] transition ${form.deliveryMode === "now" ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-400" : `${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}`}>今すぐ送信</button>
+                        <button type="button" onClick={() => setForm((prev) => ({ ...prev, deliveryMode: "now" }))} className={`min-h-[44px] rounded-xl border px-3 py-2 text-[13px] transition ${form.deliveryMode === "now" ? "border-[#155DFC]/30 bg-[#155DFC]/10 text-[#155DFC]" : `${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}`}>今すぐ送信</button>
                         <button type="button" onClick={() => setForm((prev) => ({ ...prev, deliveryMode: "scheduled" }))} className={`min-h-[44px] rounded-xl border px-3 py-2 text-[13px] transition ${form.deliveryMode === "scheduled" ? "border-violet-500/30 bg-violet-500/10 text-violet-400" : `${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}`}>日時指定</button>
                       </div>
                     </div>
@@ -499,7 +499,7 @@ export function NotificationManagement() {
             </div>
             <div className={`flex flex-wrap items-center justify-between gap-3 border-t px-6 py-4 ${c.border}`}>
               <div className={`text-[12px] ${c.textMuted}`}>下書き保存なら作業員端末へは配信されません。</div>
-              <div className="flex items-center gap-2"><button type="button" onClick={() => setCreateOpen(false)} className={`min-h-[40px] rounded-xl border px-4 py-2 text-[13px] ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>キャンセル</button><button type="button" onClick={() => createNotification("draft")} className={`inline-flex min-h-[40px] items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium ${c.bgSurface} ${c.borderCard} ${c.textPrimary}`}><Save className="h-3.5 w-3.5" />下書き保存</button><button type="button" onClick={() => createNotification(form.deliveryMode === "scheduled" ? "scheduled" : "sent")} className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-cyan-500">{form.deliveryMode === "scheduled" ? <CalendarClock className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}{form.deliveryMode === "scheduled" ? "予約作成" : "送信"}</button></div>
+              <div className="flex items-center gap-2"><button type="button" onClick={() => setCreateOpen(false)} className={`min-h-[40px] rounded-xl border px-4 py-2 text-[13px] ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>キャンセル</button><button type="button" onClick={() => createNotification("draft")} className={`inline-flex min-h-[40px] items-center gap-2 rounded-xl border px-4 py-2 text-[13px] font-medium ${c.bgSurface} ${c.borderCard} ${c.textPrimary}`}><Save className="h-3.5 w-3.5" />下書き保存</button><button type="button" onClick={() => createNotification(form.deliveryMode === "scheduled" ? "scheduled" : "sent")} className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-[#155DFC] px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-[#0F4FE3]">{form.deliveryMode === "scheduled" ? <CalendarClock className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}{form.deliveryMode === "scheduled" ? "予約作成" : "送信"}</button></div>
             </div>
           </div>
         </div>

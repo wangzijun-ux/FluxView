@@ -66,6 +66,8 @@ export interface DeploymentWorker {
 
 export interface DeploymentStep {
   id: string;
+  sourceStepId: string;
+  previousStepId?: string;
   workflowId: string;
   workflowName: string;
   shipperId: string;
@@ -81,6 +83,7 @@ export interface DeploymentStep {
   uph: number;
   startTime: string;
   targetEndTime: string;
+  layoutAreaIds: string[];
   requiredQualificationIds: string[];
   requiredSkillIds: string[];
   manual: string;
@@ -170,14 +173,10 @@ export function buildSiteScope(sites: Site[], selectedSiteId: string) {
     };
   }
 
-  const relatedSiteIds = sites
-    .filter((site) => site.name === selectedSite.name)
-    .map((site) => site.id);
-
   return {
     siteName: selectedSite.name,
-    siteIds: relatedSiteIds.length > 0 ? relatedSiteIds : [selectedSite.id],
-    storageScopeKey: `name:${encodeURIComponent(selectedSite.name)}`,
+    siteIds: [selectedSite.id],
+    storageScopeKey: selectedSite.id,
   };
 }
 
@@ -230,6 +229,8 @@ export function buildDeploymentWorkflows(
 
         return {
           id: `${workflow.id}:${step.id}`,
+          sourceStepId: step.id,
+          previousStepId: step.previousStepId,
           workflowId: workflow.id,
           workflowName: workflow.name,
           shipperId: workflow.shipperId,
@@ -245,6 +246,7 @@ export function buildDeploymentWorkflows(
           uph,
           startTime: formatTimeLabel(startMinutes),
           targetEndTime: formatTimeLabel(targetEndMinutes),
+          layoutAreaIds: step.layoutAreaIds ?? [],
           requiredQualificationIds: step.requiredQualificationIds,
           requiredSkillIds: step.requiredSkillIds,
           manual: step.manual ?? "",

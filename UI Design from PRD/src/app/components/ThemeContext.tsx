@@ -32,7 +32,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       createTheme({
         palette: {
           mode: theme,
-          primary: { main: "#2563eb" },
+          primary: { main: "#155DFC" },
           secondary: { main: "#06b6d4" },
           background: {
             default: theme === "dark" ? "#0d0f16" : "#f3f6fb",
@@ -57,8 +57,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
               body: {
                 backgroundImage:
                   theme === "dark"
-                    ? "radial-gradient(circle at top left, rgba(37,99,235,0.12), transparent 28%), radial-gradient(circle at top right, rgba(6,182,212,0.08), transparent 24%)"
-                    : "radial-gradient(circle at top left, rgba(37,99,235,0.08), transparent 24%), radial-gradient(circle at top right, rgba(6,182,212,0.06), transparent 22%)",
+                    ? "radial-gradient(circle at top left, rgba(21,93,252,0.12), transparent 28%), radial-gradient(circle at top right, rgba(6,182,212,0.08), transparent 24%)"
+                    : "radial-gradient(circle at top left, rgba(21,93,252,0.08), transparent 24%), radial-gradient(circle at top right, rgba(6,182,212,0.06), transparent 22%)",
               },
             },
           },
@@ -160,7 +160,7 @@ export function useThemeColors() {
     textDimmed: isDark ? "text-gray-600" : "text-gray-300",
 
     // Nav
-    navActive: isDark ? "bg-cyan-500/15 text-cyan-400" : "bg-blue-50 text-blue-600",
+    navActive: isDark ? "bg-[#155DFC]/15 text-[#7FB0FF]" : "bg-[#EEF4FF] text-[#155DFC]",
     navInactive: isDark
       ? "text-gray-400 hover:bg-[#1e1e2e] hover:text-gray-200"
       : "text-gray-500 hover:bg-gray-100 hover:text-gray-900",

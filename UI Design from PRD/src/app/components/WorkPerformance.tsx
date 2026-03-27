@@ -350,7 +350,7 @@ function getWorkerRowHeight() {
 
 export function WorkPerformance() {
   const c = useThemeColors();
-  const { shippers, sites, processes, workflows, selectedSiteId } = useMasterData();
+  const { shippers, sites, processes, workflows, selectedSiteId, getShippersForSite } = useMasterData();
   const [viewMode, setViewMode] = useState<ViewMode>("workflow");
   const [timeScale, setTimeScale] = useState<TimeScale>("30m");
   const [filterShipperId, setFilterShipperId] = useState("all");
@@ -376,8 +376,11 @@ export function WorkPerformance() {
   );
 
   const shipperOptions = useMemo(
-    () => shippers.filter((shipper) => workflowViews.some((workflow) => workflow.shipperId === shipper.id)),
-    [workflowViews, shippers],
+    () =>
+      getShippersForSite(selectedSiteId).filter(
+        (shipper) => workflowViews.some((workflow) => workflow.shipperId === shipper.id),
+      ),
+    [getShippersForSite, selectedSiteId, workflowViews],
   );
 
   const workflowOptions = useMemo(
@@ -680,7 +683,7 @@ export function WorkPerformance() {
                   key={scale}
                   type="button"
                   onClick={() => setTimeScale(scale)}
-                  className={`rounded-lg px-3 py-1.5 text-[12px] font-medium ${timeScale === scale ? "bg-blue-600 text-white" : c.textSecondary}`}
+                  className={`rounded-lg px-3 py-1.5 text-[12px] font-medium ${timeScale === scale ? "bg-[#155DFC] text-white" : c.textSecondary}`}
                 >
                   {scale}
                 </button>
@@ -694,7 +697,7 @@ export function WorkPerformance() {
               <button
                 type="button"
                 onClick={() => setViewMode("workflow")}
-                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "workflow" ? "bg-blue-600 text-white" : c.textSecondary}`}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "workflow" ? "bg-[#155DFC] text-white" : c.textSecondary}`}
               >
                 <Layers className="h-4 w-4" />
                 業務
@@ -702,7 +705,7 @@ export function WorkPerformance() {
               <button
                 type="button"
                 onClick={() => setViewMode("worker")}
-                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "worker" ? "bg-blue-600 text-white" : c.textSecondary}`}
+                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "worker" ? "bg-[#155DFC] text-white" : c.textSecondary}`}
               >
                 <UserRound className="h-4 w-4" />
                 作業者

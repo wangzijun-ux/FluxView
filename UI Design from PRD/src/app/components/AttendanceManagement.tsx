@@ -8,7 +8,6 @@ import {
     Filter,
     Download,
     Calendar,
-    CheckCircle2,
     Edit3,
     ChevronDown,
     ChevronRight as ChevronRightIcon,
@@ -18,10 +17,22 @@ import {
     CheckSquare,
     Square,
     Zap,
-    Trash2,
-    Upload
+    Upload,
 } from "lucide-react";
+import {
+    Bar,
+    CartesianGrid,
+    ComposedChart,
+    Legend,
+    Line,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
+} from "recharts";
 import { useThemeColors } from "./ThemeContext";
+import { useMasterData } from "./MasterDataContext";
+import { buildDeploymentWorkflows } from "./fieldDeploymentStore";
 import {
     readAttendanceWorkers,
     type AttendanceWorker as Worker
@@ -33,6 +44,8 @@ import {
     type MonthlyShifts,
     type ShiftData
 } from "./attendanceStore";
+import { buildStepPlanDefaults, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
+import { readUsersFromStorage, type User } from "./userStore";
 
 /** 月の日数を取得 */
 const getDaysInMonth = (year: number, month: number) => {
@@ -149,9 +162,230 @@ const getEditorPopoverStyle = (anchorRect: EditingCellState["anchorRect"]) => {
     };
 };
 
+const ANALYSIS_SLOT_STARTS = [6, 8, 10, 12, 14, 16, 18, 20] as const;
+const SHIFT_SETUP_CLEANUP_HOURS = 0.5;
+const DEFAULT_SHIFT_RECOMMENDATION_HOURS = 8;
+const MIN_SHIFT_RECOMMENDATION_HOURS = 4;
+
+type ShiftAnalysisWorker = {
+    user: User;
+    worker: Worker;
+    shift: ShiftData;
+    grossHours: number;
+    effectiveHours: number;
+    capabilityKeys: Set<string>;
+};
+
+type AnalysisStepRow = {
+    workflowName: string;
+    shipperName: string;
+    processName: string;
+    planned: number;
+    uph: number;
+    requiredPersonHours: number;
+    theoreticalHeadcount: number;
+    startMinutes: number;
+    endMinutes: number;
+    requiredLabels: string[];
+    capabilityKeys: string[];
+};
+
+type AnalysisTimeSlot = {
+    label: string;
+    startMinutes: number;
+    endMinutes: number;
+    requiredHeadcount: number;
+    availableHeadcount: number;
+    diff: number;
+};
+
+type DayViewGranularity = 15 | 30 | 60;
+
+type ScheduledShiftRange = {
+    workerId: string;
+    workerName: string;
+    startMinutes: number;
+    endMinutes: number;
+};
+
+type AnalysisDayViewSlot = {
+    label: string;
+    startMinutes: number;
+    endMinutes: number;
+    requiredHeadcount: number;
+    availableHeadcount: number;
+    diff: number;
+    activeProcesses: string[];
+};
+
+type CapabilityGapRow = {
+    key: string;
+    label: string;
+    type: "skill" | "qualification";
+    needed: number;
+    available: number;
+    shortage: number;
+    slotRows: Array<{
+        startMinutes: number;
+        endMinutes: number;
+        shortage: number;
+    }>;
+};
+
+type DispatchRecommendation = {
+    id: string;
+    title: string;
+    description: string;
+    count: number;
+    unitPrice: number;
+    startMinutes: number;
+    endMinutes: number;
+    estimatedCost: number;
+};
+
+const DAY_VIEW_GRANULARITY_OPTIONS: DayViewGranularity[] = [15, 30, 60];
+
+function toDateKey(year: number, month: number, day: number) {
+    return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function parseTime(value: string) {
+    const [hours, minutes] = value.split(":").map(Number);
+    return (hours || 0) * 60 + (minutes || 0);
+}
+
+function formatTimeLabel(totalMinutes: number) {
+    const safeMinutes = Math.max(0, Math.round(totalMinutes));
+    const hours = Math.floor(safeMinutes / 60);
+    const minutes = safeMinutes % 60;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function overlapMinutes(leftStart: number, leftEnd: number, rightStart: number, rightEnd: number) {
+    return Math.max(0, Math.min(leftEnd, rightEnd) - Math.max(leftStart, rightStart));
+}
+
+function calculateBreakHours(totalHours: number) {
+    if (totalHours >= 8) return 1;
+    if (totalHours >= 6) return 0.75;
+    if (totalHours >= 4) return 0.25;
+    return 0;
+}
+
+function calculateEffectiveShiftHours(start: string, end: string) {
+    const grossHours = calculateHours(start, end);
+    if (grossHours <= 0) return 0;
+    return Number(Math.max(0, grossHours - calculateBreakHours(grossHours) - SHIFT_SETUP_CLEANUP_HOURS).toFixed(1));
+}
+
+function formatSignedCount(value: number) {
+    const rounded = Math.round(value);
+    if (rounded === 0) return "0";
+    return `${rounded > 0 ? "+" : ""}${rounded}`;
+}
+
+function formatHourValue(value: number) {
+    return `${value.toFixed(1)}h`;
+}
+
+function clampDay(day: number, daysInMonth: number) {
+    return Math.min(Math.max(day, 1), Math.max(daysInMonth, 1));
+}
+
+function buildRecommendedWindow(slotRows: Array<{ startMinutes: number; endMinutes: number; shortage: number }>) {
+    const shortageRows = slotRows.filter((row) => row.shortage > 0);
+    if (shortageRows.length === 0) {
+        return {
+            startMinutes: 10 * 60,
+            endMinutes: 10 * 60 + DEFAULT_SHIFT_RECOMMENDATION_HOURS * 60,
+        };
+    }
+
+    const startMinutes = shortageRows[0].startMinutes;
+    const rawEndMinutes = shortageRows[shortageRows.length - 1].endMinutes;
+    return {
+        startMinutes,
+        endMinutes: Math.min(22 * 60, Math.max(rawEndMinutes, startMinutes + MIN_SHIFT_RECOMMENDATION_HOURS * 60)),
+    };
+}
+
+function floorToGranularity(totalMinutes: number, granularity: DayViewGranularity) {
+    return Math.floor(totalMinutes / granularity) * granularity;
+}
+
+function ceilToGranularity(totalMinutes: number, granularity: DayViewGranularity) {
+    return Math.ceil(totalMinutes / granularity) * granularity;
+}
+
+function formatHeadcountValue(value: number) {
+    const rounded = Number(value.toFixed(1));
+    return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
+}
+
+function buildDayViewSlotRows(
+    stepRows: AnalysisStepRow[],
+    scheduledShiftRanges: ScheduledShiftRange[],
+    granularity: DayViewGranularity,
+) {
+    const relevantStarts = [
+        ...stepRows.map((row) => row.startMinutes),
+        ...scheduledShiftRanges.map((row) => row.startMinutes),
+    ];
+    const relevantEnds = [
+        ...stepRows.map((row) => row.endMinutes),
+        ...scheduledShiftRanges.map((row) => row.endMinutes),
+    ];
+
+    if (relevantStarts.length === 0 || relevantEnds.length === 0) return [] satisfies AnalysisDayViewSlot[];
+
+    const rangeStart = floorToGranularity(Math.min(...relevantStarts), granularity);
+    const rangeEnd = Math.max(rangeStart + granularity, ceilToGranularity(Math.max(...relevantEnds), granularity));
+    const slotHours = granularity / 60;
+    const rows: AnalysisDayViewSlot[] = [];
+
+    for (let startMinutes = rangeStart; startMinutes < rangeEnd; startMinutes += granularity) {
+        const endMinutes = startMinutes + granularity;
+        const requiredHeadcount = Number(
+            stepRows
+                .reduce((sum, row) => {
+                    const overlapHours = overlapMinutes(startMinutes, endMinutes, row.startMinutes, row.endMinutes) / 60;
+                    if (overlapHours <= 0) return sum;
+                    return sum + (row.theoreticalHeadcount * overlapHours) / slotHours;
+                }, 0)
+                .toFixed(1),
+        );
+        const availableHeadcount = scheduledShiftRanges.filter((worker) =>
+            overlapMinutes(startMinutes, endMinutes, worker.startMinutes, worker.endMinutes) > 0,
+        ).length;
+        const activeProcesses = [...new Set(
+            stepRows
+                .filter((row) => overlapMinutes(startMinutes, endMinutes, row.startMinutes, row.endMinutes) > 0)
+                .map((row) => row.processName),
+        )];
+
+        rows.push({
+            label: `${formatTimeLabel(startMinutes)}-${formatTimeLabel(endMinutes)}`,
+            startMinutes,
+            endMinutes,
+            requiredHeadcount,
+            availableHeadcount,
+            diff: Number((availableHeadcount - requiredHeadcount).toFixed(1)),
+            activeProcesses,
+        });
+    }
+
+    return rows;
+}
+
 export function AttendanceManagement() {
     const [viewYear, setViewYear] = useState(2026);
     const [viewMonth, setViewMonth] = useState(2); // 2 = March
+    const [activeTab, setActiveTab] = useState<"table" | "dayView">("table");
+    const [dayViewGranularity, setDayViewGranularity] = useState<DayViewGranularity>(30);
+    const today = new Date();
+    const [analysisDay, setAnalysisDay] = useState(() =>
+        today.getFullYear() === 2026 && today.getMonth() === 2 ? today.getDate() : 1,
+    );
     const [searchTerm, setSearchTerm] = useState("");
     const [filterCategory, setFilterCategory] = useState<string>("all");
     const [holidays, setHolidays] = useState<Record<string, string>>({});
@@ -164,6 +398,7 @@ export function AttendanceManagement() {
     // Selection State for Bulk Edit
     const [selectedWorkerIds, setSelectedWorkerIds] = useState<Set<string>>(new Set());
     const [selectedDays, setSelectedDays] = useState<Set<number>>(new Set());
+    const [selectedCellKeys, setSelectedCellKeys] = useState<Set<string>>(new Set());
 
     // 編集中のセル情報
     const [editingCell, setEditingCell] = useState<EditingCellState | null>(null);
@@ -172,6 +407,7 @@ export function AttendanceManagement() {
     const [importFeedback, setImportFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
     const c = useThemeColors();
+    const { selectedSiteId, sites, workflows, shippers, processes, dispatchCompanies, qualifications, skills } = useMasterData();
     const raisedSurface = c.isDark ? "bg-[#171726]" : "bg-gray-100";
     const raisedSurfaceSoft = c.isDark ? "bg-[#151525]/95" : "bg-gray-100/90";
     const bodySurface = c.isDark ? "bg-[#0f1119]" : "bg-white";
@@ -181,9 +417,31 @@ export function AttendanceManagement() {
     const popoverSurface = c.isDark ? "bg-[#151827]/95" : "bg-white/95";
     const inputClass = `w-full text-[15px] text-center border p-2 rounded-lg font-bold tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary} placeholder:text-gray-400 focus:border-cyan-500/40 focus:ring-2 focus:ring-cyan-500/20 outline-none`;
     const secondaryButtonClass = `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:bg-gray-500/10`;
-    const holidayColumnHeaderClass = "bg-gray-300 text-gray-900";
-    const holidayColumnCellClass = "bg-gray-200 text-gray-900";
+    const tabButtonClass = (tab: "table" | "dayView") =>
+        `flex items-center gap-2 rounded-xl px-4 py-2.5 text-[13px] font-semibold transition-all ${
+            activeTab === tab
+                ? "bg-[#155DFC] text-white shadow-sm"
+                : `${c.textSecondary} hover:bg-[#155DFC]/10 hover:text-[#155DFC]`
+        }`;
+    const holidayColumnHeaderClass = c.isDark ? "bg-[#171726]" : "bg-white";
+    const holidayColumnCellClass = "";
+    const getDayNumberClass = (dow: number, isSelected: boolean, holidayName?: string) => {
+        if (holidayName) return "text-amber-600";
+        if (dow === 0) return "text-rose-600";
+        if (dow === 6) return "text-blue-600";
+        return c.isDark ? "text-slate-100" : "text-slate-900";
+    };
+    const getDayLabelClass = (dow: number, isSelected: boolean, holidayName?: string) => {
+        if (holidayName) return "text-amber-500";
+        if (dow === 0) return "text-rose-500";
+        if (dow === 6) return "text-blue-500";
+        return c.isDark ? "text-slate-300" : "text-slate-700";
+    };
     const attendanceWorkers = useMemo(() => readAttendanceWorkers(), []);
+    const users = useMemo(
+        () => readUsersFromStorage(),
+        [dispatchCompanies, qualifications, skills],
+    );
 
     // 祝日データの取得
     useEffect(() => {
@@ -224,6 +482,356 @@ export function AttendanceManagement() {
     useEffect(() => {
         writeAttendanceMonthShifts(viewYear, viewMonth, monthlyShifts);
     }, [viewYear, viewMonth, monthlyShifts]);
+
+    useEffect(() => {
+        setAnalysisDay(prev => clampDay(prev, daysInMonth));
+    }, [daysInMonth]);
+
+    const selectedSite = useMemo(
+        () => sites.find(site => site.id === selectedSiteId) ?? null,
+        [sites, selectedSiteId],
+    );
+    const analysisDateKey = useMemo(
+        () => toDateKey(viewYear, viewMonth, clampDay(analysisDay, daysInMonth)),
+        [viewYear, viewMonth, analysisDay, daysInMonth],
+    );
+    const analysisData = useMemo(() => {
+        const dayStore = readProgressPlanStore()[analysisDateKey];
+        const scopedWorkflows = workflows.filter(workflow => !selectedSiteId || workflow.siteId === selectedSiteId);
+        const workflowViews = buildDeploymentWorkflows(scopedWorkflows, shippers, sites, processes);
+        const skillNameById = new Map(skills.map(skill => [skill.id, skill.name]));
+        const qualificationNameById = new Map(qualifications.map(qualification => [qualification.id, qualification.name]));
+        const skillIdByName = new Map(skills.map(skill => [skill.name, skill.id]));
+        const qualificationIdByName = new Map(qualifications.map(qualification => [qualification.name, qualification.id]));
+        const workerByUserId = new Map(attendanceWorkers.map(worker => [worker.userId, worker]));
+
+        const scheduledWorkers = users
+            .map((user) => {
+                const worker = workerByUserId.get(user.id);
+                if (!worker) return null;
+
+                const shift = monthlyShifts[worker.id]?.[analysisDay];
+                if (!shift || shift.isOff || worker.status !== "active") return null;
+
+                const capabilityKeys = new Set<string>([
+                    ...user.skills.flatMap(skill => {
+                        const skillId = skillIdByName.get(skill.name);
+                        return skillId ? [`skill:${skillId}`] : [];
+                    }),
+                    ...user.certifications.flatMap(certification => {
+                        const qualificationId = qualificationIdByName.get(certification.name);
+                        return qualificationId ? [`qualification:${qualificationId}`] : [];
+                    }),
+                ]);
+
+                return {
+                    user,
+                    worker,
+                    shift,
+                    grossHours: calculateHours(shift.start, shift.end),
+                    effectiveHours: calculateEffectiveShiftHours(shift.start, shift.end),
+                    capabilityKeys,
+                } satisfies ShiftAnalysisWorker;
+            })
+            .filter((candidate): candidate is ShiftAnalysisWorker => Boolean(candidate));
+
+        const scheduledShiftRanges = scheduledWorkers.map((worker) => ({
+            workerId: worker.worker.id,
+            workerName: worker.worker.name,
+            startMinutes: parseTime(worker.shift.start),
+            endMinutes: parseTime(worker.shift.end),
+        })) satisfies ScheduledShiftRange[];
+
+        const stepRows = workflowViews.flatMap((workflow, workflowIndex) =>
+            workflow.steps.map((step, stepIndex) => {
+                const defaults = buildStepPlanDefaults(workflowIndex, stepIndex, step.headcount, step.uph);
+                const plan = resolveStepPlanValues(dayStore, step.id, {
+                    planned: defaults.planned,
+                    startTime: step.startTime,
+                    targetEndTime: step.targetEndTime,
+                });
+                const startMinutes = parseTime(plan.startTime);
+                const endMinutes = Math.max(startMinutes + 60, parseTime(plan.targetEndTime));
+                const durationHours = Math.max(1, (endMinutes - startMinutes) / 60);
+                const requiredPersonHours = Number((plan.planned / Math.max(step.uph, 1)).toFixed(1));
+                const theoreticalHeadcount = Number((requiredPersonHours / durationHours).toFixed(1));
+                const requiredLabels = [
+                    ...step.requiredQualificationIds.flatMap(id => qualificationNameById.get(id) ?? []),
+                    ...step.requiredSkillIds.flatMap(id => skillNameById.get(id) ?? []),
+                ];
+
+                return {
+                    workflowName: workflow.workflowName,
+                    shipperName: workflow.shipperName,
+                    processName: step.processName,
+                    planned: plan.planned,
+                    uph: step.uph,
+                    requiredPersonHours,
+                    theoreticalHeadcount,
+                    startMinutes,
+                    endMinutes,
+                    requiredLabels,
+                    capabilityKeys: [
+                        ...step.requiredQualificationIds.map(id => `qualification:${id}`),
+                        ...step.requiredSkillIds.map(id => `skill:${id}`),
+                    ],
+                } satisfies AnalysisStepRow;
+            }),
+        );
+
+        const totalRequiredHours = stepRows.reduce((sum, row) => sum + row.requiredPersonHours, 0);
+        const totalScheduledHours = scheduledWorkers.reduce((sum, worker) => sum + worker.effectiveHours, 0);
+        const gapHours = Number((totalScheduledHours - totalRequiredHours).toFixed(1));
+        const shortageWorkers = gapHours < 0 ? Math.ceil(Math.abs(gapHours) / DEFAULT_SHIFT_RECOMMENDATION_HOURS) : 0;
+
+        const timeSlotRows = ANALYSIS_SLOT_STARTS.map((hour) => {
+            const startMinutes = hour * 60;
+            const endMinutes = startMinutes + 120;
+            const slotHours = (endMinutes - startMinutes) / 60;
+            const requiredHeadcount = Number(stepRows.reduce((sum, row) => {
+                const overlapHours = overlapMinutes(startMinutes, endMinutes, row.startMinutes, row.endMinutes) / 60;
+                if (overlapHours <= 0) return sum;
+                return sum + (row.theoreticalHeadcount * overlapHours) / slotHours;
+            }, 0).toFixed(1));
+            const availableHeadcount = scheduledWorkers.filter((item) =>
+                overlapMinutes(startMinutes, endMinutes, parseTime(item.shift.start), parseTime(item.shift.end)) > 0,
+            ).length;
+
+            return {
+                label: `${String(hour).padStart(2, "0")}-${String(hour + 2).padStart(2, "0")}`,
+                startMinutes,
+                endMinutes,
+                requiredHeadcount,
+                availableHeadcount,
+                diff: Number((availableHeadcount - requiredHeadcount).toFixed(1)),
+            } satisfies AnalysisTimeSlot;
+        });
+
+        const dayViewRowsByGranularity = Object.fromEntries(
+            DAY_VIEW_GRANULARITY_OPTIONS.map((granularity) => [
+                granularity,
+                buildDayViewSlotRows(stepRows, scheduledShiftRanges, granularity),
+            ]),
+        ) as Record<DayViewGranularity, AnalysisDayViewSlot[]>;
+
+        const capabilityMeta = new Map<string, { key: string; label: string; type: "skill" | "qualification" }>();
+        stepRows.forEach((row) => {
+            row.capabilityKeys.forEach((key) => {
+                if (capabilityMeta.has(key)) return;
+                const [type, rawId] = key.split(":");
+                capabilityMeta.set(key, {
+                    key,
+                    label: type === "qualification"
+                        ? qualificationNameById.get(rawId) ?? rawId
+                        : skillNameById.get(rawId) ?? rawId,
+                    type: type === "qualification" ? "qualification" : "skill",
+                });
+            });
+        });
+
+        const capabilityRows = [...capabilityMeta.values()]
+            .map((meta) => {
+                const slotRows = ANALYSIS_SLOT_STARTS.map((hour) => {
+                    const startMinutes = hour * 60;
+                    const endMinutes = startMinutes + 120;
+                    const slotHours = (endMinutes - startMinutes) / 60;
+                    const required = stepRows.reduce((sum, row) => {
+                        if (!row.capabilityKeys.includes(meta.key)) return sum;
+                        const overlapHours = overlapMinutes(startMinutes, endMinutes, row.startMinutes, row.endMinutes) / 60;
+                        if (overlapHours <= 0) return sum;
+                        return sum + (row.theoreticalHeadcount * overlapHours) / slotHours;
+                    }, 0);
+                    const available = scheduledWorkers.filter((worker) =>
+                        worker.capabilityKeys.has(meta.key) &&
+                        overlapMinutes(startMinutes, endMinutes, parseTime(worker.shift.start), parseTime(worker.shift.end)) > 0,
+                    ).length;
+                    return {
+                        startMinutes,
+                        endMinutes,
+                        required,
+                        available,
+                        shortage: Math.max(0, Math.ceil(required - available)),
+                    };
+                });
+
+                const worstSlot = slotRows.reduce((worst, current) => {
+                    if (current.shortage > worst.shortage) return current;
+                    if (current.shortage === worst.shortage && current.required > worst.required) return current;
+                    return worst;
+                }, slotRows[0] ?? { startMinutes: 0, endMinutes: 0, required: 0, available: 0, shortage: 0 });
+
+                return {
+                    key: meta.key,
+                    label: meta.label,
+                    type: meta.type,
+                    needed: Math.max(0, Math.ceil(worstSlot.required)),
+                    available: worstSlot.available,
+                    shortage: worstSlot.shortage,
+                    slotRows: slotRows.map(slot => ({
+                        startMinutes: slot.startMinutes,
+                        endMinutes: slot.endMinutes,
+                        shortage: slot.shortage,
+                    })),
+                } satisfies CapabilityGapRow;
+            })
+            .filter(row => row.needed > 0)
+            .sort((left, right) => right.shortage - left.shortage || right.needed - left.needed);
+
+        const activeDispatchCompanies = dispatchCompanies.filter(company => company.status === "active");
+        const buildDispatchCandidates = (capabilityKey: string | null) =>
+            activeDispatchCompanies
+                .map((company) => {
+                    const matchCount = users.filter((user) => {
+                        if (user.employmentType !== "派遣" || user.dispatchCompanyId !== company.id) return false;
+                        if (!capabilityKey) return true;
+                        const [type, rawId] = capabilityKey.split(":");
+                        return type === "qualification"
+                            ? user.certifications.some(certification => qualificationIdByName.get(certification.name) === rawId)
+                            : user.skills.some(skill => skillIdByName.get(skill.name) === rawId);
+                    }).length;
+
+                    return {
+                        company,
+                        matchCount,
+                    };
+                })
+                .sort((left, right) =>
+                    right.matchCount - left.matchCount || left.company.unitPrice - right.company.unitPrice,
+                );
+
+        const recommendations: DispatchRecommendation[] = [];
+        const topCapabilityGap = capabilityRows.find(row => row.shortage > 0);
+        if (topCapabilityGap) {
+            const candidate = buildDispatchCandidates(topCapabilityGap.key)[0];
+            if (candidate) {
+                const window = buildRecommendedWindow(topCapabilityGap.slotRows);
+                const durationHours = (window.endMinutes - window.startMinutes) / 60;
+                const count = Math.max(topCapabilityGap.shortage, shortageWorkers > 0 ? Math.min(shortageWorkers, topCapabilityGap.shortage) : topCapabilityGap.shortage);
+                recommendations.push({
+                    id: `dispatch-capability-${topCapabilityGap.key}`,
+                    title: `${candidate.company.name}（${topCapabilityGap.label}対応）`,
+                    description: `単価 ¥${candidate.company.unitPrice.toLocaleString("ja-JP")}/h ・ 推奨シフト ${formatTimeLabel(window.startMinutes)}-${formatTimeLabel(window.endMinutes)}`,
+                    count,
+                    unitPrice: candidate.company.unitPrice,
+                    startMinutes: window.startMinutes,
+                    endMinutes: window.endMinutes,
+                    estimatedCost: Math.round(count * durationHours * candidate.company.unitPrice),
+                });
+            }
+        }
+
+        const generalCandidates = buildDispatchCandidates(null);
+        const remainingCount = Math.max(0, shortageWorkers - recommendations.reduce((sum, item) => sum + item.count, 0));
+        if ((remainingCount > 0 || (recommendations.length === 0 && gapHours < 0)) && generalCandidates.length > 0) {
+            const shortageSlotRows = timeSlotRows.map((slot) => ({
+                startMinutes: slot.startMinutes,
+                endMinutes: slot.endMinutes,
+                shortage: Math.max(0, Math.ceil(slot.requiredHeadcount - slot.availableHeadcount)),
+            }));
+            const window = buildRecommendedWindow(shortageSlotRows);
+            const durationHours = (window.endMinutes - window.startMinutes) / 60;
+            const generalCount = Math.max(1, remainingCount || shortageWorkers || 1);
+            recommendations.push({
+                id: "dispatch-general",
+                title: `${generalCandidates[0].company.name}（一般作業員）`,
+                description: `単価 ¥${generalCandidates[0].company.unitPrice.toLocaleString("ja-JP")}/h ・ 推奨シフト ${formatTimeLabel(window.startMinutes)}-${formatTimeLabel(window.endMinutes)}`,
+                count: generalCount,
+                unitPrice: generalCandidates[0].company.unitPrice,
+                startMinutes: window.startMinutes,
+                endMinutes: window.endMinutes,
+                estimatedCost: Math.round(generalCount * durationHours * generalCandidates[0].company.unitPrice),
+            });
+        }
+
+        return {
+            workflowCount: workflowViews.length,
+            stepRows,
+            totalRequiredHours: Number(totalRequiredHours.toFixed(1)),
+            totalScheduledHours: Number(totalScheduledHours.toFixed(1)),
+            gapHours,
+            shortageWorkers,
+            timeSlotRows,
+            dayViewRowsByGranularity,
+            capabilityRows,
+            recommendations,
+            totalRecommendationCost: recommendations.reduce((sum, item) => sum + item.estimatedCost, 0),
+            scheduledWorkerCount: scheduledWorkers.length,
+        };
+    }, [
+        analysisDateKey,
+        analysisDay,
+        attendanceWorkers,
+        dispatchCompanies,
+        monthlyShifts,
+        processes,
+        qualifications,
+        selectedSiteId,
+        shippers,
+        sites,
+        skills,
+        users,
+        workflows,
+    ]);
+
+    const dayViewRows = useMemo(
+        () => analysisData.dayViewRowsByGranularity[dayViewGranularity] ?? [],
+        [analysisData.dayViewRowsByGranularity, dayViewGranularity],
+    );
+
+    const dayViewSummary = useMemo(() => {
+        if (dayViewRows.length === 0) {
+            return {
+                peakRequired: 0,
+                peakAvailable: 0,
+                maxShortage: 0,
+                windowLabel: "-",
+            };
+        }
+
+        const peakRequired = Math.max(...dayViewRows.map((row) => row.requiredHeadcount));
+        const peakAvailable = Math.max(...dayViewRows.map((row) => row.availableHeadcount));
+        const maxShortage = Math.max(...dayViewRows.map((row) => Math.max(0, row.requiredHeadcount - row.availableHeadcount)));
+        const windowLabel = `${formatTimeLabel(dayViewRows[0].startMinutes)}-${formatTimeLabel(dayViewRows[dayViewRows.length - 1].endMinutes)}`;
+
+        return {
+            peakRequired: Number(peakRequired.toFixed(1)),
+            peakAvailable: Number(peakAvailable.toFixed(1)),
+            maxShortage: Number(maxShortage.toFixed(1)),
+            windowLabel,
+        };
+    }, [dayViewRows]);
+
+    const dayViewChartRows = useMemo(
+        () =>
+            dayViewRows.map((row) => ({
+                label: row.label,
+                requiredHeadcount: row.requiredHeadcount,
+                availableHeadcount: row.availableHeadcount,
+                diff: row.diff,
+                processLabel: row.activeProcesses.join(" / ") || "-",
+            })),
+        [dayViewRows],
+    );
+
+    const dayViewBottlenecks = useMemo(
+        () =>
+            dayViewRows
+                .filter((row) => row.requiredHeadcount - row.availableHeadcount > 0)
+                .sort(
+                    (left, right) =>
+                        right.requiredHeadcount - right.availableHeadcount - (left.requiredHeadcount - left.availableHeadcount) ||
+                        right.requiredHeadcount - left.requiredHeadcount,
+                )
+                .slice(0, 4),
+        [dayViewRows],
+    );
+
+    const chartGridStroke = c.isDark ? "#1e293b" : "#e2e8f0";
+    const chartAxisStroke = c.isDark ? "#475569" : "#94a3b8";
+    const chartTickFill = c.isDark ? "#94a3b8" : "#64748b";
+    const chartTooltipBg = c.isDark ? "#111827" : "#ffffff";
+    const chartTooltipBorder = c.isDark ? "#334155" : "#cbd5e1";
+    const chartTooltipColor = c.isDark ? "#e2e8f0" : "#0f172a";
 
     const activeEditingWorkerId = editingCell?.workerId;
     const activeEditingDay = editingCell?.day;
@@ -274,6 +882,18 @@ export function AttendanceManagement() {
         }));
     };
 
+    const getCellKey = (workerId: string, day: number) => `${workerId}:${day}`;
+
+    const selectedTargetKeys = useMemo(() => {
+        const next = new Set(selectedCellKeys);
+        selectedWorkerIds.forEach(workerId => {
+            selectedDays.forEach(day => {
+                next.add(getCellKey(workerId, day));
+            });
+        });
+        return next;
+    }, [selectedCellKeys, selectedWorkerIds, selectedDays]);
+
     const handleExport = () => {
         const monthLabel = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}`;
         const payload = {
@@ -318,11 +938,12 @@ export function AttendanceManagement() {
     const applyBulkShift = (start: string, end: string, isOff: boolean) => {
         setMonthlyShifts(prev => {
             const next = { ...prev };
-            selectedWorkerIds.forEach(wId => {
-                if (!next[wId]) next[wId] = {};
-                selectedDays.forEach(day => {
-                    next[wId][day] = { start, end, isOff };
-                });
+            selectedTargetKeys.forEach(cellKey => {
+                const [workerId, dayValue] = cellKey.split(":");
+                const day = Number(dayValue);
+                if (!workerId || Number.isNaN(day)) return;
+                if (!next[workerId]) next[workerId] = {};
+                next[workerId][day] = { start, end, isOff };
             });
             return next;
         });
@@ -345,9 +966,38 @@ export function AttendanceManagement() {
         });
     };
 
+    const toggleCellSelection = (workerId: string, day: number) => {
+        const cellKey = getCellKey(workerId, day);
+        setSelectedCellKeys(prev => {
+            const next = new Set(prev);
+            if (next.has(cellKey)) next.delete(cellKey);
+            else next.add(cellKey);
+            return next;
+        });
+    };
+
+    const openCellEditor = (workerId: string, day: number, rect: DOMRect) => {
+        setEditingCell({
+            workerId,
+            day,
+            anchorRect: captureAnchorRect(rect),
+        });
+    };
+
+    const handleCellClick = (event: React.MouseEvent<HTMLButtonElement>, workerId: string, day: number) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey) {
+            setEditingCell(null);
+            toggleCellSelection(workerId, day);
+            return;
+        }
+
+        openCellEditor(workerId, day, event.currentTarget.getBoundingClientRect());
+    };
+
     const clearSelection = () => {
         setSelectedWorkerIds(new Set());
         setSelectedDays(new Set());
+        setSelectedCellKeys(new Set());
     };
 
     const getWorkerMonthlyTotal = (workerId: string) => {
@@ -363,62 +1013,52 @@ export function AttendanceManagement() {
         }, 0);
     };
 
+    const getDailyScheduledHours = (day: number) => {
+        const total = filteredWorkers.reduce((sum, worker) => {
+            const shift = monthlyShifts[worker.id]?.[day];
+            if (!shift || shift.isOff) return sum;
+            return sum + calculateHours(shift.start, shift.end);
+        }, 0);
+        return total.toFixed(1);
+    };
+
+    const getMonthlyScheduledHoursTotal = () => {
+        const total = filteredWorkers.reduce((sum, worker) => {
+            const shifts = monthlyShifts[worker.id];
+            if (!shifts) return sum;
+            return (
+                sum +
+                Object.values(shifts).reduce((workerSum, shift) => {
+                    if (!shift || shift.isOff) return workerSum;
+                    return workerSum + calculateHours(shift.start, shift.end);
+                }, 0)
+            );
+        }, 0);
+        return total.toFixed(1);
+    };
+
     const toggleCategory = (cat: string) => setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
 
     const quickTemplates = [
-        { label: "8-17", s: "08:00", e: "17:00" },
-        { label: "9-15", s: "09:00", e: "15:00" },
-        { label: "10-16", s: "10:00", e: "16:00" },
-        { label: "13-22", s: "13:00", e: "22:00" },
+        { label: "日勤 (08:00~16:00)", s: "08:00", e: "16:00" },
+        { label: "夕勤 (16:00~20:00)", s: "16:00", e: "20:00" },
+        { label: "夜勤 (22:00~08:00)", s: "22:00", e: "08:00" },
     ];
 
     const SIDEBAR_WIDTH = "260px"; // Wider to accommodate checkbox
     const CELL_WIDTH = "65px";
 
-    const isBulkActive = selectedWorkerIds.size > 0 && selectedDays.size > 0;
+    const isBulkActive = selectedTargetKeys.size > 0;
 
     return (
         <div className={`p-6 h-full flex flex-col overflow-hidden relative ${c.bg}`}>
-            {/* Header */}
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <div className={`text-[20px] font-bold ${c.textPrimary}`}>シフト管理</div>
-                    <div className={`text-[12px] ${c.textSecondary}`}>月次シフトの作成、取込、調整を行います。</div>
-                </div>
-                <div className="flex flex-wrap items-center gap-3">
-                    {importFeedback ? (
-                        <div className={`rounded-lg px-3 py-2 text-[12px] font-medium ${
-                            importFeedback.kind === "success"
-                                ? "bg-emerald-500/10 text-emerald-600"
-                                : "bg-rose-500/10 text-rose-600"
-                        }`}>
-                            {importFeedback.message}
-                        </div>
-                    ) : null}
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".json,application/json"
-                        className="hidden"
-                        onChange={handleImportFile}
-                    />
-                    <button
-                        onClick={handleImportClick}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${c.borderCard} ${c.bgCard} ${c.textSecondary} text-[13px] transition-all font-medium ${hoverSubtle}`}
-                    >
-                        <Upload className="w-4 h-4" />インポート
-                    </button>
-                    <button
-                        onClick={handleExport}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${c.borderCard} ${c.bgCard} ${c.textSecondary} text-[13px] transition-all font-medium ${hoverSubtle}`}
-                    >
-                        <Download className="w-4 h-4" />エクスポート
-                    </button>
-                    <button className="flex items-center gap-2 px-6 py-2 rounded-lg bg-blue-600 text-white text-[13px] hover:bg-blue-500 transition-all shadow-lg font-bold">
-                        <Save className="w-4 h-4" />計画を保存
-                    </button>
-                </div>
-            </div>
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={handleImportFile}
+            />
 
             {/* Toolbar */}
             <div className={`mb-4 p-4 rounded-xl ${c.bgCard} border ${c.border} flex flex-wrap items-center justify-between gap-4 shadow-sm text-[13px]`}>
@@ -440,17 +1080,293 @@ export function AttendanceManagement() {
                         </select>
                     </div>
                 </div>
+                {isBulkActive && (
                     <div className="flex items-center gap-4">
-                        <div className={`text-[12px] ${c.textMuted}`}><span className={`font-bold mr-1 ${c.textSecondary}`}>{filteredWorkers.length}</span> 名表示中</div>
-                        <div className={`h-4 w-[1px] ${dividerTone}`} />
-                        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-gray-300 border border-gray-400" /><span className={`text-[11px] ${c.textMuted}`}>土日祝日</span></div>
-                        {isBulkActive && (
-                            <button onClick={clearSelection} className="flex items-center gap-1.5 text-rose-500 font-bold hover:underline ml-4"><X className="w-3.5 h-3.5" />選択解除 ({selectedWorkerIds.size}名 × {selectedDays.size}日)</button>
-                        )}
+                        <button onClick={clearSelection} className="flex items-center gap-1.5 text-rose-500 font-bold hover:underline"><X className="w-3.5 h-3.5" />選択解除 ({selectedTargetKeys.size}セル)</button>
+                    </div>
+                )}
+            </div>
+
+            <div className="mb-4 shrink-0">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className={`inline-flex flex-wrap items-center gap-2 rounded-2xl border p-1 ${c.bgCard} ${c.border} shadow-sm`}>
+                        <button
+                            type="button"
+                            onClick={() => setActiveTab("table")}
+                            className={tabButtonClass("table")}
+                            aria-pressed={activeTab === "table"}
+                        >
+                            <Calendar className="h-4 w-4" />
+                            シフト表
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setEditingCell(null);
+                                setActiveTab("dayView");
+                            }}
+                            className={tabButtonClass("dayView")}
+                            aria-pressed={activeTab === "dayView"}
+                        >
+                            <Clock className="h-4 w-4" />
+                            作業日ビュー
+                        </button>
+                    </div>
+
+                    {activeTab === "table" ? (
+                        <div className="flex flex-wrap items-center justify-end gap-3">
+                            {importFeedback ? (
+                                <div className={`rounded-lg px-3 py-2 text-[12px] font-medium ${
+                                    importFeedback.kind === "success"
+                                        ? "bg-emerald-500/10 text-emerald-600"
+                                        : "bg-rose-500/10 text-rose-600"
+                                }`}>
+                                    {importFeedback.message}
+                                </div>
+                            ) : null}
+                            <button
+                                onClick={handleImportClick}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${c.borderCard} ${c.bgCard} ${c.textSecondary} text-[13px] transition-all font-medium ${hoverSubtle}`}
+                            >
+                                <Upload className="w-4 h-4" />インポート
+                            </button>
+                            <button
+                                onClick={handleExport}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${c.borderCard} ${c.bgCard} ${c.textSecondary} text-[13px] transition-all font-medium ${hoverSubtle}`}
+                            >
+                                <Download className="w-4 h-4" />エクスポート
+                            </button>
+                            <button className="flex items-center gap-2 px-6 py-2 rounded-lg bg-[#155DFC] text-white text-[13px] hover:bg-[#0F4FE3] transition-all shadow-lg font-bold">
+                                <Save className="w-4 h-4" />計画を保存
+                            </button>
+                        </div>
+                    ) : null}
                 </div>
             </div>
 
-            {/* Monthly Grid Table */}
+            {activeTab === "dayView" ? (
+                <div className="flex-1 min-h-0 overflow-auto">
+                    <section className={`${c.bgCard} border ${c.border} rounded-2xl p-5 shadow-sm`}>
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div>
+                                <div className={`flex items-center gap-2 text-[16px] font-semibold ${c.textPrimary}`}>
+                                    <Clock className="h-4 w-4 text-blue-500" />
+                                    作業日ビュー需給
+                                </div>
+                                <div className={`mt-1 text-[12px] ${c.textSecondary}`}>
+                                    {analysisDateKey} / {selectedSite?.name ?? "全拠点"} / {dayViewGranularity}分単位で必要人数と出勤人数を比較
+                                </div>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3">
+                                <label className="flex items-center gap-2">
+                                    <span className={`text-[11px] font-medium ${c.textSecondary}`}>対象日</span>
+                                    <input
+                                        type="date"
+                                        value={analysisDateKey}
+                                        min={toDateKey(viewYear, viewMonth, 1)}
+                                        max={toDateKey(viewYear, viewMonth, daysInMonth)}
+                                        onChange={(event) => {
+                                            const selected = new Date(event.target.value);
+                                            if (Number.isNaN(selected.getTime())) return;
+                                            setAnalysisDay(selected.getDate());
+                                        }}
+                                        className={`rounded-lg border px-3 py-2 text-[12px] ${c.bgInput} ${c.borderCard} ${c.textPrimary}`}
+                                    />
+                                </label>
+                                <div className={`inline-flex items-center gap-1 rounded-xl border p-1 ${c.bgSurface} ${c.borderCard}`}>
+                                    {DAY_VIEW_GRANULARITY_OPTIONS.map((option) => (
+                                        <button
+                                            key={option}
+                                            type="button"
+                                                onClick={() => setDayViewGranularity(option)}
+                                                className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-all ${
+                                                    dayViewGranularity === option
+                                                    ? "bg-[#155DFC] text-white"
+                                                    : `${c.textSecondary} hover:bg-[#155DFC]/10 hover:text-[#155DFC]`
+                                            }`}
+                                            aria-pressed={dayViewGranularity === option}
+                                        >
+                                            {option === 60 ? "1時間" : `${option}分`}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+
+                        {analysisData.workflowCount === 0 ? (
+                            <div className={`mt-5 rounded-2xl border px-5 py-8 text-center ${c.bgSurface} ${c.borderCard}`}>
+                                <div className={`text-[15px] font-semibold ${c.textPrimary}`}>進捗計画がまだありません</div>
+                                <div className={`mt-2 text-[12px] ${c.textSecondary}`}>
+                                    進捗管理で予定数を登録すると、この画面で時間帯別の必要人数を確認できます。
+                                </div>
+                            </div>
+                    ) : (
+                            <>
+                                <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-5">
+                                    {[
+                                        {
+                                            label: "表示時間帯",
+                                            value: dayViewSummary.windowLabel,
+                                            tone: c.textPrimary,
+                                        },
+                                        {
+                                            label: "必要人時合計",
+                                            value: formatHourValue(analysisData.totalRequiredHours),
+                                            tone: c.textPrimary,
+                                        },
+                                        {
+                                            label: "出勤予定人時",
+                                            value: formatHourValue(analysisData.totalScheduledHours),
+                                            tone: "text-cyan-500",
+                                        },
+                                        {
+                                            label: "過不足",
+                                            value: `${analysisData.gapHours > 0 ? "+" : ""}${formatHourValue(analysisData.gapHours)}`,
+                                            tone: analysisData.gapHours < 0 ? "text-rose-500" : analysisData.gapHours > 0 ? "text-emerald-500" : c.textPrimary,
+                                        },
+                                        {
+                                            label: "不足人数（8h換算）",
+                                            value: `${analysisData.shortageWorkers}名`,
+                                            tone: analysisData.shortageWorkers > 0 ? "text-rose-500" : "text-emerald-500",
+                                        },
+                                    ].map((item) => (
+                                        <div key={item.label} className={`rounded-2xl border px-4 py-3 ${c.bgSurface} ${c.borderCard}`}>
+                                            <div className={`text-[11px] ${c.textMuted}`}>{item.label}</div>
+                                            <div className={`mt-2 text-[22px] font-semibold ${item.tone}`}>{item.value}</div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {dayViewChartRows.length === 0 ? (
+                                    <div className={`mt-6 rounded-2xl border px-5 py-8 text-center ${c.bgSurface} ${c.borderCard}`}>
+                                        <div className={`text-[15px] font-semibold ${c.textPrimary}`}>表示できる時間帯データがありません</div>
+                                        <div className={`mt-2 text-[12px] ${c.textSecondary}`}>
+                                            シフト時間または工程の作業時間帯を確認してください。
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+                                        <div className={`rounded-3xl border p-4 ${c.bgSurface} ${c.borderCard}`}>
+                                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                                <div>
+                                                    <div className={`text-[13px] font-semibold ${c.textPrimary}`}>時間帯別 人員チャート</div>
+                                                    <div className={`mt-1 text-[11px] ${c.textSecondary}`}>
+                                                        バーが出勤人数、ラインが必要人数です。ホバーで過不足と稼働工程を確認できます。
+                                                    </div>
+                                                </div>
+                                                <div className={`flex flex-wrap items-center gap-3 text-[11px] ${c.textSecondary}`}>
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <span className="h-2.5 w-2.5 rounded-full bg-cyan-500" />
+                                                        出勤人数
+                                                    </span>
+                                                    <span className="inline-flex items-center gap-1">
+                                                        <span className="h-0.5 w-4 rounded-full bg-rose-500" />
+                                                        必要人数
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 h-[360px]">
+                                                <ResponsiveContainer width="100%" height="100%">
+                                                    <ComposedChart data={dayViewChartRows} margin={{ top: 12, right: 16, bottom: 8, left: 0 }}>
+                                                        <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                                                        <XAxis
+                                                            dataKey="label"
+                                                            stroke={chartAxisStroke}
+                                                            tick={{ fontSize: 11, fill: chartTickFill }}
+                                                            minTickGap={24}
+                                                        />
+                                                        <YAxis
+                                                            stroke={chartAxisStroke}
+                                                            tick={{ fontSize: 11, fill: chartTickFill }}
+                                                            allowDecimals
+                                                        />
+                                                        <Tooltip
+                                                            contentStyle={{
+                                                                backgroundColor: chartTooltipBg,
+                                                                border: `1px solid ${chartTooltipBorder}`,
+                                                                borderRadius: "12px",
+                                                                color: chartTooltipColor,
+                                                                fontSize: "12px",
+                                                            }}
+                                                            formatter={(value: number | string, name: number | string) => [
+                                                                `${formatHeadcountValue(Number(value))}名`,
+                                                                name === "requiredHeadcount" ? "必要人数" : "出勤人数",
+                                                            ]}
+                                                            labelFormatter={(label, payload) => {
+                                                                const point = payload?.[0]?.payload as { processLabel?: string } | undefined;
+                                                                return point?.processLabel ? `${label} | ${point.processLabel}` : String(label);
+                                                            }}
+                                                        />
+                                                        <Legend wrapperStyle={{ fontSize: "11px", color: chartTickFill }} />
+                                                        <Bar
+                                                            dataKey="availableHeadcount"
+                                                            name="出勤人数"
+                                                            fill="#06b6d4"
+                                                            radius={[8, 8, 0, 0]}
+                                                            barSize={dayViewGranularity === 15 ? 10 : dayViewGranularity === 30 ? 16 : 24}
+                                                        />
+                                                        <Line
+                                                            type="monotone"
+                                                            dataKey="requiredHeadcount"
+                                                            name="必要人数"
+                                                            stroke="#f43f5e"
+                                                            strokeWidth={2.5}
+                                                            dot={false}
+                                                            activeDot={{ r: 4 }}
+                                                        />
+                                                    </ComposedChart>
+                                                </ResponsiveContainer>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                            <div className={`rounded-2xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
+                                                <div className={`text-[13px] font-semibold ${c.textPrimary}`}>逼迫時間帯</div>
+                                                <div className={`mt-1 text-[11px] ${c.textSecondary}`}>
+                                                    不足が大きい順に表示
+                                                </div>
+                                            </div>
+                                            {dayViewBottlenecks.length === 0 ? (
+                                                <div className={`rounded-2xl border px-4 py-4 text-[12px] ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}>
+                                                    すべての時間帯で必要人数を満たしています。
+                                                </div>
+                                            ) : (
+                                                dayViewBottlenecks.map((row) => {
+                                                    const shortage = row.requiredHeadcount - row.availableHeadcount;
+                                                    const processLabel =
+                                                        row.activeProcesses.length <= 2
+                                                            ? row.activeProcesses.join(" / ")
+                                                            : `${row.activeProcesses.slice(0, 2).join(" / ")} +${row.activeProcesses.length - 2}`;
+
+                                                    return (
+                                                        <div key={row.label} className={`rounded-2xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div>
+                                                                    <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{row.label}</div>
+                                                                    <div className={`mt-1 text-[11px] leading-5 ${c.textSecondary}`}>{processLabel || "-"}</div>
+                                                                </div>
+                                                                <div className="text-right">
+                                                                    <div className="text-[20px] font-semibold text-rose-500">
+                                                                        {formatHeadcountValue(shortage)}名
+                                                                    </div>
+                                                                    <div className={`text-[10px] ${c.textMuted}`}>不足</div>
+                                                                </div>
+                                                            </div>
+                                                            <div className={`mt-3 text-[11px] ${c.textSecondary}`}>
+                                                                必要 {formatHeadcountValue(row.requiredHeadcount)}名 / 出勤 {row.availableHeadcount}名
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </section>
+                </div>
+            ) : (
             <div className={`flex-1 ${c.bgCard} border ${c.border} rounded-xl overflow-hidden shadow-md flex flex-col`}>
                 <div ref={scrollContainerRef} className={`flex-1 overflow-auto ${bodySurface} custom-scrollbar`}>
                     <table className="w-full text-left border-separate border-spacing-0" style={{ tableLayout: 'fixed', minWidth: 'max-content' }}>
@@ -476,7 +1392,10 @@ export function AttendanceManagement() {
                                     return (
                                         <th
                                             key={h.day}
-                                            onClick={() => toggleDaySelection(h.day)}
+                                            onClick={() => {
+                                                toggleDaySelection(h.day);
+                                                setAnalysisDay(h.day);
+                                            }}
                                             className={`p-2 border-b border-r ${c.border} text-center cursor-pointer transition-all ${
                                                 isHolidayColumn
                                                     ? `${holidayColumnHeaderClass} ${isSelected ? "ring-2 ring-inset ring-cyan-600" : ""}`
@@ -489,20 +1408,8 @@ export function AttendanceManagement() {
                                             style={{ width: CELL_WIDTH, minWidth: CELL_WIDTH }}
                                         >
                                             <div className="flex flex-col items-center">
-                                                <span className={`text-[14px] font-bold ${
-                                                    isHolidayColumn
-                                                        ? "text-gray-900"
-                                                        : isSelected
-                                                            ? (c.isDark ? "text-cyan-300" : "text-cyan-600")
-                                                            : c.textPrimary
-                                                }`}>{h.day}</span>
-                                                <span className={`text-[10px] ${
-                                                    isHolidayColumn
-                                                        ? "text-gray-700"
-                                                        : isSelected
-                                                            ? (c.isDark ? "text-cyan-300/70" : "text-cyan-600/60")
-                                                            : c.textDimmed
-                                                }`}>{["日", "月", "火", "水", "木", "金", "土"][h.dow]}</span>
+                                                <span className={`text-[14px] font-bold ${getDayNumberClass(h.dow, isSelected, h.holidayName)}`}>{h.day}</span>
+                                                <span className={`text-[10px] ${getDayLabelClass(h.dow, isSelected, h.holidayName)}`}>{["日", "月", "火", "水", "木", "金", "土"][h.dow]}</span>
                                             </div>
                                         </th>
                                     );
@@ -560,14 +1467,14 @@ export function AttendanceManagement() {
                                                         const shift = monthlyShifts[worker.id]?.[h.day];
                                                         const isHolidayColumn = h.dow === 0 || h.dow === 6 || !!h.holidayName;
                                                         const isEditing = editingCell?.workerId === worker.id && editingCell?.day === h.day;
-                                                        const isSelectedCell = isRowSelected || selectedDays.has(h.day);
-                                                        const isIntersected = isRowSelected && selectedDays.has(h.day);
+                                                        const cellKey = getCellKey(worker.id, h.day);
+                                                        const isDirectlySelected = selectedCellKeys.has(cellKey);
+                                                        const isSelectedCell = isDirectlySelected || isRowSelected || selectedDays.has(h.day);
+                                                        const isIntersected = isDirectlySelected || (isRowSelected && selectedDays.has(h.day));
                                                         const hasPlan = shift && !shift.isOff;
                                                         const editingCellSurfaceClass = c.isDark ? "bg-cyan-500/18" : "bg-cyan-100";
-                                                        const selectedCellTextClass = isHolidayColumn
-                                                            ? "text-gray-900"
-                                                            : isEditing
-                                                                ? (c.isDark ? "text-cyan-100" : "text-slate-900")
+                                                        const selectedCellTextClass = isEditing
+                                                            ? (c.isDark ? "text-cyan-100" : "text-slate-900")
                                                             : isSelectedCell
                                                                 ? (c.isDark ? "text-cyan-200" : "text-slate-900")
                                                                 : c.textPrimary;
@@ -588,6 +1495,24 @@ export function AttendanceManagement() {
                                                                 }`}
                                                                 style={{ width: CELL_WIDTH }}
                                                             >
+                                                                <button
+                                                                    data-shift-cell={`${worker.id}:${h.day}`}
+                                                                    className={`w-full h-full min-h-[50px] flex flex-col items-center justify-center ${
+                                                                        isEditing
+                                                                            ? editingCellSurfaceClass
+                                                                            : "hover:bg-cyan-500/10"
+                                                                    } transition-colors py-2 gap-0.5`}
+                                                                    onClick={(event) => handleCellClick(event, worker.id, h.day)}
+                                                                >
+                                                                    {hasPlan ? (
+                                                                        <>
+                                                                            <span className={`text-[12px] font-bold tabular-nums ${selectedCellTextClass}`}>{shift.start}</span>
+                                                                            <span className={`text-[12px] font-bold tabular-nums ${selectedCellTextClass}`}>{shift.end}</span>
+                                                                        </>
+                                                                    ) : (
+                                                                        <span className="block h-[18px]" />
+                                                                    )}
+                                                                </button>
                                                                 {isEditing && editingCell ? (
                                                                     <div
                                                                         className={`z-[120] p-4 ${popoverSurface} border-2 border-cyan-500 shadow-2xl rounded-xl flex flex-col gap-4 animate-in fade-in zoom-in duration-200 backdrop-blur-md`}
@@ -609,39 +1534,28 @@ export function AttendanceManagement() {
                                                                                         className={`text-[11px] font-bold py-2 rounded-lg transition-all border shadow-sm ${
                                                                                             isActiveTemplate
                                                                                                 ? (c.isDark
-                                                                                                    ? "bg-cyan-500/18 border-cyan-400 text-cyan-100"
-                                                                                                    : "bg-cyan-50 border-cyan-500 text-cyan-700")
-                                                                                                : `${secondaryButtonClass} hover:bg-cyan-500/12 hover:border-cyan-500 hover:text-cyan-700`
+                                                                                                    ? "bg-[#155DFC]/18 border-[#155DFC]/50 text-[#A9C5FF]"
+                                                                                                    : "bg-[#EEF4FF] border-[#155DFC] text-[#155DFC]")
+                                                                                                : `${secondaryButtonClass} hover:bg-[#155DFC]/12 hover:border-[#155DFC] hover:text-[#155DFC]`
                                                                                         }`}
                                                                                     >
                                                                                         {t.label}
                                                                                     </button>
                                                                                 );
                                                                             })}
+                                                                            <button
+                                                                                onClick={() => handleShiftUpdate(worker.id, h.day, { start: "", end: "", isOff: true })}
+                                                                                className={`text-[11px] font-bold py-2 rounded-lg transition-all border shadow-sm ${
+                                                                                    shift?.isOff
+                                                                                        ? "bg-rose-500 text-white border-rose-600"
+                                                                                        : `${secondaryButtonClass} hover:bg-rose-500/10 hover:border-rose-400 hover:text-rose-500`
+                                                                                }`}
+                                                                            >
+                                                                                休
+                                                                            </button>
                                                                         </div>
-                                                                        <div className={`flex items-center gap-2 mt-2 pt-2 border-t ${c.borderCard}`}><button onClick={() => handleShiftUpdate(worker.id, h.day, { isOff: !shift?.isOff })} className={`flex-1 flex items-center justify-center gap-2 text-[12px] font-bold py-2.5 px-3 border rounded-lg transition-all ${shift?.isOff ? "bg-rose-500 text-white border-rose-600 shadow-lg" : `${secondaryButtonClass} hover:border-rose-400 hover:text-rose-500`}`}><CalendarX className="w-4 h-4" />{shift?.isOff ? "休日 (設定中)" : "休日に設定"}</button><button onClick={() => setEditingCell(null)} className="flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 text-white p-2.5 rounded-lg shadow-lg transition-all active:scale-95"><CheckCircle2 className="w-5 h-5" /></button></div>
                                                                     </div>
-                                                                ) : (
-                                                                    <button
-                                                                        data-shift-cell={`${worker.id}:${h.day}`}
-                                                                        className={`w-full h-full min-h-[50px] flex flex-col items-center justify-center ${
-                                                                            isHolidayColumn
-                                                                                ? "hover:bg-gray-300/80"
-                                                                                : isEditing
-                                                                                    ? editingCellSurfaceClass
-                                                                                    : "hover:bg-cyan-500/10"
-                                                                        } transition-colors py-2 gap-0.5`}
-                                                                        onClick={(event) =>
-                                                                            setEditingCell({
-                                                                                workerId: worker.id,
-                                                                                day: h.day,
-                                                                                anchorRect: captureAnchorRect(event.currentTarget.getBoundingClientRect()),
-                                                                            })
-                                                                        }
-                                                                    >
-                                                                        {hasPlan ? (<><span className={`text-[12px] font-bold tabular-nums ${selectedCellTextClass}`}>{shift.start}</span><span className={`text-[12px] font-bold tabular-nums ${selectedCellTextClass}`}>{shift.end}</span></>) : shift?.isOff ? (<span className={`text-[13px] font-black ${isHolidayColumn ? "text-gray-800" : isEditing ? (c.isDark ? "text-cyan-100" : "text-slate-900") : isSelectedCell ? (c.isDark ? "text-cyan-200" : "text-slate-900") : "text-rose-500/40"}`}>休</span>) : (<span className={`${isHolidayColumn ? "text-gray-600" : isEditing ? (c.isDark ? "text-cyan-100" : "text-slate-700") : isSelectedCell ? (c.isDark ? "text-cyan-200" : "text-slate-700") : c.textDimmed} text-[12px]`}>-</span>)}
-                                                                    </button>
-                                                                )}
+                                                                ) : null}
                                                             </td>
                                                         );
                                                     })}
@@ -671,11 +1585,45 @@ export function AttendanceManagement() {
                                             }`}
                                             style={{ width: CELL_WIDTH }}
                                         >
-                                            <div className={`text-[15px] ${isHolidayColumn ? "text-gray-900" : count > 0 ? (c.isDark ? "text-cyan-300" : "text-cyan-600 shadow-sm") : c.textDimmed}`}>{count}</div>
+                                            <div className={`text-[15px] ${count > 0 ? (c.isDark ? "text-cyan-300" : "text-cyan-600 shadow-sm") : c.textDimmed}`}>{count}</div>
                                         </td>
                                     );
                                 })}
                                 <td className={`p-3 border-t ${c.border} sticky right-0 z-50 ${raisedSurface} shadow-[-4px_0_12px_-4px_rgba(0,0,0,0.15)]`} style={{ width: '80px' }}></td>
+                            </tr>
+                            <tr className={raisedSurface}>
+                                <td className={`p-3 border-t border-r ${c.border} sticky left-0 z-50 ${raisedSurface} text-[13px] font-bold ${c.textSecondary}`} style={{ width: SIDEBAR_WIDTH }}>
+                                    人時 (Hours)
+                                </td>
+                                {dayHeaders.map(h => {
+                                    const hours = getDailyScheduledHours(h.day);
+                                    const isHolidayColumn = h.dow === 0 || h.dow === 6 || !!h.holidayName;
+                                    return (
+                                        <td
+                                            key={h.day}
+                                            className={`p-2 border-t border-r ${c.border} text-center font-black ${
+                                                isHolidayColumn
+                                                    ? `${holidayColumnCellClass} ${selectedDays.has(h.day) ? "ring-1 ring-inset ring-cyan-600" : ""}`
+                                                    : selectedDays.has(h.day)
+                                                        ? "bg-cyan-500/10"
+                                                        : ""
+                                            }`}
+                                            style={{ width: CELL_WIDTH }}
+                                        >
+                                            <div className={`text-[13px] ${c.textPrimary}`}>
+                                                {hours}
+                                                <span className={`ml-0.5 text-[10px] font-normal ${c.textMuted}`}>h</span>
+                                            </div>
+                                        </td>
+                                    );
+                                })}
+                                <td
+                                    className={`p-3 border-t ${c.border} sticky right-0 z-50 ${raisedSurface} text-center font-bold text-[13px] ${c.textPrimary} shadow-[-4px_0_12px_-4px_rgba(0,0,0,0.15)]`}
+                                    style={{ width: '80px' }}
+                                >
+                                    {getMonthlyScheduledHoursTotal()}
+                                    <span className={`ml-0.5 text-[10px] font-normal ${c.textMuted}`}>h</span>
+                                </td>
                             </tr>
                         </tfoot>
                     </table>
@@ -689,7 +1637,7 @@ export function AttendanceManagement() {
                                 <Zap className="w-4 h-4 fill-cyan-500" />
                                 <span className="text-[12px] font-black uppercase tracking-wider">一括編集モード</span>
                             </div>
-                            <span className={`text-[11px] ${c.textSecondary} font-bold whitespace-nowrap`}>{selectedWorkerIds.size}名 × {selectedDays.size}日分を選択中</span>
+                            <span className={`text-[11px] ${c.textSecondary} font-bold whitespace-nowrap`}>{selectedTargetKeys.size}セルを選択中</span>
                         </div>
 
                         <div className="flex items-center gap-4">
@@ -700,7 +1648,7 @@ export function AttendanceManagement() {
                                         <button
                                             key={t.label}
                                             onClick={() => applyBulkShift(t.s, t.e, false)}
-                                            className={`px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all shadow-sm active:scale-95 ${c.isDark ? "bg-cyan-500/10 border border-cyan-500/30 text-cyan-200" : "bg-cyan-50 border border-cyan-200 text-cyan-700"} hover:bg-cyan-500 hover:text-white`}
+                                            className={`px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all shadow-sm active:scale-95 ${c.isDark ? "bg-[#155DFC]/10 border border-[#155DFC]/30 text-[#A9C5FF]" : "bg-[#EEF4FF] border border-[#B7CDFF] text-[#155DFC]"} hover:bg-[#155DFC] hover:text-white`}
                                         >
                                             {t.label}
                                         </button>
@@ -729,19 +1677,14 @@ export function AttendanceManagement() {
                 )}
 
                 {/* Footer Legend */}
-                <div className={`px-6 py-4 border-t ${c.border} ${raisedSurface} flex items-center justify-between text-[12px]`}>
-                    <div className="flex items-center gap-8">
-                        <div className="flex items-center gap-2">
-                            <span className="text-gray-800 font-bold text-[14px]">● 土日祝</span>
-                            <span className={c.textSecondary}>土日祝列はグレー背景で表示</span>
-                        </div>
-                        <div className={`flex items-center gap-2 px-3 py-1 rounded-lg border ${c.bgCard} ${c.isDark ? "text-cyan-300" : "text-cyan-600"} font-bold shadow-sm`}>
-                            <Info className="w-4 h-4" />
-                            <span>左上のチェックや日付クリックで範囲選択 → 一括編集が可能</span>
-                        </div>
+                <div className={`px-6 py-4 border-t ${c.border} ${raisedSurface} flex items-center justify-end text-[12px]`}>
+                    <div className={`flex items-center gap-2 px-3 py-1 rounded-lg border ${c.bgCard} ${c.isDark ? "text-cyan-300" : "text-cyan-600"} font-bold shadow-sm`}>
+                        <Info className="w-4 h-4" />
+                        <span>左上チェック・日付クリックに加えて、Ctrl/Cmd + セルクリックでも複数選択して一括編集できます</span>
                     </div>
                 </div>
             </div>
+            )}
         </div>
     );
 }
