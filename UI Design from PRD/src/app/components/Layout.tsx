@@ -1,9 +1,6 @@
-﻿import { Box, Typography } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { Outlet, useLocation } from "react-router";
 import { Sidebar } from "./Sidebar";
-import { ThemeProvider } from "./ThemeContext";
-import { AssignmentProvider } from "./AssignmentContext";
-import { MasterDataProvider } from "./MasterDataContext";
 import { TopBar } from "./TopBar";
 
 function LayoutInner() {
@@ -44,13 +41,5 @@ function LayoutInner() {
 }
 
 export function Layout() {
-  return (
-    <ThemeProvider>
-      <MasterDataProvider>
-        <AssignmentProvider>
-          <LayoutInner />
-        </AssignmentProvider>
-      </MasterDataProvider>
-    </ThemeProvider>
-  );
+  return <LayoutInner />;
 }

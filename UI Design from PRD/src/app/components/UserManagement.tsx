@@ -252,44 +252,44 @@ const TEAM_COLOR_OPTIONS = [
   {
     id: "blue",
     name: "ブルー",
-    avatarClass: "bg-[#EEF4FF] text-[#155DFC] border border-[#B7CDFF]",
-    accentClass: "bg-[#155DFC]",
-    chipClass: "border-[#B7CDFF] bg-[#EEF4FF] text-[#155DFC]",
+    avatarStyle: { backgroundColor: "#EEF4FF", color: "#155DFC", borderColor: "#B7CDFF" },
+    accentStyle: { backgroundColor: "#155DFC" },
+    chipStyle: { borderColor: "#B7CDFF", backgroundColor: "#EEF4FF", color: "#155DFC" },
   },
   {
     id: "emerald",
     name: "グリーン",
-    avatarClass: "bg-emerald-50 text-emerald-600 border border-emerald-200",
-    accentClass: "bg-emerald-500",
-    chipClass: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    avatarStyle: { backgroundColor: "#ECFDF5", color: "#059669", borderColor: "#A7F3D0" },
+    accentStyle: { backgroundColor: "#10B981" },
+    chipStyle: { borderColor: "#A7F3D0", backgroundColor: "#ECFDF5", color: "#047857" },
   },
   {
     id: "violet",
     name: "バイオレット",
-    avatarClass: "bg-violet-50 text-violet-600 border border-violet-200",
-    accentClass: "bg-violet-500",
-    chipClass: "border-violet-200 bg-violet-50 text-violet-700",
+    avatarStyle: { backgroundColor: "#F5F3FF", color: "#7C3AED", borderColor: "#DDD6FE" },
+    accentStyle: { backgroundColor: "#8B5CF6" },
+    chipStyle: { borderColor: "#DDD6FE", backgroundColor: "#F5F3FF", color: "#6D28D9" },
   },
   {
     id: "amber",
     name: "アンバー",
-    avatarClass: "bg-amber-50 text-amber-600 border border-amber-200",
-    accentClass: "bg-amber-500",
-    chipClass: "border-amber-200 bg-amber-50 text-amber-700",
+    avatarStyle: { backgroundColor: "#FFFBEB", color: "#D97706", borderColor: "#FDE68A" },
+    accentStyle: { backgroundColor: "#F59E0B" },
+    chipStyle: { borderColor: "#FDE68A", backgroundColor: "#FFFBEB", color: "#B45309" },
   },
   {
     id: "rose",
     name: "ローズ",
-    avatarClass: "bg-rose-50 text-rose-600 border border-rose-200",
-    accentClass: "bg-rose-500",
-    chipClass: "border-rose-200 bg-rose-50 text-rose-700",
+    avatarStyle: { backgroundColor: "#FFF1F2", color: "#E11D48", borderColor: "#FECDD3" },
+    accentStyle: { backgroundColor: "#F43F5E" },
+    chipStyle: { borderColor: "#FECDD3", backgroundColor: "#FFF1F2", color: "#BE123C" },
   },
   {
     id: "slate",
     name: "グレー",
-    avatarClass: "bg-slate-100 text-slate-500 border border-slate-200",
-    accentClass: "bg-slate-400",
-    chipClass: "border-slate-200 bg-slate-100 text-slate-600",
+    avatarStyle: { backgroundColor: "#F1F5F9", color: "#64748B", borderColor: "#CBD5E1" },
+    accentStyle: { backgroundColor: "#94A3B8" },
+    chipStyle: { borderColor: "#CBD5E1", backgroundColor: "#F1F5F9", color: "#475569" },
   },
 ] as const;
 const DEFAULT_TEAM_COLOR_ID = TEAM_COLOR_OPTIONS[0].id;
@@ -330,6 +330,38 @@ function readTeamsFromStorage(): ManagementTeam[] {
   } catch {
     return [];
   }
+}
+
+function assignUserToSingleTeam(teams: ManagementTeam[], userId: string, nextTeamId: string) {
+  return teams.map((team) => {
+    const filteredMemberIds = team.memberUserIds.filter((memberId) => memberId !== userId);
+    if (team.id === nextTeamId) {
+      return { ...team, memberUserIds: [...filteredMemberIds, userId] };
+    }
+    return filteredMemberIds.length === team.memberUserIds.length
+      ? team
+      : { ...team, memberUserIds: filteredMemberIds };
+  });
+}
+
+function upsertTeamWithExclusiveMembers(teams: ManagementTeam[], nextTeam: ManagementTeam) {
+  const exclusiveMemberIds = Array.from(new Set(nextTeam.memberUserIds));
+  let replaced = false;
+
+  const normalizedTeams = teams.map((team) => {
+    if (team.id === nextTeam.id) {
+      replaced = true;
+      return { ...nextTeam, memberUserIds: exclusiveMemberIds };
+    }
+
+    const filteredMemberIds = team.memberUserIds.filter((memberId) => !exclusiveMemberIds.includes(memberId));
+    return filteredMemberIds.length === team.memberUserIds.length
+      ? team
+      : { ...team, memberUserIds: filteredMemberIds };
+  });
+
+  if (replaced) return normalizedTeams;
+  return [...normalizedTeams, { ...nextTeam, memberUserIds: exclusiveMemberIds }];
 }
 
 function CapabilityIconChip({
@@ -478,6 +510,7 @@ export function UserManagement() {
   );
   const [newUserEmploymentType, setNewUserEmploymentType] = useState<"正社員" | "パートナー" | "派遣">("正社員");
   const [newUserDispatchCompanyId, setNewUserDispatchCompanyId] = useState(defaultMasterData.dispatchCompanies[0]?.id ?? "");
+  const [newUserTeamId, setNewUserTeamId] = useState("");
   const [newUserStatus, setNewUserStatus] = useState<"active" | "inactive">("active");
   const [newUserUnitPrice, setNewUserUnitPrice] = useState(String(DEFAULT_USER_UNIT_PRICE));
 
@@ -556,20 +589,6 @@ export function UserManagement() {
   const getRoleName = (roleId: string) => roles.find((r) => r.id === roleId)?.name ?? "不明";
   const getRoleColor = (roleId: string) => roles.find((r) => r.id === roleId)?.color ?? "text-gray-400";
   const selectedTeam = teamDialogMode === "edit" && editingTeamId ? teams.find((team) => team.id === editingTeamId) : null;
-  const teamMemberOptions = useMemo(
-    () => users.map((user) => ({ id: user.id, name: `${user.name} (${user.email})` })),
-    [users],
-  );
-  const filteredTeams = useMemo(() => {
-    const keyword = teamSearchTerm.trim().toLowerCase();
-    if (!keyword) return teams;
-    return teams.filter((team) => {
-      const memberNames = team.memberUserIds
-        .map((memberId) => users.find((user) => user.id === memberId)?.name ?? "")
-        .join(" ");
-      return `${team.name} ${team.description} ${memberNames}`.toLowerCase().includes(keyword);
-    });
-  }, [teamSearchTerm, teams, users]);
   const userTeamMap = useMemo(() => {
     const map = new Map<string, ManagementTeam>();
     teams.forEach((team) => {
@@ -585,16 +604,37 @@ export function UserManagement() {
     const team = userTeamMap.get(userId);
     if (!team) {
       return {
-        avatarClass: "bg-slate-100 text-slate-500 border border-slate-200",
-        chipClass: "border-slate-200 bg-slate-100 text-slate-600",
+        avatarStyle: { backgroundColor: "#F1F5F9", color: "#64748B", borderColor: "#CBD5E1" },
+        chipStyle: { borderColor: "#CBD5E1", backgroundColor: "#F1F5F9", color: "#475569" },
       };
     }
     const option = getTeamColorOption(team.themeColor);
     return {
-      avatarClass: option.avatarClass,
-      chipClass: option.chipClass,
+      avatarStyle: option.avatarStyle,
+      chipStyle: option.chipStyle,
     };
   };
+  const teamMemberOptions = useMemo(
+    () =>
+      users.map((user) => {
+        const team = userTeamMap.get(user.id);
+        return {
+          id: user.id,
+          name: team ? `${user.name} (${user.email}) - ${team.name}` : `${user.name} (${user.email})`,
+        };
+      }),
+    [userTeamMap, users],
+  );
+  const filteredTeams = useMemo(() => {
+    const keyword = teamSearchTerm.trim().toLowerCase();
+    if (!keyword) return teams;
+    return teams.filter((team) => {
+      const memberNames = team.memberUserIds
+        .map((memberId) => users.find((user) => user.id === memberId)?.name ?? "")
+        .join(" ");
+      return `${team.name} ${team.description} ${memberNames}`.toLowerCase().includes(keyword);
+    });
+  }, [teamSearchTerm, teams, users]);
 
   const resetNewUserForm = () => {
     setNewUserName("");
@@ -602,6 +642,7 @@ export function UserManagement() {
     setNewUserRoleIds(initialRoles[3]?.id ?? initialRoles[0]?.id ?? "" ? [initialRoles[3]?.id ?? initialRoles[0]?.id ?? ""] : []);
     setNewUserEmploymentType("正社員");
     setNewUserDispatchCompanyId("");
+    setNewUserTeamId("");
     setNewUserStatus("active");
     setNewUserUnitPrice(String(DEFAULT_USER_UNIT_PRICE));
   };
@@ -651,6 +692,7 @@ export function UserManagement() {
     setNewUserRoleIds(user.roleIds.length > 0 ? user.roleIds : (initialRoles[3]?.id ?? initialRoles[0]?.id ?? "" ? [initialRoles[3]?.id ?? initialRoles[0]?.id ?? ""] : []));
     setNewUserEmploymentType(user.employmentType);
     setNewUserDispatchCompanyId(user.dispatchCompanyId ?? "");
+    setNewUserTeamId(userTeamMap.get(user.id)?.id ?? "");
     setNewUserStatus(user.status === "locked" ? "inactive" : user.status);
     setNewUserUnitPrice(String(user.unitPrice));
     setEditingUserId(user.id);
@@ -714,6 +756,7 @@ export function UserManagement() {
           };
         }),
       );
+      setTeams((prev) => assignUserToSingleTeam(prev, editingUserId, newUserTeamId));
       showToast("ユーザーを更新しました");
       closeUserDialog();
       return;
@@ -744,6 +787,9 @@ export function UserManagement() {
         performance: { uph: 0, attendanceRate: 0 },
       },
     ]);
+    if (newUserTeamId) {
+      setTeams((prev) => assignUserToSingleTeam(prev, nextId, newUserTeamId));
+    }
     closeUserDialog();
     showToast("ユーザーを追加しました");
   };
@@ -773,34 +819,30 @@ export function UserManagement() {
 
     if (teamDialogMode === "edit" && editingTeamId) {
       setTeams((prev) =>
-        prev.map((team) =>
-          team.id === editingTeamId
-            ? {
-                ...team,
-                name,
-                description,
-                memberUserIds: newTeamMemberIds,
-                themeColor: newTeamThemeColor,
-              }
-            : team,
-        ),
+        upsertTeamWithExclusiveMembers(prev, {
+          id: editingTeamId,
+          name,
+          description,
+          memberUserIds: newTeamMemberIds,
+          themeColor: newTeamThemeColor,
+          createdAt: selectedTeam?.createdAt ?? new Date().toISOString().slice(0, 10),
+        }),
       );
       showToast("チームを更新しました");
       closeTeamDialog();
       return;
     }
 
-    setTeams((prev) => [
-      ...prev,
-      {
+    setTeams((prev) =>
+      upsertTeamWithExclusiveMembers(prev, {
         id: `team-${Date.now()}`,
         name,
         description,
         memberUserIds: newTeamMemberIds,
         themeColor: newTeamThemeColor,
         createdAt: new Date().toISOString().slice(0, 10),
-      },
-    ]);
+      }),
+    );
     showToast("チームを追加しました");
     closeTeamDialog();
   };
@@ -1084,10 +1126,10 @@ export function UserManagement() {
       {/* ═══════════════════════════════════ */}
       {activeTab === "users" && (
         <div className="min-h-0 flex-1 pt-4">
-          <div className="grid h-full min-h-0 gap-4 grid-cols-1">
-          {/* User List */}
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <div className={`${cardClass} flex-1 overflow-hidden`}>
+          <div className="grid h-full min-h-0 grid-cols-1 gap-4">
+            {/* User List */}
+            <div className="min-h-0">
+              <div className={`${cardClass} flex h-full min-h-0 flex-col overflow-hidden`}>
               {/* Filters */}
               <div className={`border-b px-5 py-4 ${c.border}`}>
                 <div className="grid items-center gap-3 xl:grid-cols-[minmax(260px,1.35fr)_repeat(4,minmax(120px,0.72fr))_auto]">
@@ -1144,7 +1186,7 @@ export function UserManagement() {
               </div>
 
               {/* Table */}
-              <div className="flex-1 overflow-auto">
+              <div className="min-h-0 flex-1 overflow-auto">
                 <table className="w-full">
                   <thead className={`sticky top-0 z-10 backdrop-blur ${c.bgSurface}`}>
                     <tr className={`border-b ${c.border}`}>
@@ -1171,7 +1213,10 @@ export function UserManagement() {
                         >
                           <td className="px-5 py-4">
                             <div className="flex items-center gap-3">
-                              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-[13px] shrink-0 ${avatarTone.avatarClass}`}>
+                              <div
+                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-[13px]"
+                                style={avatarTone.avatarStyle}
+                              >
                                 {user.avatar}
                               </div>
                               <div className="min-w-0">
@@ -1386,6 +1431,21 @@ export function UserManagement() {
                           派遣以外の雇用形態では派遣会社の指定は不要です
                         </div>
                       )}
+                    </label>
+                    <label className="grid gap-1.5">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>チーム</span>
+                      <select
+                        value={newUserTeamId}
+                        onChange={(event) => setNewUserTeamId(event.target.value)}
+                        className={selectClass}
+                      >
+                        <option value="">{teams.length === 0 ? "チーム未登録" : "未所属"}</option>
+                        {teams.map((team) => (
+                          <option key={team.id} value={team.id}>
+                            {team.name}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                   </div>
                 </div>
@@ -1689,7 +1749,7 @@ export function UserManagement() {
                                   : `${c.borderCard} ${c.bgSurface} ${c.textSecondary}`
                               }`}
                             >
-                              <span className={`inline-flex h-4 w-4 rounded-full ${option.accentClass}`} />
+                              <span className="inline-flex h-4 w-4 rounded-full" style={option.accentStyle} />
                               {option.name}
                             </button>
                           );
@@ -1714,7 +1774,10 @@ export function UserManagement() {
                             key={memberId}
                             className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] ${c.borderCard} ${c.bgSurface} ${c.textPrimary}`}
                           >
-                            <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-[10px] ${getUserAvatarTone(member.id).avatarClass}`}>
+                            <span
+                              className="inline-flex h-6 w-6 items-center justify-center rounded-full border text-[10px]"
+                              style={getUserAvatarTone(member.id).avatarStyle}
+                            >
                               {member.avatar}
                             </span>
                             {member.name}
@@ -1740,8 +1803,11 @@ export function UserManagement() {
                     <div className={`${panelClass} p-4 md:col-span-2`}>
                       <div className={`text-[11px] ${c.textMuted}`}>テーマカラー</div>
                       <div className="mt-2">
-                        <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px] ${getTeamColorOption(selectedTeam.themeColor).chipClass}`}>
-                          <span className={`inline-flex h-4 w-4 rounded-full ${getTeamColorOption(selectedTeam.themeColor).accentClass}`} />
+                        <span
+                          className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[12px]"
+                          style={getTeamColorOption(selectedTeam.themeColor).chipStyle}
+                        >
+                          <span className="inline-flex h-4 w-4 rounded-full" style={getTeamColorOption(selectedTeam.themeColor).accentStyle} />
                           {getTeamColorOption(selectedTeam.themeColor).name}
                         </span>
                       </div>
@@ -1806,7 +1872,7 @@ export function UserManagement() {
                     >
                       <td className="px-5 py-4 align-top">
                         <div className="flex items-center gap-2">
-                          <span className={`inline-flex h-3 w-3 rounded-full ${getTeamColorOption(team.themeColor).accentClass}`} />
+                          <span className="inline-flex h-3 w-3 rounded-full" style={getTeamColorOption(team.themeColor).accentStyle} />
                           <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{team.name}</div>
                         </div>
                         <div className={`mt-1 text-[11px] ${c.textMuted}`}>{team.id}</div>
@@ -1825,7 +1891,10 @@ export function UserManagement() {
                                   key={memberId}
                                   className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-[11px] ${c.borderCard} ${c.bgSurface} ${c.textPrimary}`}
                                 >
-                                  <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] ${getUserAvatarTone(member.id).avatarClass}`}>
+                                  <span
+                                    className="inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px]"
+                                    style={getUserAvatarTone(member.id).avatarStyle}
+                                  >
                                     {member.avatar}
                                   </span>
                                   {member.name}
@@ -2067,7 +2136,12 @@ export function UserManagement() {
                         const avatarTone = getUserAvatarTone(u.id);
                         return (
                           <div key={u.id} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${c.border} ${c.bgSurface}`}>
-                            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] ${avatarTone.avatarClass}`}>{u.avatar}</div>
+                            <div
+                              className="flex h-6 w-6 items-center justify-center rounded-full border text-[10px]"
+                              style={avatarTone.avatarStyle}
+                            >
+                              {u.avatar}
+                            </div>
                             <span className={`text-[12px] ${c.textPrimary}`}>{u.name}</span>
                             <div className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
                           </div>

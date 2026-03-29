@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import {
   ArrowLeft,
@@ -61,8 +61,9 @@ function formatTimeRange(startTime: string, endTime: string) {
 }
 
 function formatDuration(minutes: number) {
-  const hours = Math.floor(minutes / 60);
-  const restMinutes = minutes % 60;
+  const safeMinutes = Math.max(0, minutes);
+  const hours = Math.floor(safeMinutes / 60);
+  const restMinutes = safeMinutes % 60;
   if (hours > 0) return `${hours}時間${restMinutes}分`;
   return `${restMinutes}分`;
 }
@@ -73,7 +74,7 @@ function formatNotificationTime(value: string) {
 }
 
 function formatCount(value: number) {
-  return `${value.toLocaleString("ja-JP")} 個`;
+  return `${value.toLocaleString("ja-JP")}件`;
 }
 
 function getTaskStatusClass(status: WorkerTaskProgressEntry["status"]) {
@@ -87,6 +88,35 @@ function getTaskStatusClass(status: WorkerTaskProgressEntry["status"]) {
     default:
       return "bg-blue-500/15 text-blue-500";
   }
+}
+
+function getTaskStatusLabel(status: WorkerTaskProgressEntry["status"]) {
+  switch (status) {
+    case "working":
+      return "稼働中";
+    case "paused":
+      return "中断中";
+    case "completed":
+      return "完了";
+    default:
+      return "未着手";
+  }
+}
+
+function formatTaskDuration(minutes: number) {
+  const safeMinutes = Math.max(0, minutes);
+  const hours = Math.floor(safeMinutes / 60);
+  const restMinutes = safeMinutes % 60;
+  if (hours > 0) return `${hours}時間${restMinutes}分`;
+  return `${restMinutes}分`;
+}
+
+function formatTaskCount(value: number) {
+  return `${value.toLocaleString("ja-JP")}件`;
+}
+
+function formatHourBalance(minutes: number) {
+  return `${(Math.max(0, minutes) / 60).toFixed(1)}h`;
 }
 
 export function WorkerView() {
@@ -232,6 +262,7 @@ export function WorkerView() {
     if ((taskProgress[task.id]?.status ?? "pending") !== "completed") return sum;
     return sum + task.durationMinutes;
   }, 0);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
 
   const updateTaskStatus = (taskId: string, status: WorkerTaskProgressEntry["status"]) => {
     const nowIso = new Date().toISOString();
@@ -483,7 +514,7 @@ export function WorkerView() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className={`text-[12px] font-semibold ${c.textMuted}`}>WORKER DEMO LOGIN</div>
-                <div className={`mt-1 text-[24px] font-semibold ${c.textPrimary}`}>作業員ログイン</div>
+                <div className={`mt-1 text-[24px] font-semibold ${c.textPrimary}`}>菴懈･ｭ蜩｡繝ｭ繧ｰ繧､繝ｳ</div>
               </div>
             </div>
 
@@ -542,8 +573,7 @@ export function WorkerView() {
                 className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-4 text-[14px] font-semibold text-white"
               >
                 <LogIn className="h-4 w-4" />
-                ログインして作業開始
-              </button>
+                ログインして作業開始</button>
             </form>
           </div>
         </div>,
@@ -564,7 +594,7 @@ export function WorkerView() {
             </button>
 
             <div className="min-w-0 flex-1 text-center">
-              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentUserDetail?.name ?? currentWorker?.name ?? "作業員"}</div>
+              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentUserDetail?.name ?? currentWorker?.name ?? "菴懈･ｭ蜩｡"}</div>
               <div className={`truncate text-[12px] ${c.textSecondary}`}>{siteName}</div>
             </div>
 
@@ -585,32 +615,211 @@ export function WorkerView() {
 
         <main className={`flex flex-1 flex-col px-5 ${currentScreen === "input" ? "overflow-hidden py-3" : "overflow-y-auto py-5"}`}>
           {currentScreen === "list" ? (
-            <div className={`rounded-3xl border px-4 py-4 ${c.bgSurface} ${c.borderCard}`}>
-              <div className="flex items-start justify-between gap-3">
+            <section className="mt-5">
+              <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
-                  <div className={`text-[12px] ${c.textMuted}`}>本日の工程サマリー</div>
-                  <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>今日の担当工程を順番に進めます</div>
+                  <h2 className={`text-[18px] font-semibold ${c.textPrimary}`}>今日の担当タスク</h2>
+                  <div className={`text-[12px] ${c.textMuted}`}>現在の担当と次の予定を、見やすいカードで確認できます。</div>
                 </div>
-                <div className={`rounded-full px-3 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
-                  {now.toLocaleDateString("ja-JP", { month: "numeric", day: "numeric", weekday: "short" })}
-                </div>
+                {activeInputTask ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedTaskId(activeInputTask.id);
+                      setCurrentScreen("input");
+                    }}
+                    className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-3 py-2 text-[12px] font-semibold text-white"
+                  >
+                    入力を再開
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
 
-              <div className="mt-4 grid grid-cols-3 gap-3">
-                <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
-                  <div className={`text-[11px] ${c.textMuted}`}>総工程数</div>
-                  <div className={`mt-2 text-[22px] font-semibold ${c.textPrimary}`}>{tasks.length}</div>
+              {tasks.length === 0 ? (
+                <div className={`rounded-3xl border px-4 py-8 text-center ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[15px] font-semibold ${c.textPrimary}`}>今日の担当タスクはありません</div>
+                  <div className={`mt-2 text-[13px] ${c.textSecondary}`}>配置が更新されると、ここに担当予定が表示されます。</div>
                 </div>
-                <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
-                  <div className={`text-[11px] ${c.textMuted}`}>完了</div>
-                  <div className="mt-2 text-[22px] font-semibold text-emerald-500">{completedCount}</div>
+              ) : (
+                <div className="space-y-3">
+                  {tasks.map((task, index) => {
+                    const tone = processColorClasses[task.color] ?? processColorClasses.cyan;
+                    const status = taskProgress[task.id]?.status ?? "pending";
+                    const nextTask = tasks[index + 1] ?? null;
+                    const reportedQuantity = getWorkerTaskReportedQuantity(taskProgress[task.id]);
+                    const submissionCount = getWorkerTaskSubmissionLogs(taskProgress[task.id]).length;
+                    const lastReportedAt = getWorkerTaskLastReportedAt(taskProgress[task.id]);
+                    const isCurrentSlot =
+                      status === "working" ||
+                      status === "paused" ||
+                      (status !== "completed" && task.startMinutes <= currentMinutes && currentMinutes < task.endMinutes);
+                    const elapsedMinutes = isCurrentSlot
+                      ? currentMinutes - task.startMinutes
+                      : currentMinutes >= task.endMinutes
+                        ? task.durationMinutes
+                        : 0;
+                    const progressPercent =
+                      status === "completed"
+                        ? 100
+                        : Math.min(100, Math.max(0, Math.round((elapsedMinutes / Math.max(task.durationMinutes, 1)) * 100)));
+                    const remainingMinutes =
+                      status === "completed"
+                        ? 0
+                        : isCurrentSlot
+                          ? Math.max(task.endMinutes - currentMinutes, 0)
+                          : task.durationMinutes;
+                    const cardClass = c.isDark
+                      ? "bg-[#232320] border-white/10 shadow-[0_14px_34px_rgba(0,0,0,0.28)]"
+                      : "bg-white border-slate-200 shadow-[0_14px_34px_rgba(15,23,42,0.08)]";
+                    const blockClass = c.isDark ? "bg-[#2a313f] border-[#35517a]" : "bg-slate-50 border-slate-200";
+                    const metricClass = c.isDark ? "bg-[#1d1d1a] border-white/6" : "bg-slate-50 border-slate-200";
+                    const emptyBlockClass = c.isDark ? "border-amber-500/60 bg-[#2a2416]" : "border-amber-300 bg-amber-50";
+
+                    return (
+                      <article
+                        key={task.id}
+                        className={`rounded-[26px] border px-4 py-4 ${status === "completed" ? "opacity-85" : ""} ${cardClass}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-[15px] font-semibold ${tone.bg} ${tone.border} ${tone.text}`}>
+                              {task.processName.slice(0, 1)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className={`truncate text-[20px] font-semibold ${c.textPrimary}`}>{task.processName}</div>
+                              <div className={`truncate text-[12px] ${c.textSecondary}`}>
+                                {task.workflowName}・{task.shipperName}
+                              </div>
+                              <div className={`mt-0.5 text-[12px] ${c.textMuted}`}>残 {formatHourBalance(remainingMinutes)}</div>
+                            </div>
+                          </div>
+                          <div className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${getTaskStatusClass(status)}`}>
+                            {getTaskStatusLabel(status)}
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>{task.workflowName}</span>
+                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${tone.bg} ${tone.text}`}>{task.siteName}</span>
+                          <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textMuted}`}>No.{task.order}</span>
+                        </div>
+
+                        <div className={`mt-4 rounded-[18px] border px-4 py-3 ${blockClass}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className={`text-[11px] font-medium ${c.textMuted}`}>現在の担当</div>
+                              <div className={`mt-1 truncate text-[16px] font-semibold ${c.textPrimary}`}>{task.processName}</div>
+                              <div className={`mt-1 truncate text-[12px] ${tone.text}`}>{task.shipperName}</div>
+                            </div>
+                            <div className="text-right">
+                              <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{formatTimeRange(task.startTime, task.endTime)}</div>
+                              <div className={`mt-1 text-[11px] ${c.textMuted}`}>{formatTaskDuration(task.durationMinutes)}</div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-center py-2">
+                          <div className={`h-px flex-1 ${c.isDark ? "bg-white/10" : "bg-slate-200"}`} />
+                          <ChevronRight className={`mx-2 h-4 w-4 rotate-90 ${c.textMuted}`} />
+                          <div className={`h-px flex-1 ${c.isDark ? "bg-white/10" : "bg-slate-200"}`} />
+                        </div>
+
+                        {nextTask ? (
+                          <div className={`rounded-[18px] border px-4 py-3 ${c.isDark ? "border-white/10 bg-[#252523]" : "border-slate-200 bg-white/90"}`}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className={`text-[11px] font-medium ${c.textMuted}`}>次の担当</div>
+                                <div className={`mt-1 truncate text-[16px] font-semibold ${c.textPrimary}`}>{nextTask.processName}</div>
+                                <div className={`mt-1 truncate text-[12px] ${c.textSecondary}`}>{nextTask.shipperName}</div>
+                              </div>
+                              <div className={`shrink-0 text-[13px] font-semibold ${c.textPrimary}`}>
+                                {formatTimeRange(nextTask.startTime, nextTask.endTime)}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className={`rounded-[18px] border border-dashed px-4 py-4 text-center ${emptyBlockClass}`}>
+                            <div className={`text-[12px] font-medium ${c.textSecondary}`}>次の配置なし</div>
+                            <div className={`mt-1 text-[12px] ${c.textMuted}`}>このタスクの後は空き時間です</div>
+                          </div>
+                        )}
+
+                        <div className="mt-4">
+                          <div className="flex items-center justify-between text-[12px]">
+                            <span className={c.textSecondary}>時間進捗</span>
+                            <span className={`font-semibold ${c.textPrimary}`}>{progressPercent}%</span>
+                          </div>
+                          <div className={`mt-2 h-1.5 overflow-hidden rounded-full ${c.isDark ? "bg-white/10" : "bg-slate-200"}`}>
+                            <div
+                              className={`h-full rounded-full ${status === "paused" ? "bg-amber-400" : status === "completed" ? "bg-emerald-400" : "bg-[#8bb3ff]"}`}
+                              style={{ width: `${progressPercent}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid grid-cols-3 gap-2.5">
+                          <div className={`rounded-[16px] border px-3 py-3 ${metricClass}`}>
+                            <div className={`text-[11px] ${c.textMuted}`}>送信累計</div>
+                            <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>{formatTaskCount(reportedQuantity)}</div>
+                          </div>
+                          <div className={`rounded-[16px] border px-3 py-3 ${metricClass}`}>
+                            <div className={`text-[11px] ${c.textMuted}`}>送信回数</div>
+                            <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>{submissionCount}回</div>
+                          </div>
+                          <div className={`rounded-[16px] border px-3 py-3 ${metricClass}`}>
+                            <div className={`text-[11px] ${c.textMuted}`}>最終送信</div>
+                            <div className={`mt-1 text-[16px] font-semibold ${lastReportedAt ? c.textPrimary : c.textMuted}`}>
+                              {lastReportedAt ? formatNotificationTime(lastReportedAt) : "ー"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                          {status === "completed" ? (
+                            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-2 text-[12px] font-medium text-emerald-500">
+                              <CheckCircle2 className="h-4 w-4" />
+                              完了済み
+                            </div>
+                          ) : (
+                            <div className={`text-[12px] ${c.textSecondary}`}>
+                              {isCurrentSlot ? "現在このタスクを担当中です" : "開始前のタスクです"}
+                            </div>
+                          )}
+
+                          {status === "completed" ? null : status === "working" || status === "paused" ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTaskId(task.id);
+                                setCurrentScreen("input");
+                              }}
+                              className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[13px] font-semibold text-white"
+                            >
+                              入力を開く
+                              <ChevronRight className="h-4 w-4" />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                updateTaskStatus(task.id, "working");
+                                setSelectedTaskId(task.id);
+                                setCurrentScreen("input");
+                              }}
+                              className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[13px] font-semibold text-white"
+                            >
+                              <Play className="h-4 w-4" />
+                              このタスクを開始
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
-                <div className={`rounded-2xl border px-3 py-3 ${c.bgCard} ${c.borderCard}`}>
-                  <div className={`text-[11px] ${c.textMuted}`}>完了時間</div>
-                  <div className={`mt-2 text-[18px] font-semibold ${c.textPrimary}`}>{formatDuration(completedMinutes)}</div>
-                </div>
-              </div>
-            </div>
+              )}
+            </section>
           ) : null}
 
           {!showAnnouncement && latestChangeNotification && currentScreen === "list" ? (
@@ -624,7 +833,7 @@ export function WorkerView() {
                     <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{latestChangeNotification.title}</div>
                     <div className={`mt-1 text-[13px] leading-6 ${c.textSecondary}`}>{latestChangeNotification.message}</div>
                     <div className={`mt-2 text-[11px] ${c.textMuted}`}>
-                      通知時刻 {formatNotificationTime(latestChangeNotification.deliverAt)}
+                      騾夂衍譎ょ綾 {formatNotificationTime(latestChangeNotification.deliverAt)}
                     </div>
                   </div>
                 </div>
@@ -641,14 +850,13 @@ export function WorkerView() {
                   className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-[13px] font-medium ${c.bgSurface} ${c.borderCard} ${c.textSecondary}`}
                 >
                   <ArrowLeft className="h-4 w-4" />
-                  工程一覧へ戻る
-                </button>
+                  タスク一覧に戻る</button>
               </div>
               <div className={`flex min-h-0 flex-1 flex-col overflow-hidden rounded-[28px] border ${c.borderCard} ${c.bgCard} shadow-xl`}>
                 <div className={`border-b px-4 py-3 ${c.isDark ? "bg-cyan-500/10" : "bg-cyan-50"} ${c.borderCard}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className={`text-[12px] font-semibold ${c.isDark ? "text-cyan-300" : "text-cyan-700"}`}>作業数入力</div>
+                      <div className={`text-[12px] font-semibold ${c.isDark ? "text-cyan-300" : "text-cyan-700"}`}>入力パネル</div>
                       <div className={`mt-1 text-[18px] font-semibold ${c.textPrimary}`}>{displayInputTask.processName}</div>
                       <div className={`mt-1 text-[12px] ${c.textSecondary}`}>{displayInputTask.shipperName}</div>
                     </div>
@@ -657,7 +865,7 @@ export function WorkerView() {
                         ? "bg-emerald-500/15 text-emerald-500"
                         : "bg-amber-500/15 text-amber-500"
                     }`}>
-                      {activeInputStatus === "working" ? "作業中" : "中断中"}
+                      {activeInputStatus === "working" ? "稼働中" : "中断中"}
                     </div>
                   </div>
                   <div className={`mt-2 flex items-center gap-2 text-[12px] ${c.textSecondary}`}>
@@ -673,18 +881,18 @@ export function WorkerView() {
                     <div className={`mt-2 text-[38px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
                       {activeInputQuantity.toLocaleString("ja-JP")}
                     </div>
-                    <div className={`mt-2 text-[13px] ${c.textSecondary}`}>個</div>
+                    <div className={`mt-2 text-[13px] ${c.textSecondary}`}>件</div>
                     <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
                       <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
                         累計 {formatCount(activeInputReportedQuantity)}
                       </div>
                       <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgCard} ${c.textSecondary}`}>
                         送信 {activeInputSubmissionCount} 回
-                      </div>
                     </div>
                     <div className={`mt-2 text-[11px] ${c.textMuted}`}>
                       {activeInputUpdatedAt ? `最終送信 ${formatNotificationTime(activeInputUpdatedAt)}` : "まだ送信していません"}
                     </div>
+                  </div>
                   </div>
 
                   <div className="mt-3 grid grid-cols-4 gap-2">
@@ -752,7 +960,7 @@ export function WorkerView() {
                       <button
                         key={buttonKey}
                         type="button"
-                        aria-label={buttonKey === "backspace" ? "1桁削除" : `${buttonKey} を入力`}
+                        aria-label={buttonKey === "backspace" ? "1桁削除" : buttonKey + " を入力"}
                         disabled={activeInputStatus !== "working"}
                         onClick={() => {
                           if (buttonKey === "backspace") {
@@ -780,7 +988,7 @@ export function WorkerView() {
                         className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-amber-500 px-3 text-[12px] font-semibold text-white"
                       >
                         <Pause className="h-4 w-4" />
-                        作業を中断
+                        菴懈･ｭ繧剃ｸｭ譁ｭ
                       </button>
                     ) : (
                       <button
@@ -789,8 +997,7 @@ export function WorkerView() {
                         className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-3 text-[12px] font-semibold text-white"
                       >
                         <Play className="h-4 w-4" />
-                        作業を再開
-                      </button>
+                        菴懈･ｭ繧貞・髢・                      </button>
                     )}
                     <button
                       type="button"
@@ -823,122 +1030,6 @@ export function WorkerView() {
             </section>
           ) : null}
 
-          {currentScreen === "list" ? (
-            <section className="mt-5">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <h2 className={`text-[18px] font-semibold ${c.textPrimary}`}>本日の工程一覧</h2>
-                  <div className={`text-[12px] ${c.textMuted}`}>管理者が設定した順序で表示します</div>
-                </div>
-                {activeInputTask ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedTaskId(activeInputTask.id);
-                      setCurrentScreen("input");
-                    }}
-                    className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-3 py-2 text-[12px] font-semibold text-white"
-                  >
-                    作業数入力へ
-                    <ChevronRight className="h-4 w-4" />
-                  </button>
-                ) : null}
-              </div>
-
-              {tasks.length === 0 ? (
-                <div className={`rounded-3xl border px-4 py-8 text-center ${c.bgCard} ${c.borderCard}`}>
-                  <div className={`text-[15px] font-semibold ${c.textPrimary}`}>本日の工程はありません</div>
-                  <div className={`mt-2 text-[13px] ${c.textSecondary}`}>管理者の配置設定後に工程が表示されます。</div>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {tasks.map((task) => {
-                    const tone = processColorClasses[task.color] ?? processColorClasses.cyan;
-                    const status = taskProgress[task.id]?.status ?? "pending";
-                    return (
-                      <article
-                        key={task.id}
-                        className={`rounded-3xl border px-4 py-4 ${status === "completed" ? "opacity-80" : ""} ${c.bgCard} ${c.borderCard}`}
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border text-[13px] font-semibold ${tone.bg} ${tone.border} ${tone.text}`}>
-                            {task.order}
-                          </div>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className={`text-[16px] font-semibold ${c.textPrimary}`}>{task.processName}</div>
-                              </div>
-                              <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${getTaskStatusClass(status)}`}>
-                                {status === "completed" ? "完了" : status === "working" ? "作業中" : status === "paused" ? "中断中" : "未着手"}
-                              </div>
-                            </div>
-
-                            <div className={`mt-3 flex items-center gap-2 text-[12px] ${c.textSecondary}`}>
-                              <Clock3 className="h-4 w-4" />
-                              <span>{formatTimeRange(task.startTime, task.endTime)}</span>
-                              <span className={c.textMuted}>/ {formatDuration(task.durationMinutes)}</span>
-                            </div>
-
-                            <div className={`mt-1 text-[12px] ${c.textMuted}`}>{task.shipperName}</div>
-
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>
-                                送信合計 {formatCount(getWorkerTaskReportedQuantity(taskProgress[task.id]))}
-                              </div>
-                              <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textSecondary}`}>
-                                送信 {getWorkerTaskSubmissionLogs(taskProgress[task.id]).length} 回
-                              </div>
-                              {getWorkerTaskLastReportedAt(taskProgress[task.id]) ? (
-                                <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${c.bgSurface} ${c.textMuted}`}>
-                                  最終送信 {formatNotificationTime(getWorkerTaskLastReportedAt(taskProgress[task.id]) ?? "")}
-                                </div>
-                              ) : null}
-                            </div>
-
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              {status === "completed" ? (
-                                <div className="inline-flex items-center gap-2 rounded-2xl bg-emerald-500/10 px-3 py-2 text-[12px] font-medium text-emerald-500">
-                                  <CheckCircle2 className="h-4 w-4" />
-                                  {formatCount(getWorkerTaskReportedQuantity(taskProgress[task.id]))} / {getWorkerTaskSubmissionLogs(taskProgress[task.id]).length} 回送信で完了
-                                </div>
-                              ) : status === "working" || status === "paused" ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedTaskId(task.id);
-                                    setCurrentScreen("input");
-                                  }}
-                                  className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[13px] font-semibold text-white"
-                                >
-                                  作業数入力を開く
-                                  <ChevronRight className="h-4 w-4" />
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    updateTaskStatus(task.id, "working");
-                                    setSelectedTaskId(task.id);
-                                    setCurrentScreen("input");
-                                  }}
-                                  className="inline-flex items-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[13px] font-semibold text-white"
-                                >
-                                  <Play className="h-4 w-4" />
-                                  この工程を開始
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
-          ) : null}
         </main>
       </div>
 
@@ -961,9 +1052,9 @@ export function WorkerView() {
 
               <div className="mt-5">
                 <div className={`text-[13px] font-semibold text-violet-500`}>{primaryAnnouncement.title}</div>
-                <div className={`mt-3 text-[20px] font-semibold leading-8 ${c.textPrimary}`}>作業開始前に最新のお知らせを確認してください</div>
+                <div className={`mt-3 text-[20px] font-semibold leading-8 ${c.textPrimary}`}>菴懈･ｭ髢句ｧ句燕縺ｫ譛譁ｰ縺ｮ縺顔衍繧峨○繧堤｢ｺ隱阪＠縺ｦ縺上□縺輔＞</div>
                 <div className={`mt-3 text-[14px] leading-7 ${c.textSecondary}`}>{primaryAnnouncement.message}</div>
-                <div className={`mt-4 text-[12px] ${c.textMuted}`}>通知時刻 {formatNotificationTime(primaryAnnouncement.deliverAt)}</div>
+                <div className={`mt-4 text-[12px] ${c.textMuted}`}>騾夂衍譎ょ綾 {formatNotificationTime(primaryAnnouncement.deliverAt)}</div>
               </div>
 
               <button
@@ -971,8 +1062,7 @@ export function WorkerView() {
                 onClick={() => setDismissedAnnouncementId(primaryAnnouncement.id)}
                 className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[14px] font-semibold text-white"
               >
-                確認して閉じる
-                <ChevronRight className="h-4 w-4" />
+                遒ｺ隱阪＠縺ｦ髢峨§繧・                <ChevronRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -985,7 +1075,7 @@ export function WorkerView() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <div className={`text-[18px] font-semibold ${c.textPrimary}`}>通知</div>
-                <div className={`mt-1 text-[12px] ${c.textSecondary}`}>全体連絡と配置変更通知を表示します</div>
+                <div className={`mt-1 text-[12px] ${c.textSecondary}`}>全体連絡と最新の変更通知を表示します。</div>
               </div>
               <button
                 type="button"
@@ -1040,4 +1130,6 @@ export function WorkerView() {
     </>,
   );
 }
+
+
 

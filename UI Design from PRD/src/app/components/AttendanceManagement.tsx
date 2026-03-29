@@ -18,6 +18,12 @@ import {
     Square,
     Zap,
     Upload,
+    Plus,
+    Trash2,
+    Copy,
+    Star,
+    CheckCircle2,
+    AlertTriangle,
 } from "lucide-react";
 import {
     Bar,
@@ -40,9 +46,14 @@ import {
 import {
     createDefaultMonthlyShifts,
     readAttendanceMonthShifts,
+    readAttendanceTemplates,
     writeAttendanceMonthShifts,
+    writeAttendanceTemplates,
+    type AttendanceTemplateStore,
     type MonthlyShifts,
-    type ShiftData
+    type ShiftBreakAssignment,
+    type ShiftData,
+    type ShiftTemplate,
 } from "./attendanceStore";
 import { buildStepPlanDefaults, readProgressPlanStore, resolveStepPlanValues } from "./progressPlanStore";
 import { readUsersFromStorage, type User } from "./userStore";
@@ -62,9 +73,15 @@ const calculateHours = (start: string, end: string) => {
     if (!start || !end) return 0;
     const [sH, sM] = start.split(':').map(Number);
     const [eH, eM] = end.split(':').map(Number);
-    const diff = (eH * 60 + eM) - (sH * 60 + sM);
+    let diff = (eH * 60 + eM) - (sH * 60 + sM);
+    if (diff < 0) diff += 24 * 60;
     return Math.max(0, diff / 60);
 };
+
+const calculateBreakHoursFromAssignments = (breaks: ShiftBreakAssignment[] = []) =>
+    breaks.reduce((sum, breakItem) => sum + calculateHours(breakItem.start, breakItem.end), 0);
+
+const cloneShiftBreaks = (breaks: ShiftBreakAssignment[] = []) => breaks.map((breakItem) => ({ ...breakItem }));
 
 const normalizeImportedMonthlyShifts = (
     value: unknown,
@@ -103,6 +120,42 @@ const normalizeImportedMonthlyShifts = (
                                 start: typeof incoming.start === "string" ? incoming.start : shift.start,
                                 end: typeof incoming.end === "string" ? incoming.end : shift.end,
                                 isOff: typeof incoming.isOff === "boolean" ? incoming.isOff : shift.isOff,
+                                templateId:
+                                    typeof incoming.templateId === "string"
+                                        ? incoming.templateId
+                                        : incoming.templateId === null
+                                            ? null
+                                            : (shift.templateId ?? null),
+                                breaks: Array.isArray(incoming.breaks)
+                                    ? cloneShiftBreaks(incoming.breaks as ShiftBreakAssignment[])
+                                    : cloneShiftBreaks(shift.breaks ?? []),
+                                adjustment:
+                                    incoming.adjustment && typeof incoming.adjustment === "object"
+                                        ? {
+                                            kind:
+                                                incoming.adjustment.kind === "late" ||
+                                                incoming.adjustment.kind === "overtime" ||
+                                                incoming.adjustment.kind === "earlyLeave" ||
+                                                incoming.adjustment.kind === "absence" ||
+                                                incoming.adjustment.kind === "handoff"
+                                                    ? incoming.adjustment.kind
+                                                    : "none",
+                                            note: typeof incoming.adjustment.note === "string" ? incoming.adjustment.note : shift.adjustment?.note ?? "",
+                                            plannedStart:
+                                                typeof incoming.adjustment.plannedStart === "string"
+                                                    ? incoming.adjustment.plannedStart
+                                                    : shift.adjustment?.plannedStart ?? shift.start,
+                                            plannedEnd:
+                                                typeof incoming.adjustment.plannedEnd === "string"
+                                                    ? incoming.adjustment.plannedEnd
+                                                    : shift.adjustment?.plannedEnd ?? shift.end,
+                                        }
+                                        : (shift.adjustment ?? {
+                                            kind: "none",
+                                            note: "",
+                                            plannedStart: shift.start,
+                                            plannedEnd: shift.end,
+                                        }),
                             }
                             : shift,
                     ];
@@ -125,9 +178,50 @@ type EditingCellState = {
     };
 };
 
-const EDITOR_PANEL_WIDTH = 240;
-const EDITOR_PANEL_HEIGHT = 292;
+const EDITOR_PANEL_WIDTH = 292;
+const EDITOR_PANEL_HEIGHT = 440;
 const EDITOR_PANEL_MARGIN = 12;
+type EditorShiftTab = "plan" | "adjustment";
+type ShiftAdjustmentKind = "none" | "late" | "overtime" | "earlyLeave" | "absence" | "handoff";
+const SHIFT_ADJUSTMENT_OPTIONS: Array<{ kind: Exclude<ShiftAdjustmentKind, "none">; label: string }> = [
+    { kind: "late", label: "遅刻" },
+    { kind: "overtime", label: "延長" },
+    { kind: "earlyLeave", label: "早退" },
+    { kind: "absence", label: "欠勤" },
+    { kind: "handoff", label: "担当変更" },
+];
+
+const createShiftEditorDraft = (shift?: ShiftData): ShiftData => ({
+    start: shift?.start ?? "",
+    end: shift?.end ?? "",
+    isOff: shift?.isOff ?? false,
+    templateId: shift?.templateId ?? null,
+    breaks: cloneShiftBreaks(shift?.breaks ?? []),
+    adjustment: shift?.adjustment
+        ? { ...shift.adjustment }
+        : {
+            kind: "none",
+            note: "",
+            plannedStart: shift?.start ?? "",
+            plannedEnd: shift?.end ?? "",
+        },
+});
+
+type BulkShiftDraft = {
+    templateId: string | null;
+    start: string;
+    end: string;
+    isOff: boolean;
+    breaks: ShiftBreakAssignment[];
+};
+
+const createBulkShiftDraft = (template?: ShiftTemplate): BulkShiftDraft => ({
+    templateId: template?.id ?? null,
+    start: template?.start ?? "",
+    end: template?.end ?? "",
+    isOff: false,
+    breaks: cloneShiftBreaks(template?.breaks ?? []),
+});
 
 const captureAnchorRect = (rect: DOMRect) => ({
     top: rect.top,
@@ -272,10 +366,12 @@ function calculateBreakHours(totalHours: number) {
     return 0;
 }
 
-function calculateEffectiveShiftHours(start: string, end: string) {
+function calculateEffectiveShiftHours(start: string, end: string, breaks: ShiftBreakAssignment[] = []) {
     const grossHours = calculateHours(start, end);
     if (grossHours <= 0) return 0;
-    return Number(Math.max(0, grossHours - calculateBreakHours(grossHours) - SHIFT_SETUP_CLEANUP_HOURS).toFixed(1));
+    const configuredBreakHours = calculateBreakHoursFromAssignments(breaks);
+    const breakHours = configuredBreakHours > 0 ? configuredBreakHours : calculateBreakHours(grossHours);
+    return Number(Math.max(0, grossHours - breakHours - SHIFT_SETUP_CLEANUP_HOURS).toFixed(1));
 }
 
 function formatSignedCount(value: number) {
@@ -380,7 +476,7 @@ function buildDayViewSlotRows(
 export function AttendanceManagement() {
     const [viewYear, setViewYear] = useState(2026);
     const [viewMonth, setViewMonth] = useState(2); // 2 = March
-    const [activeTab, setActiveTab] = useState<"table" | "dayView">("table");
+    const [activeTab, setActiveTab] = useState<"table" | "dayView" | "templates">("table");
     const [dayViewGranularity, setDayViewGranularity] = useState<DayViewGranularity>(30);
     const today = new Date();
     const [analysisDay, setAnalysisDay] = useState(() =>
@@ -402,6 +498,9 @@ export function AttendanceManagement() {
 
     // 編集中のセル情報
     const [editingCell, setEditingCell] = useState<EditingCellState | null>(null);
+    const [editorShiftTab, setEditorShiftTab] = useState<EditorShiftTab>("plan");
+    const [editingShiftDraft, setEditingShiftDraft] = useState<ShiftData | null>(null);
+    const [bulkShiftDraft, setBulkShiftDraft] = useState<BulkShiftDraft | null>(null);
     const fileInputRef = React.useRef<HTMLInputElement | null>(null);
     const scrollContainerRef = React.useRef<HTMLDivElement | null>(null);
     const [importFeedback, setImportFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
@@ -417,7 +516,7 @@ export function AttendanceManagement() {
     const popoverSurface = c.isDark ? "bg-[#151827]/95" : "bg-white/95";
     const inputClass = `w-full text-[15px] text-center border p-2 rounded-lg font-bold tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary} placeholder:text-gray-400 focus:border-cyan-500/40 focus:ring-2 focus:ring-cyan-500/20 outline-none`;
     const secondaryButtonClass = `${c.bgSurface} ${c.borderCard} ${c.textSecondary} hover:bg-gray-500/10`;
-    const tabButtonClass = (tab: "table" | "dayView") =>
+    const tabButtonClass = (tab: "table" | "dayView" | "templates") =>
         `flex items-center gap-2 rounded-xl px-4 py-2.5 text-[13px] font-semibold transition-all ${
             activeTab === tab
                 ? "bg-[#155DFC] text-white shadow-sm"
@@ -474,6 +573,7 @@ export function AttendanceManagement() {
     const [monthlyShifts, setMonthlyShifts] = useState<MonthlyShifts>(() =>
         readAttendanceMonthShifts(2026, 2, attendanceWorkers)
     );
+    const [attendanceTemplates, setAttendanceTemplates] = useState<AttendanceTemplateStore>(() => readAttendanceTemplates());
 
     useEffect(() => {
         setMonthlyShifts(readAttendanceMonthShifts(viewYear, viewMonth, attendanceWorkers));
@@ -482,6 +582,10 @@ export function AttendanceManagement() {
     useEffect(() => {
         writeAttendanceMonthShifts(viewYear, viewMonth, monthlyShifts);
     }, [viewYear, viewMonth, monthlyShifts]);
+
+    useEffect(() => {
+        writeAttendanceTemplates(attendanceTemplates);
+    }, [attendanceTemplates]);
 
     useEffect(() => {
         setAnalysisDay(prev => clampDay(prev, daysInMonth));
@@ -529,7 +633,7 @@ export function AttendanceManagement() {
                     worker,
                     shift,
                     grossHours: calculateHours(shift.start, shift.end),
-                    effectiveHours: calculateEffectiveShiftHours(shift.start, shift.end),
+                    effectiveHours: calculateEffectiveShiftHours(shift.start, shift.end, shift.breaks ?? []),
                     capabilityKeys,
                 } satisfies ShiftAnalysisWorker;
             })
@@ -875,11 +979,150 @@ export function AttendanceManagement() {
         return groups;
     }, [filteredWorkers]);
 
+    const quickTemplates = attendanceTemplates.shiftTemplates;
+
+    const updateShiftTemplate = (templateId: string, updater: (template: ShiftTemplate) => ShiftTemplate) => {
+        setAttendanceTemplates(prev => ({
+            ...prev,
+            shiftTemplates: prev.shiftTemplates.map(template =>
+                template.id === templateId ? updater(template) : template,
+            ),
+        }));
+    };
+
+    const ensureShiftAdjustment = (shift?: ShiftData) => ({
+        kind: (shift?.adjustment?.kind ?? "none") as ShiftAdjustmentKind,
+        note: shift?.adjustment?.note ?? "",
+        plannedStart: shift?.adjustment?.plannedStart ?? shift?.start ?? "",
+        plannedEnd: shift?.adjustment?.plannedEnd ?? shift?.end ?? "",
+    });
+
     const handleShiftUpdate = (workerId: string, day: number, updates: Partial<ShiftData>) => {
         setMonthlyShifts(prev => ({
             ...prev,
-            [workerId]: { ...prev[workerId], [day]: { ...prev[workerId][day], ...updates } }
+            [workerId]: {
+                ...prev[workerId],
+                [day]: {
+                    ...prev[workerId][day],
+                    ...updates,
+                    templateId: updates.templateId !== undefined ? updates.templateId : (prev[workerId]?.[day]?.templateId ?? null),
+                    breaks: updates.breaks ? cloneShiftBreaks(updates.breaks) : cloneShiftBreaks(prev[workerId]?.[day]?.breaks ?? []),
+                    adjustment: updates.adjustment
+                        ? {
+                            ...ensureShiftAdjustment(prev[workerId]?.[day]),
+                            ...updates.adjustment,
+                        }
+                        : ensureShiftAdjustment(prev[workerId]?.[day]),
+                },
+            },
         }));
+    };
+
+    const applyShiftTemplateToWorkerDay = (workerId: string, day: number, template: ShiftTemplate) => {
+        handleShiftUpdate(workerId, day, {
+            start: template.start,
+            end: template.end,
+            isOff: false,
+            templateId: template.id,
+            breaks: cloneShiftBreaks(template.breaks),
+            adjustment: {
+                kind: "none",
+                note: "",
+                plannedStart: template.start,
+                plannedEnd: template.end,
+            },
+        });
+    };
+
+    const updateShiftAdjustment = (
+        workerId: string,
+        day: number,
+        updates: Partial<NonNullable<ShiftData["adjustment"]>>,
+        shift?: ShiftData,
+    ) => {
+        const currentShift = shift ?? monthlyShifts[workerId]?.[day];
+        handleShiftUpdate(workerId, day, {
+            adjustment: {
+                ...ensureShiftAdjustment(currentShift),
+                ...updates,
+            },
+        });
+    };
+
+    const addShiftBreakToWorkerDay = (workerId: string, day: number, shift?: ShiftData) => {
+        const currentShift = shift ?? monthlyShifts[workerId]?.[day];
+        const nextIndex = (currentShift?.breaks?.length ?? 0) + 1;
+        handleShiftUpdate(workerId, day, {
+            isOff: false,
+            breaks: [
+                ...(currentShift?.breaks ?? []),
+                {
+                    id: `manual-break-${workerId}-${day}-${Date.now()}`,
+                    templateId: null,
+                    name: `休憩 ${nextIndex}`,
+                    start: currentShift?.start || "12:00",
+                    end: currentShift?.start || "12:30",
+                },
+            ],
+        });
+    };
+
+    const updateShiftBreakForWorkerDay = (
+        workerId: string,
+        day: number,
+        breakId: string,
+        updates: Partial<ShiftBreakAssignment>,
+        shift?: ShiftData,
+    ) => {
+        const currentShift = shift ?? monthlyShifts[workerId]?.[day];
+        handleShiftUpdate(workerId, day, {
+            breaks: (currentShift?.breaks ?? []).map((breakItem) =>
+                breakItem.id === breakId
+                    ? { ...breakItem, ...updates, templateId: null }
+                    : breakItem,
+            ),
+        });
+    };
+
+    const removeShiftBreakForWorkerDay = (workerId: string, day: number, breakId: string, shift?: ShiftData) => {
+        const currentShift = shift ?? monthlyShifts[workerId]?.[day];
+        handleShiftUpdate(workerId, day, {
+            breaks: (currentShift?.breaks ?? []).filter((breakItem) => breakItem.id !== breakId),
+        });
+    };
+
+    const applyAdjustmentKind = (workerId: string, day: number, kind: ShiftAdjustmentKind, shift?: ShiftData) => {
+        const currentShift = shift ?? monthlyShifts[workerId]?.[day];
+        const currentAdjustment = ensureShiftAdjustment(currentShift);
+        const plannedStart = currentAdjustment.plannedStart || currentShift?.start || "";
+        const plannedEnd = currentAdjustment.plannedEnd || currentShift?.end || "";
+
+        if (kind === "absence") {
+            handleShiftUpdate(workerId, day, {
+                start: "",
+                end: "",
+                isOff: true,
+                adjustment: {
+                    ...currentAdjustment,
+                    kind,
+                    plannedStart,
+                    plannedEnd,
+                },
+            });
+            return;
+        }
+
+        handleShiftUpdate(workerId, day, {
+            start: currentShift?.start || plannedStart,
+            end: currentShift?.end || plannedEnd,
+            isOff: false,
+            adjustment: {
+                ...currentAdjustment,
+                kind,
+                plannedStart,
+                plannedEnd,
+            },
+        });
     };
 
     const getCellKey = (workerId: string, day: number) => `${workerId}:${day}`;
@@ -893,6 +1136,8 @@ export function AttendanceManagement() {
         });
         return next;
     }, [selectedCellKeys, selectedWorkerIds, selectedDays]);
+
+    const isBulkActive = selectedTargetKeys.size > 0;
 
     const handleExport = () => {
         const monthLabel = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}`;
@@ -935,7 +1180,13 @@ export function AttendanceManagement() {
     };
 
     // Bulk Apply Logic
-    const applyBulkShift = (start: string, end: string, isOff: boolean) => {
+    const applyBulkShift = (
+        start: string,
+        end: string,
+        isOff: boolean,
+        breaks: ShiftBreakAssignment[] = [],
+        templateId: string | null = null,
+    ) => {
         setMonthlyShifts(prev => {
             const next = { ...prev };
             selectedTargetKeys.forEach(cellKey => {
@@ -943,11 +1194,481 @@ export function AttendanceManagement() {
                 const day = Number(dayValue);
                 if (!workerId || Number.isNaN(day)) return;
                 if (!next[workerId]) next[workerId] = {};
-                next[workerId][day] = { start, end, isOff };
+                next[workerId][day] = {
+                    start,
+                    end,
+                    isOff,
+                    templateId: isOff ? null : templateId,
+                    breaks: isOff ? [] : cloneShiftBreaks(breaks),
+                    adjustment: {
+                        kind: "none",
+                        note: "",
+                        plannedStart: start,
+                        plannedEnd: end,
+                    },
+                };
             });
             return next;
         });
         // Selection is maintained or cleared based on UX preference. Let's keep it for now.
+    };
+
+    const templateGroupOrder = ["正社員", "パートナー", "派遣"];
+    const templateGroupColorMap: Record<string, string> = {
+        正社員: "#378ADD",
+        パートナー: "#1D9E75",
+        派遣: "#6D7380",
+    };
+    const [expandedTemplateGroups, setExpandedTemplateGroups] = useState<Record<string, boolean>>({
+        正社員: true,
+        パートナー: true,
+        派遣: true,
+    });
+    const toggleTemplateGroup = (category: string) => {
+        setExpandedTemplateGroups(prev => ({ ...prev, [category]: !(prev[category] ?? true) }));
+    };
+
+    const addShiftTemplate = (category = "正社員") => {
+        const nextIndex = attendanceTemplates.shiftTemplates.filter((template) => template.category === category).length + 1;
+        setAttendanceTemplates(prev => ({
+            ...prev,
+            shiftTemplates: [
+                ...prev.shiftTemplates,
+                {
+                    id: `shift-template-${Date.now()}`,
+                    name: `新規テンプレート ${nextIndex}`,
+                    category,
+                    start: "08:00",
+                    end: "17:00",
+                    color: templateGroupColorMap[category] ?? "#378ADD",
+                    isDefault: false,
+                    breaks: [],
+                },
+            ],
+        }));
+    };
+
+    const removeShiftTemplate = (templateId: string) => {
+        setAttendanceTemplates(prev => ({
+            ...prev,
+            shiftTemplates: prev.shiftTemplates.filter(template => template.id !== templateId),
+        }));
+    };
+
+    const duplicateShiftTemplate = (template: ShiftTemplate) => {
+        setAttendanceTemplates(prev => ({
+            ...prev,
+            shiftTemplates: [
+                ...prev.shiftTemplates,
+                {
+                    ...template,
+                    id: `shift-template-${Date.now()}`,
+                    name: `${template.name} コピー`,
+                    isDefault: false,
+                    breaks: template.breaks.map((breakItem, index) => ({
+                        ...breakItem,
+                        id: `${template.id}:copy:${Date.now()}:${index}`,
+                    })),
+                },
+            ],
+        }));
+    };
+
+    const setShiftTemplateDefault = (templateId: string) => {
+        setAttendanceTemplates(prev => {
+            const selectedTemplate = prev.shiftTemplates.find((template) => template.id === templateId);
+            if (!selectedTemplate) return prev;
+            return {
+                ...prev,
+                shiftTemplates: prev.shiftTemplates.map((template) =>
+                    template.category === selectedTemplate.category
+                        ? { ...template, isDefault: template.id === templateId }
+                        : template,
+                ),
+            };
+        });
+    };
+
+    const groupedShiftTemplates = useMemo(() => {
+        const base = Object.fromEntries(templateGroupOrder.map((category) => [category, [] as ShiftTemplate[]])) as Record<string, ShiftTemplate[]>;
+        attendanceTemplates.shiftTemplates.forEach((template) => {
+            const category = template.category || "正社員";
+            if (!base[category]) base[category] = [];
+            base[category].push(template);
+        });
+        return base;
+    }, [attendanceTemplates.shiftTemplates]);
+
+    const templateCategories = useMemo(() => {
+        const ordered = [...templateGroupOrder];
+        Object.keys(groupedShiftTemplates).forEach((category) => {
+            if (!ordered.includes(category)) ordered.push(category);
+        });
+        return ordered.filter((category, index) => ordered.indexOf(category) === index);
+    }, [groupedShiftTemplates]);
+
+    useEffect(() => {
+        if (!isBulkActive) {
+            setBulkShiftDraft(null);
+            return;
+        }
+
+        setBulkShiftDraft((current) => {
+            if (current) {
+                if (!current.templateId) return current;
+                const matchedTemplate = quickTemplates.find((template) => template.id === current.templateId);
+                return matchedTemplate
+                    ? { ...current, breaks: cloneShiftBreaks(current.breaks) }
+                    : current;
+            }
+
+            return quickTemplates[0] ? createBulkShiftDraft(quickTemplates[0]) : createBulkShiftDraft();
+        });
+    }, [isBulkActive, quickTemplates]);
+
+    const getNightHoursForRange = (start: string, end: string) => {
+        const totalMinutes = Math.round(calculateHours(start, end) * 60);
+        if (totalMinutes <= 0) return 0;
+        const [sH, sM] = start.split(":").map(Number);
+        const startMinutes = (sH || 0) * 60 + (sM || 0);
+        let nightMinutes = 0;
+        for (let minuteOffset = 0; minuteOffset < totalMinutes; minuteOffset += 15) {
+            const minuteOfDay = (startMinutes + minuteOffset) % (24 * 60);
+            if (minuteOfDay >= 22 * 60 || minuteOfDay < 5 * 60) {
+                nightMinutes += 15;
+            }
+        }
+        return nightMinutes / 60;
+    };
+
+    const getTemplateComplianceItems = (template: ShiftTemplate) => {
+        const grossHours = calculateHours(template.start, template.end);
+        const breakHours = calculateBreakHoursFromAssignments(template.breaks);
+        const items: Array<{ label: string; tone: "ok" | "warn" }> = [];
+
+        if (grossHours >= 8) {
+            items.push({
+                label: breakHours >= 1 ? "8h以上 60分休憩" : "8h以上 60分休憩が未達",
+                tone: breakHours >= 1 ? "ok" : "warn",
+            });
+        } else if (grossHours >= 6) {
+            items.push({
+                label: breakHours >= 0.75 ? "6h以上 45分休憩" : "6h以上 45分休憩が未達",
+                tone: breakHours >= 0.75 ? "ok" : "warn",
+            });
+        } else {
+            items.push({
+                label: "6h未満・休憩は任意",
+                tone: "ok",
+            });
+        }
+
+        const nightHours = getNightHoursForRange(template.start, template.end);
+        items.push({
+            label: nightHours > 0 ? `深夜勤務 ${nightHours.toFixed(1)}h` : "深夜勤務なし",
+            tone: nightHours > 0 ? "warn" : "ok",
+        });
+        return items;
+    };
+
+    const getShiftComplianceItems = (shift?: ShiftData) => {
+        if (!shift || shift.isOff || !shift.start || !shift.end) return [] as Array<{ label: string; tone: "ok" | "warn" }>;
+
+        const grossHours = calculateHours(shift.start, shift.end);
+        const breakHours = calculateBreakHoursFromAssignments(shift.breaks ?? []);
+        const items: Array<{ label: string; tone: "ok" | "warn" }> = [];
+
+        if (grossHours >= 8) {
+            items.push({
+                label: breakHours >= 1 ? "8h以上 60分休憩" : "8h以上 60分休憩が未達",
+                tone: breakHours >= 1 ? "ok" : "warn",
+            });
+        } else if (grossHours >= 6) {
+            items.push({
+                label: breakHours >= 0.75 ? "6h以上 45分休憩" : "6h以上 45分休憩が未達",
+                tone: breakHours >= 0.75 ? "ok" : "warn",
+            });
+        } else {
+            items.push({
+                label: "6h未満・休憩は任意",
+                tone: "ok",
+            });
+        }
+
+        const nightHours = getNightHoursForRange(shift.start, shift.end);
+        items.push({
+            label: nightHours > 0 ? `深夜勤務 ${nightHours.toFixed(1)}h` : "深夜勤務なし",
+            tone: nightHours > 0 ? "warn" : "ok",
+        });
+        return items;
+    };
+
+    const getTemplateNetHours = (template: ShiftTemplate) => {
+        const grossHours = calculateHours(template.start, template.end);
+        const breakHours = calculateBreakHoursFromAssignments(template.breaks);
+        return Math.max(0, grossHours - breakHours);
+    };
+
+    const formatBreakMinutes = (breakItem: ShiftBreakAssignment) =>
+        `${Math.round(calculateHours(breakItem.start, breakItem.end) * 60)}分`;
+
+    const renderTemplateCard = (template: ShiftTemplate) => {
+        const breakHours = calculateBreakHoursFromAssignments(template.breaks);
+        const netHours = getTemplateNetHours(template);
+        const complianceItems = getTemplateComplianceItems(template);
+
+        return (
+            <article key={template.id} className={`${c.bgCard} overflow-hidden rounded-[14px] border ${c.borderCard}`}>
+                <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                    <div className="h-10 w-1 rounded-full" style={{ backgroundColor: template.color }} />
+
+                    <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <input
+                                type="text"
+                                value={template.name}
+                                onChange={(event) =>
+                                    updateShiftTemplate(template.id, (current) => ({ ...current, name: event.target.value }))
+                                }
+                                className={`min-w-[180px] flex-1 border-none bg-transparent px-0 py-0 text-[14px] font-semibold outline-none ${c.textPrimary}`}
+                            />
+                            {template.isDefault ? (
+                                <span className="rounded-md bg-[#E6F1FB] px-2 py-0.5 text-[11px] font-semibold text-[#155DFC]">
+                                    デフォルト
+                                </span>
+                            ) : null}
+                        </div>
+                        <div className={`mt-1 text-[12px] ${c.textSecondary}`}>
+                            実働 {netHours.toFixed(1)}h ・ 休憩 {breakHours.toFixed(1)}h
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3">
+                        <label className="flex items-center gap-2 rounded-lg border px-2 py-1.5 text-[11px] font-semibold transition hover:border-[#155DFC]/40">
+                            <span className={c.textSecondary}>色</span>
+                            <input
+                                type="color"
+                                value={template.color}
+                                onChange={(event) =>
+                                    updateShiftTemplate(template.id, (current) => ({ ...current, color: event.target.value }))
+                                }
+                                className="h-5 w-5 cursor-pointer rounded border-0 bg-transparent p-0"
+                                aria-label={`${template.name} の色`}
+                            />
+                        </label>
+                        <div className={`inline-flex items-center rounded-xl border px-3 py-2 ${c.borderCard} ${c.bgCard}`}>
+                            <input
+                                type="text"
+                                value={template.start}
+                                onChange={(event) =>
+                                    updateShiftTemplate(template.id, (current) => ({ ...current, start: event.target.value }))
+                                }
+                                className={`w-[54px] border-none bg-transparent text-right text-[15px] font-semibold tabular-nums outline-none ${c.textPrimary}`}
+                            />
+                            <span className={`px-1 text-[12px] ${c.textMuted}`}>→</span>
+                            <input
+                                type="text"
+                                value={template.end}
+                                onChange={(event) =>
+                                    updateShiftTemplate(template.id, (current) => ({ ...current, end: event.target.value }))
+                                }
+                                className={`w-[54px] border-none bg-transparent text-left text-[15px] font-semibold tabular-nums outline-none ${c.textPrimary}`}
+                            />
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <button
+                                type="button"
+                                onClick={() => setShiftTemplateDefault(template.id)}
+                                className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${template.isDefault ? "border-[#155DFC] bg-[#EEF4FF] text-[#155DFC]" : `${c.borderCard} ${c.bgCard} ${c.textSecondary} hover:bg-black/[0.03]`}`}
+                                aria-label={`${template.name} をデフォルトに設定`}
+                            >
+                                <Star className={`h-4 w-4 ${template.isDefault ? "fill-current" : ""}`} />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => duplicateShiftTemplate(template)}
+                                className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${c.borderCard} ${c.bgCard} ${c.textSecondary} hover:bg-black/[0.03]`}
+                                aria-label={`${template.name} を複製`}
+                            >
+                                <Copy className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => removeShiftTemplate(template.id)}
+                                className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${c.borderCard} ${c.bgCard} text-rose-500 hover:bg-rose-500/10`}
+                                aria-label={`${template.name} を削除`}
+                            >
+                                <Trash2 className="h-4 w-4" />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className={`border-t px-4 py-3 ${c.borderCard} ${c.bgSurface}`}>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                            <div className={`text-[11px] font-semibold ${c.textMuted}`}>休憩設定</div>
+                            <div className={`mt-1 text-[12px] ${c.textSecondary}`}>
+                                必要な休憩を手動で追加し、名前と時間を直接調整できます。
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={() =>
+                                updateShiftTemplate(template.id, (current) => ({
+                                    ...current,
+                                    breaks: [
+                                        ...current.breaks,
+                                        {
+                                            id: `manual-break-${Date.now()}`,
+                                            templateId: null,
+                                            name: `手動休憩 ${current.breaks.length + 1}`,
+                                            start: "12:00",
+                                            end: "12:30",
+                                        },
+                                    ],
+                                }))
+                            }
+                            className={`inline-flex items-center gap-1 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition ${c.borderCard} ${c.bgCard} ${c.textSecondary}`}
+                        >
+                            <Plus className="h-3.5 w-3.5" />
+                            手動休憩を追加
+                        </button>
+                    </div>
+
+                    {template.breaks.length === 0 ? (
+                        <div className={`mt-3 rounded-xl border border-dashed px-4 py-5 text-center text-[12px] ${c.borderCard} ${c.textMuted}`}>
+                            休憩を追加すると、ここで名前と時間を編集できます。
+                        </div>
+                    ) : (
+                        <div className="mt-3 flex flex-col gap-2">
+                            {template.breaks.map((breakItem, breakIndex) => (
+                                <div key={breakItem.id} className={`${c.bgCard} grid gap-2 rounded-xl border p-3 md:grid-cols-[minmax(0,1fr)_94px_94px_auto_40px] ${c.borderCard}`}>
+                                    <input
+                                        type="text"
+                                        value={breakItem.name}
+                                        onChange={(event) =>
+                                            updateShiftTemplate(template.id, (current) => ({
+                                                ...current,
+                                                breaks: current.breaks.map((item) =>
+                                                    item.id === breakItem.id ? { ...item, name: event.target.value } : item,
+                                                ),
+                                            }))
+                                        }
+                                        className={`rounded-lg border px-3 py-2 text-[12px] ${c.bgInput} ${c.borderCard} ${c.textPrimary}`}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={breakItem.start}
+                                        onChange={(event) =>
+                                            updateShiftTemplate(template.id, (current) => ({
+                                                ...current,
+                                                breaks: current.breaks.map((item) =>
+                                                    item.id === breakItem.id ? { ...item, start: event.target.value } : item,
+                                                ),
+                                            }))
+                                        }
+                                        className={`rounded-lg border px-3 py-2 text-[12px] tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary}`}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={breakItem.end}
+                                        onChange={(event) =>
+                                            updateShiftTemplate(template.id, (current) => ({
+                                                ...current,
+                                                breaks: current.breaks.map((item) =>
+                                                    item.id === breakItem.id ? { ...item, end: event.target.value } : item,
+                                                ),
+                                            }))
+                                        }
+                                        className={`rounded-lg border px-3 py-2 text-[12px] tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary}`}
+                                    />
+                                    <div className={`inline-flex items-center justify-center rounded-lg px-2 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>
+                                        {formatBreakMinutes(breakItem)}
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            updateShiftTemplate(template.id, (current) => ({
+                                                ...current,
+                                                breaks: current.breaks.filter((item) => item.id !== breakItem.id),
+                                            }))
+                                        }
+                                        className={`inline-flex h-10 w-10 items-center justify-center rounded-lg border transition ${c.borderCard} ${c.bgSurface} text-rose-500 hover:bg-rose-500/10`}
+                                        aria-label={`${breakItem.name || `休憩 ${breakIndex + 1}`} を削除`}
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                        {complianceItems.map((item) => (
+                            <span
+                                key={`${template.id}-${item.label}`}
+                                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ${
+                                    item.tone === "ok" ? "bg-[#EAF3DE] text-[#3B6D11]" : "bg-[#FAEEDA] text-[#854F0B]"
+                                }`}
+                            >
+                                {item.tone === "ok" ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                                {item.label}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            </article>
+        );
+    };
+
+    const renderTemplateGroup = (category: string) => {
+        const templates = groupedShiftTemplates[category] ?? [];
+        const isExpanded = expandedTemplateGroups[category] ?? true;
+        const accentColor = templateGroupColorMap[category] ?? "#378ADD";
+
+        return (
+            <section key={category} className={`${c.bgCard} overflow-hidden rounded-2xl border ${c.border} shadow-sm`}>
+                <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
+                    <button
+                        type="button"
+                        onClick={() => toggleTemplateGroup(category)}
+                        className="inline-flex items-center gap-3 text-left"
+                    >
+                        <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full border ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}>
+                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRightIcon className="h-4 w-4" />}
+                        </span>
+                        <span className={`text-[14px] font-semibold ${c.textPrimary}`}>{category}</span>
+                        <span className={`rounded-full px-2.5 py-1 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>
+                            {templates.length} テンプレート
+                        </span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => addShiftTemplate(category)}
+                        className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition"
+                        style={{ color: accentColor, backgroundColor: `${accentColor}12` }}
+                    >
+                        <Plus className="h-3.5 w-3.5" />
+                        追加
+                    </button>
+                </div>
+
+                {isExpanded ? (
+                    <div className={`border-t px-5 py-4 ${c.borderCard} ${c.bgSurface}`}>
+                        <div className="flex flex-col gap-3">
+                            {templates.length === 0 ? (
+                                <div className={`rounded-2xl border border-dashed px-4 py-6 text-center text-[12px] ${c.borderCard} ${c.textMuted}`}>
+                                    {category} のテンプレートはまだありません。右上の「追加」から作成できます。
+                                </div>
+                            ) : (
+                                templates.map((template) => renderTemplateCard(template))
+                            )}
+                        </div>
+                    </div>
+                ) : null}
+            </section>
+        );
     };
 
     const toggleWorkerSelection = (id: string) => {
@@ -977,6 +1698,8 @@ export function AttendanceManagement() {
     };
 
     const openCellEditor = (workerId: string, day: number, rect: DOMRect) => {
+        setEditorShiftTab("plan");
+        setEditingShiftDraft(createShiftEditorDraft(monthlyShifts[workerId]?.[day]));
         setEditingCell({
             workerId,
             day,
@@ -984,9 +1707,100 @@ export function AttendanceManagement() {
         });
     };
 
+    const closeCellEditor = () => {
+        setEditingCell(null);
+        setEditingShiftDraft(null);
+        setEditorShiftTab("plan");
+    };
+
+    const saveCellEditor = () => {
+        if (!editingCell || !editingShiftDraft) {
+            closeCellEditor();
+            return;
+        }
+
+        handleShiftUpdate(editingCell.workerId, editingCell.day, editingShiftDraft);
+        closeCellEditor();
+    };
+
+    const addEditingShiftDraftBreak = () => {
+        setEditingShiftDraft((current) => {
+            const base = current ?? createShiftEditorDraft();
+            const nextIndex = (base.breaks?.length ?? 0) + 1;
+            return {
+                ...base,
+                isOff: false,
+                breaks: [
+                    ...(base.breaks ?? []),
+                    {
+                        id: `manual-break-draft-${Date.now()}`,
+                        templateId: null,
+                        name: `休憩 ${nextIndex}`,
+                        start: base.start || "12:00",
+                        end: base.start || "12:30",
+                    },
+                ],
+            };
+        });
+    };
+
+    const updateEditingShiftDraftBreak = (breakId: string, updates: Partial<ShiftBreakAssignment>) => {
+        setEditingShiftDraft((current) => {
+            const base = current ?? createShiftEditorDraft();
+            return {
+                ...base,
+                breaks: (base.breaks ?? []).map((breakItem) =>
+                    breakItem.id === breakId ? { ...breakItem, ...updates, templateId: null } : breakItem,
+                ),
+            };
+        });
+    };
+
+    const addBulkShiftDraftBreak = () => {
+        setBulkShiftDraft((current) => {
+            const base = current ?? createBulkShiftDraft();
+            const nextIndex = (base.breaks?.length ?? 0) + 1;
+            return {
+                ...base,
+                breaks: [
+                    ...(base.breaks ?? []),
+                    {
+                        id: `manual-bulk-break-${Date.now()}`,
+                        templateId: null,
+                        name: `休憩 ${nextIndex}`,
+                        start: base.start || "12:00",
+                        end: base.start || "12:30",
+                    },
+                ],
+            };
+        });
+    };
+
+    const updateBulkShiftDraftBreak = (breakId: string, updates: Partial<ShiftBreakAssignment>) => {
+        setBulkShiftDraft((current) => {
+            const base = current ?? createBulkShiftDraft();
+            return {
+                ...base,
+                breaks: (base.breaks ?? []).map((breakItem) =>
+                    breakItem.id === breakId ? { ...breakItem, ...updates, templateId: null } : breakItem,
+                ),
+            };
+        });
+    };
+
+    const removeBulkShiftDraftBreak = (breakId: string) => {
+        setBulkShiftDraft((current) => {
+            const base = current ?? createBulkShiftDraft();
+            return {
+                ...base,
+                breaks: (base.breaks ?? []).filter((breakItem) => breakItem.id !== breakId),
+            };
+        });
+    };
+
     const handleCellClick = (event: React.MouseEvent<HTMLButtonElement>, workerId: string, day: number) => {
         if (event.metaKey || event.ctrlKey || event.shiftKey) {
-            setEditingCell(null);
+            closeCellEditor();
             toggleCellSelection(workerId, day);
             return;
         }
@@ -1037,18 +1851,29 @@ export function AttendanceManagement() {
         return total.toFixed(1);
     };
 
-    const toggleCategory = (cat: string) => setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
+    const selectedBulkTemplate = bulkShiftDraft?.templateId
+        ? quickTemplates.find((template) => template.id === bulkShiftDraft.templateId) ?? null
+        : null;
+    const bulkComplianceItems = bulkShiftDraft?.isOff
+        ? []
+        : getShiftComplianceItems({
+            start: bulkShiftDraft?.start ?? "",
+            end: bulkShiftDraft?.end ?? "",
+            isOff: bulkShiftDraft?.isOff ?? false,
+            templateId: bulkShiftDraft?.templateId ?? null,
+            breaks: bulkShiftDraft?.breaks ?? [],
+            adjustment: {
+                kind: "none",
+                note: "",
+                plannedStart: bulkShiftDraft?.start ?? "",
+                plannedEnd: bulkShiftDraft?.end ?? "",
+            },
+        });
 
-    const quickTemplates = [
-        { label: "日勤 (08:00~16:00)", s: "08:00", e: "16:00" },
-        { label: "夕勤 (16:00~20:00)", s: "16:00", e: "20:00" },
-        { label: "夜勤 (22:00~08:00)", s: "22:00", e: "08:00" },
-    ];
+    const toggleCategory = (cat: string) => setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
 
     const SIDEBAR_WIDTH = "260px"; // Wider to accommodate checkbox
     const CELL_WIDTH = "65px";
-
-    const isBulkActive = selectedTargetKeys.size > 0;
 
     return (
         <div className={`p-6 h-full flex flex-col overflow-hidden relative ${c.bg}`}>
@@ -1061,31 +1886,33 @@ export function AttendanceManagement() {
             />
 
             {/* Toolbar */}
-            <div className={`mb-4 p-4 rounded-xl ${c.bgCard} border ${c.border} flex flex-wrap items-center justify-between gap-4 shadow-sm text-[13px]`}>
-                <div className="flex items-center gap-6">
-                    <div className={`flex items-center gap-1 p-1 rounded-lg ${c.bgSurface} border ${c.borderCard}`}>
-                        <button onClick={() => setViewMonth(prev => prev === 0 ? 11 : prev - 1)} className={`p-1.5 rounded-md ${hoverSurface} ${c.textSecondary} transition-colors`}><ChevronLeft className="w-4 h-4" /></button>
-                        <span className={`px-4 font-bold ${c.textPrimary} min-w-[100px] text-center`}>{viewYear}年 {viewMonth + 1}月</span>
-                        <button onClick={() => setViewMonth(prev => prev === 11 ? 0 : prev + 1)} className={`p-1.5 rounded-md ${hoverSurface} ${c.textSecondary} transition-colors`}><ChevronRight className="w-4 h-4" /></button>
+            {activeTab !== "templates" ? (
+                <div className={`mb-4 p-4 rounded-xl ${c.bgCard} border ${c.border} flex flex-wrap items-center justify-between gap-4 shadow-sm text-[13px]`}>
+                    <div className="flex items-center gap-6">
+                        <div className={`flex items-center gap-1 p-1 rounded-lg ${c.bgSurface} border ${c.borderCard}`}>
+                            <button onClick={() => setViewMonth(prev => prev === 0 ? 11 : prev - 1)} className={`p-1.5 rounded-md ${hoverSurface} ${c.textSecondary} transition-colors`}><ChevronLeft className="w-4 h-4" /></button>
+                            <span className={`px-4 font-bold ${c.textPrimary} min-w-[100px] text-center`}>{viewYear}年 {viewMonth + 1}月</span>
+                            <button onClick={() => setViewMonth(prev => prev === 11 ? 0 : prev + 1)} className={`p-1.5 rounded-md ${hoverSurface} ${c.textSecondary} transition-colors`}><ChevronRight className="w-4 h-4" /></button>
+                        </div>
+                        <div className="relative">
+                            <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${c.textMuted}`} />
+                            <input type="text" placeholder="名前・IDで検索..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className={`w-[220px] ${c.bgInput} border ${c.borderCard} rounded-lg pl-10 pr-4 py-2 ${c.textPrimary} outline-none placeholder:text-gray-400 focus:border-cyan-500/40 focus:ring-2 focus:ring-cyan-500/20 transition-all`} />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Filter className={`w-4 h-4 ${c.textMuted}`} />
+                            <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className={`px-3 py-2 rounded-lg ${c.bgInput} border ${c.borderCard} ${c.textPrimary} outline-none cursor-pointer hover:border-cyan-500/30 transition-all`}>
+                                <option value="all">全区分</option>
+                                {Object.keys(groupedWorkers).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                            </select>
+                        </div>
                     </div>
-                    <div className="relative">
-                        <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 ${c.textMuted}`} />
-                        <input type="text" placeholder="名前・IDで検索..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className={`w-[220px] ${c.bgInput} border ${c.borderCard} rounded-lg pl-10 pr-4 py-2 ${c.textPrimary} outline-none placeholder:text-gray-400 focus:border-cyan-500/40 focus:ring-2 focus:ring-cyan-500/20 transition-all`} />
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Filter className={`w-4 h-4 ${c.textMuted}`} />
-                        <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)} className={`px-3 py-2 rounded-lg ${c.bgInput} border ${c.borderCard} ${c.textPrimary} outline-none cursor-pointer hover:border-cyan-500/30 transition-all`}>
-                            <option value="all">全区分</option>
-                            {Object.keys(groupedWorkers).map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                        </select>
-                    </div>
+                    {isBulkActive && (
+                        <div className="flex items-center gap-4">
+                            <button onClick={clearSelection} className="flex items-center gap-1.5 text-rose-500 font-bold hover:underline"><X className="w-3.5 h-3.5" />選択解除 ({selectedTargetKeys.size}セル)</button>
+                        </div>
+                    )}
                 </div>
-                {isBulkActive && (
-                    <div className="flex items-center gap-4">
-                        <button onClick={clearSelection} className="flex items-center gap-1.5 text-rose-500 font-bold hover:underline"><X className="w-3.5 h-3.5" />選択解除 ({selectedTargetKeys.size}セル)</button>
-                    </div>
-                )}
-            </div>
+            ) : null}
 
             <div className="mb-4 shrink-0">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1102,7 +1929,7 @@ export function AttendanceManagement() {
                         <button
                             type="button"
                             onClick={() => {
-                                setEditingCell(null);
+                                closeCellEditor();
                                 setActiveTab("dayView");
                             }}
                             className={tabButtonClass("dayView")}
@@ -1110,6 +1937,18 @@ export function AttendanceManagement() {
                         >
                             <Clock className="h-4 w-4" />
                             作業日ビュー
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                closeCellEditor();
+                                setActiveTab("templates");
+                            }}
+                            className={tabButtonClass("templates")}
+                            aria-pressed={activeTab === "templates"}
+                        >
+                            <Edit3 className="h-4 w-4" />
+                            テンプレート
                         </button>
                     </div>
 
@@ -1144,7 +1983,30 @@ export function AttendanceManagement() {
                 </div>
             </div>
 
-            {activeTab === "dayView" ? (
+            {activeTab === "templates" ? (
+                <div className="flex-1 min-h-0 overflow-auto">
+                    <div className="mx-auto flex max-w-[860px] flex-col gap-4 pb-6">
+                        <section className="flex flex-wrap items-start justify-between gap-4">
+                            <div>
+                                <div className={`text-[18px] font-semibold ${c.textPrimary}`}>シフトテンプレート</div>
+                                <div className={`mt-1 text-[13px] ${c.textSecondary}`}>
+                                    出勤・退勤パターンと、各テンプレート内の休憩設定を雇用区分ごとにまとめて管理します。
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => addShiftTemplate(templateCategories[0] ?? "正社員")}
+                                className="inline-flex items-center gap-2 rounded-lg bg-[#155DFC] px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-[#0F4FE3]"
+                            >
+                                <Plus className="h-4 w-4" />
+                                テンプレートを追加
+                            </button>
+                        </section>
+
+                        {templateCategories.map((category) => renderTemplateGroup(category))}
+                    </div>
+                </div>
+            ) : activeTab === "dayView" ? (
                 <div className="flex-1 min-h-0 overflow-auto">
                     <section className={`${c.bgCard} border ${c.border} rounded-2xl p-5 shadow-sm`}>
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -1478,6 +2340,23 @@ export function AttendanceManagement() {
                                                             : isSelectedCell
                                                                 ? (c.isDark ? "text-cyan-200" : "text-slate-900")
                                                                 : c.textPrimary;
+                                                        const popoverShift = isEditing ? (editingShiftDraft ?? createShiftEditorDraft(shift)) : shift;
+                                                        const matchedTemplate =
+                                                            quickTemplates.find((template) => template.id === popoverShift?.templateId)
+                                                            ?? quickTemplates.find((template) => template.start === popoverShift?.start && template.end === popoverShift?.end);
+                                                        const shiftAdjustment = ensureShiftAdjustment(popoverShift);
+                                                        const plannedStart = shiftAdjustment.plannedStart || matchedTemplate?.start || popoverShift?.start || "";
+                                                        const plannedEnd = shiftAdjustment.plannedEnd || matchedTemplate?.end || popoverShift?.end || "";
+                                                        const currentAdjustmentKind = shiftAdjustment.kind;
+                                                        const shiftComplianceItems = getShiftComplianceItems(popoverShift);
+                                                        const adjustmentDuration =
+                                                            currentAdjustmentKind === "late" && plannedStart && popoverShift?.start
+                                                                ? Math.max(0, calculateHours(plannedStart, popoverShift.start))
+                                                                : currentAdjustmentKind === "overtime" && plannedEnd && popoverShift?.end
+                                                                    ? Math.max(0, calculateHours(plannedEnd, popoverShift.end))
+                                                                    : currentAdjustmentKind === "earlyLeave" && plannedEnd && popoverShift?.end
+                                                                        ? Math.max(0, calculateHours(popoverShift.end, plannedEnd))
+                                                                        : 0;
                                                         return (
                                                             <td
                                                                 key={h.day}
@@ -1515,23 +2394,42 @@ export function AttendanceManagement() {
                                                                 </button>
                                                                 {isEditing && editingCell ? (
                                                                     <div
-                                                                        className={`z-[120] p-4 ${popoverSurface} border-2 border-cyan-500 shadow-2xl rounded-xl flex flex-col gap-4 animate-in fade-in zoom-in duration-200 backdrop-blur-md`}
+                                                                        className={`z-[120] p-3.5 ${popoverSurface} border-2 border-cyan-500 shadow-2xl rounded-xl flex flex-col gap-3 animate-in fade-in zoom-in duration-200 backdrop-blur-md`}
                                                                         style={getEditorPopoverStyle(editingCell.anchorRect)}
                                                                     >
-                                                                        <div className={`flex items-center justify-between border-b pb-2 ${c.borderCard}`}><span className={`text-[13px] font-bold ${c.textSecondary}`}>{h.day}日のシフト</span><button onClick={() => setEditingCell(null)} className={`p-1 rounded-full transition-colors ${hoverSubtle}`}><X className={`w-4 h-4 ${c.textMuted}`} /></button></div>
-                                                                        <div className="flex items-center gap-2 w-full justify-between">
-                                                                            <div className="flex flex-col gap-1 flex-1"><span className={`text-[10px] ${c.textMuted} uppercase font-bold text-center`}>開始</span><input type="text" value={shift?.start} onChange={(e) => handleShiftUpdate(worker.id, h.day, { start: e.target.value, isOff: false })} className={inputClass} /></div>
-                                                                            <div className={`pt-4 ${c.textMuted} font-bold`}>~</div>
-                                                                            <div className="flex flex-col gap-1 flex-1"><span className={`text-[10px] ${c.textMuted} uppercase font-bold text-center`}>終了</span><input type="text" value={shift?.end} onChange={(e) => handleShiftUpdate(worker.id, h.day, { end: e.target.value, isOff: false })} className={inputClass} /></div>
+                                                                        <div className={`flex items-center justify-between border-b pb-2 ${c.borderCard}`}>
+                                                                            <span className={`text-[13px] font-bold ${c.textSecondary}`}>{h.day}日のシフト</span>
+                                                                            <button onClick={closeCellEditor} className={`p-1 rounded-full transition-colors ${hoverSubtle}`}>
+                                                                                <X className={`w-4 h-4 ${c.textMuted}`} />
+                                                                            </button>
                                                                         </div>
-                                                                        <div className="grid grid-cols-2 gap-2 mt-1">
-                                                                            {quickTemplates.map(t => {
-                                                                                const isActiveTemplate = !shift?.isOff && shift?.start === t.s && shift?.end === t.e;
+
+                                                                        <div className="grid grid-cols-4 gap-2">
+                                                                            {quickTemplates.map((template) => {
+                                                                                const isActiveTemplate =
+                                                                                    !popoverShift?.isOff &&
+                                                                                    popoverShift?.start === template.start &&
+                                                                                    popoverShift?.end === template.end;
                                                                                 return (
                                                                                     <button
-                                                                                        key={t.label}
-                                                                                        onClick={() => handleShiftUpdate(worker.id, h.day, { start: t.s, end: t.e, isOff: false })}
-                                                                                        className={`text-[11px] font-bold py-2 rounded-lg transition-all border shadow-sm ${
+                                                                                        key={template.id}
+                                                                                        type="button"
+                                                                                        onClick={() =>
+                                                                                            setEditingShiftDraft({
+                                                                                                start: template.start,
+                                                                                                end: template.end,
+                                                                                                isOff: false,
+                                                                                                templateId: template.id,
+                                                                                                breaks: cloneShiftBreaks(template.breaks),
+                                                                                                adjustment: {
+                                                                                                    kind: "none",
+                                                                                                    note: "",
+                                                                                                    plannedStart: template.start,
+                                                                                                    plannedEnd: template.end,
+                                                                                                },
+                                                                                            })
+                                                                                        }
+                                                                                        className={`text-[11px] font-bold py-1.5 rounded-lg transition-all border shadow-sm ${
                                                                                             isActiveTemplate
                                                                                                 ? (c.isDark
                                                                                                     ? "bg-[#155DFC]/18 border-[#155DFC]/50 text-[#A9C5FF]"
@@ -1539,14 +2437,29 @@ export function AttendanceManagement() {
                                                                                                 : `${secondaryButtonClass} hover:bg-[#155DFC]/12 hover:border-[#155DFC] hover:text-[#155DFC]`
                                                                                         }`}
                                                                                     >
-                                                                                        {t.label}
+                                                                                        {template.name}
                                                                                     </button>
                                                                                 );
                                                                             })}
                                                                             <button
-                                                                                onClick={() => handleShiftUpdate(worker.id, h.day, { start: "", end: "", isOff: true })}
-                                                                                className={`text-[11px] font-bold py-2 rounded-lg transition-all border shadow-sm ${
-                                                                                    shift?.isOff
+                                                                                type="button"
+                                                                                onClick={() =>
+                                                                                    setEditingShiftDraft({
+                                                                                        start: "",
+                                                                                        end: "",
+                                                                                        isOff: true,
+                                                                                        templateId: null,
+                                                                                        breaks: [],
+                                                                                        adjustment: {
+                                                                                            kind: "none",
+                                                                                            note: "",
+                                                                                            plannedStart: "",
+                                                                                            plannedEnd: "",
+                                                                                        },
+                                                                                    })
+                                                                                }
+                                                                                className={`text-[11px] font-bold py-1.5 rounded-lg transition-all border shadow-sm ${
+                                                                                    popoverShift?.isOff
                                                                                         ? "bg-rose-500 text-white border-rose-600"
                                                                                         : `${secondaryButtonClass} hover:bg-rose-500/10 hover:border-rose-400 hover:text-rose-500`
                                                                                 }`}
@@ -1554,6 +2467,228 @@ export function AttendanceManagement() {
                                                                                 休
                                                                             </button>
                                                                         </div>
+
+                                                                        <div className="flex items-center gap-2 w-full justify-between">
+                                                                            <div className="flex flex-col gap-1 flex-1">
+                                                                                <span className={`text-[10px] ${c.textMuted} uppercase font-bold text-center`}>開始</span>
+                                                                                <input
+                                                                                    type="text"
+                                                                                    value={popoverShift?.start ?? ""}
+                                                                                    onChange={(e) =>
+                                                                                        setEditingShiftDraft((current) => ({
+                                                                                            ...(current ?? createShiftEditorDraft(shift)),
+                                                                                            start: e.target.value,
+                                                                                            isOff: false,
+                                                                                        }))
+                                                                                    }
+                                                                                    className={inputClass}
+                                                                                />
+                                                                            </div>
+                                                                            <div className={`pt-4 ${c.textMuted} font-bold`}>~</div>
+                                                                            <div className="flex flex-col gap-1 flex-1">
+                                                                                <span className={`text-[10px] ${c.textMuted} uppercase font-bold text-center`}>終了</span>
+                                                                                <input
+                                                                                    type="text"
+                                                                                    value={popoverShift?.end ?? ""}
+                                                                                    onChange={(e) =>
+                                                                                        setEditingShiftDraft((current) => ({
+                                                                                            ...(current ?? createShiftEditorDraft(shift)),
+                                                                                            end: e.target.value,
+                                                                                            isOff: false,
+                                                                                        }))
+                                                                                    }
+                                                                                    className={inputClass}
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+
+                                                                        <div className={`-mt-2 text-right text-[10px] font-semibold ${c.textMuted}`}>
+                                                                            {popoverShift?.isOff
+                                                                                ? "休日"
+                                                                                : `実働 ${calculateHours(popoverShift?.start ?? "", popoverShift?.end ?? "").toFixed(1)}h / 休憩 ${calculateBreakHoursFromAssignments(popoverShift?.breaks ?? []).toFixed(1)}h`}
+                                                                        </div>
+
+                                                                        {editorShiftTab === "plan" ? (
+                                                                            <div className="flex flex-col gap-2">
+                                                                                {shiftComplianceItems.length ? (
+                                                                                    <div className="flex flex-wrap gap-1.5">
+                                                                                        {shiftComplianceItems.map((item) => (
+                                                                                            <span
+                                                                                                key={item.label}
+                                                                                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${
+                                                                                                    item.tone === "warn"
+                                                                                                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                                                                                                        : c.isDark
+                                                                                                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                                                                                                            : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                                                                                }`}
+                                                                                            >
+                                                                                                {item.tone === "warn" ? (
+                                                                                                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                                                                                                ) : (
+                                                                                                    <CheckCircle2 className="h-3 w-3 shrink-0" />
+                                                                                                )}
+                                                                                                {item.label}
+                                                                                            </span>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                ) : null}
+
+                                                                                {matchedTemplate && !popoverShift?.isOff ? (
+                                                                                    <div className={`-mt-1 text-[10px] font-semibold ${c.textMuted}`}>
+                                                                                        テンプレート: {matchedTemplate.name}
+                                                                                    </div>
+                                                                                ) : null}
+
+                                                                                {!popoverShift?.isOff ? (
+                                                                                    <div className={`rounded-xl border p-2.5 ${c.bgSurface} ${c.borderCard}`}>
+                                                                                        <div className="mb-2 flex items-center justify-between gap-2">
+                                                                                            <span className={`text-[10px] font-bold uppercase ${c.textMuted}`}>休憩</span>
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                onClick={addEditingShiftDraftBreak}
+                                                                                                className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition ${c.borderCard} ${c.bgCard} ${c.textSecondary}`}
+                                                                                            >
+                                                                                                <Plus className="h-3 w-3" />
+                                                                                                追加
+                                                                                            </button>
+                                                                                        </div>
+
+                                                                                        {popoverShift?.breaks?.length ? (
+                                                                                            <div className="flex flex-col gap-2">
+                                                                                                {popoverShift.breaks.map((breakItem) => (
+                                                                                                    <div key={breakItem.id} className="grid grid-cols-[minmax(0,1fr)_64px_64px] gap-1.5">
+                                                                                                        <input
+                                                                                                            type="text"
+                                                                                                            value={breakItem.name}
+                                                                                                            onChange={(event) =>
+                                                                                                                updateEditingShiftDraftBreak(breakItem.id, { name: event.target.value })
+                                                                                                            }
+                                                                                                            className={`rounded-md border px-2 py-1.5 text-[11px] ${c.bgInput} ${c.borderCard} ${c.textPrimary} outline-none`}
+                                                                                                        />
+                                                                                                        <input
+                                                                                                            type="text"
+                                                                                                            value={breakItem.start}
+                                                                                                            onChange={(event) =>
+                                                                                                                updateEditingShiftDraftBreak(breakItem.id, { start: event.target.value })
+                                                                                                            }
+                                                                                                            className={`rounded-md border px-2 py-1.5 text-[11px] tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary} outline-none`}
+                                                                                                        />
+                                                                                                        <input
+                                                                                                            type="text"
+                                                                                                            value={breakItem.end}
+                                                                                                            onChange={(event) =>
+                                                                                                                updateEditingShiftDraftBreak(breakItem.id, { end: event.target.value })
+                                                                                                            }
+                                                                                                            className={`rounded-md border px-2 py-1.5 text-[11px] tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary} outline-none`}
+                                                                                                        />
+                                                                                                    </div>
+                                                                                                ))}
+                                                                                            </div>
+                                                                                        ) : (
+                                                                                            <div className={`rounded-lg border border-dashed px-3 py-2 text-center text-[11px] ${c.borderCard} ${c.textMuted}`}>
+                                                                                                休憩なし
+                                                                                            </div>
+                                                                                        )}
+                                                                                    </div>
+                                                                                ) : null}
+
+                                                                                <div className="flex items-center justify-end gap-2 pt-1">
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={closeCellEditor}
+                                                                                        className={`rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition ${secondaryButtonClass}`}
+                                                                                    >
+                                                                                        キャンセル
+                                                                                    </button>
+                                                                                    <button
+                                                                                        type="button"
+                                                                                        onClick={saveCellEditor}
+                                                                                        className="rounded-lg bg-[#155DFC] px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[#0F4FE3]"
+                                                                                    >
+                                                                                        保存
+                                                                                    </button>
+                                                                                </div>
+                                                                            </div>
+                                                                        ) : (
+                                                                            <div className="flex flex-col gap-2.5">
+                                                                                <div className="flex flex-wrap gap-1.5">
+                                                                                        {SHIFT_ADJUSTMENT_OPTIONS.map((option) => {
+                                                                                            const selected = currentAdjustmentKind === option.kind;
+                                                                                            return (
+                                                                                                <button
+                                                                                                    key={option.kind}
+                                                                                                    type="button"
+                                                                                                    onClick={() => applyAdjustmentKind(worker.id, h.day, option.kind, shift)}
+                                                                                                    className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition ${
+                                                                                                        selected
+                                                                                                            ? "border-[#EF9F27] bg-[#FAEEDA] text-[#854F0B]"
+                                                                                                            : `${c.borderCard} ${c.bgCard} ${c.textSecondary} hover:border-[#EF9F27]/40 hover:text-[#854F0B]`
+                                                                                                    }`}
+                                                                                                >
+                                                                                                    {option.label}
+                                                                                                </button>
+                                                                                            );
+                                                                                        })}
+                                                                                </div>
+
+                                                                                <div className={`rounded-xl border p-2.5 text-[11px] ${c.bgSurface} ${c.borderCard}`}>
+                                                                                    {currentAdjustmentKind === "late" ? (
+                                                                                        <div className="grid grid-cols-3 gap-2">
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>予定開始</div><div className={`mt-0.5 font-semibold tabular-nums ${c.textPrimary}`}>{plannedStart || "-"}</div></div>
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>調整後</div><div className={`mt-0.5 font-semibold tabular-nums ${c.textPrimary}`}>{shift?.start || "-"}</div></div>
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>遅刻</div><div className="mt-0.5 font-semibold text-amber-600">{adjustmentDuration.toFixed(1)}h</div></div>
+                                                                                        </div>
+                                                                                    ) : currentAdjustmentKind === "overtime" ? (
+                                                                                        <div className="grid grid-cols-3 gap-2">
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>予定終了</div><div className={`mt-0.5 font-semibold tabular-nums ${c.textPrimary}`}>{plannedEnd || "-"}</div></div>
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>調整後</div><div className={`mt-0.5 font-semibold tabular-nums ${c.textPrimary}`}>{shift?.end || "-"}</div></div>
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>延長</div><div className="mt-0.5 font-semibold text-sky-600">{adjustmentDuration.toFixed(1)}h</div></div>
+                                                                                        </div>
+                                                                                    ) : currentAdjustmentKind === "earlyLeave" ? (
+                                                                                        <div className="grid grid-cols-3 gap-2">
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>予定終了</div><div className={`mt-0.5 font-semibold tabular-nums ${c.textPrimary}`}>{plannedEnd || "-"}</div></div>
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>調整後</div><div className={`mt-0.5 font-semibold tabular-nums ${c.textPrimary}`}>{shift?.end || "-"}</div></div>
+                                                                                            <div className={`rounded-lg border px-2 py-1.5 ${c.bgCard} ${c.borderCard}`}><div className={`text-[10px] ${c.textMuted}`}>早退</div><div className="mt-0.5 font-semibold text-amber-600">{adjustmentDuration.toFixed(1)}h</div></div>
+                                                                                        </div>
+                                                                                    ) : currentAdjustmentKind === "absence" ? (
+                                                                                        <div className={`rounded-lg border px-2.5 py-2 text-[11px] ${c.bgCard} ${c.borderCard} ${c.textSecondary}`}>当日は欠勤として扱います。</div>
+                                                                                    ) : currentAdjustmentKind === "handoff" ? (
+                                                                                        <div className={`rounded-lg border px-2.5 py-2 text-[11px] ${c.bgCard} ${c.borderCard} ${c.textSecondary}`}>担当変更・入替内容をメモへ記録できます。</div>
+                                                                                    ) : (
+                                                                                        <div className={`rounded-lg border px-2.5 py-2 text-[11px] ${c.bgCard} ${c.borderCard} ${c.textSecondary}`}>調整内容を選ぶとここに要点が出ます。</div>
+                                                                                    )}
+                                                                                </div>
+
+                                                                                <label className="flex flex-col gap-1">
+                                                                                    <span className={`text-[10px] font-semibold ${c.textMuted}`}>メモ</span>
+                                                                                    <textarea
+                                                                                        value={shiftAdjustment.note}
+                                                                                        onChange={(event) =>
+                                                                                            updateShiftAdjustment(worker.id, h.day, { note: event.target.value }, shift)
+                                                                                        }
+                                                                                        rows={2}
+                                                                                        className={`w-full resize-none rounded-lg border px-2.5 py-2 text-[11px] ${c.bgInput} ${c.borderCard} ${c.textPrimary} outline-none placeholder:text-gray-400 focus:border-cyan-500/40 focus:ring-2 focus:ring-cyan-500/20`}
+                                                                                        placeholder="当日の補足を入力"
+                                                                                    />
+                                                                                </label>
+
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() =>
+                                                                                        updateShiftAdjustment(
+                                                                                            worker.id,
+                                                                                            h.day,
+                                                                                            { kind: "none", note: "", plannedStart, plannedEnd },
+                                                                                            shift,
+                                                                                        )
+                                                                                    }
+                                                                                    className={`rounded-lg border px-3 py-1.5 text-[10px] font-semibold transition ${secondaryButtonClass} hover:border-slate-400/50`}
+                                                                                >
+                                                                                    調整をクリア
+                                                                                </button>
+                                                                            </div>
+                                                                        )}
                                                                     </div>
                                                                 ) : null}
                                                             </td>
@@ -1631,47 +2766,198 @@ export function AttendanceManagement() {
 
                 {/* Bulk Action Toolbar - Floating */}
                 {isBulkActive && (
-                    <div className={`absolute bottom-16 left-1/2 -translate-x-1/2 z-[100] ${popoverSurface} border-2 border-cyan-500 shadow-[0_8px_32px_rgba(0,0,0,0.25)] rounded-2xl p-4 flex items-center gap-6 animate-in slide-in-from-bottom-4 duration-300 backdrop-blur-md`}>
-                        <div className={`flex flex-col border-r pr-6 ${c.borderCard}`}>
-                            <div className={`flex items-center gap-2 ${c.isDark ? "text-cyan-400" : "text-cyan-600"} mb-1`}>
-                                <Zap className="w-4 h-4 fill-cyan-500" />
-                                <span className="text-[12px] font-black uppercase tracking-wider">一括編集モード</span>
+                    <div className={`absolute bottom-16 left-1/2 -translate-x-1/2 z-[100] min-w-[920px] max-w-[1080px] ${popoverSurface} border-2 border-cyan-500 shadow-[0_8px_32px_rgba(0,0,0,0.25)] rounded-2xl p-4 flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 backdrop-blur-md`}>
+                        <div className="flex items-start justify-between gap-6">
+                            <div className={`flex flex-col border-r pr-6 ${c.borderCard}`}>
+                                <div className={`flex items-center gap-2 ${c.isDark ? "text-cyan-400" : "text-cyan-600"} mb-1`}>
+                                    <Zap className="w-4 h-4 fill-cyan-500" />
+                                    <span className="text-[12px] font-black uppercase tracking-wider">一括編集モード</span>
+                                </div>
+                                <span className={`text-[11px] ${c.textSecondary} font-bold whitespace-nowrap`}>{selectedTargetKeys.size}セルを選択中</span>
                             </div>
-                            <span className={`text-[11px] ${c.textSecondary} font-bold whitespace-nowrap`}>{selectedTargetKeys.size}セルを選択中</span>
-                        </div>
 
-                        <div className="flex items-center gap-4">
-                            <div className="flex flex-col gap-1 items-center">
-                                <span className={`text-[10px] ${c.textMuted} font-bold`}>共通シフト</span>
-                                <div className="flex items-center gap-3">
-                                    {quickTemplates.map(t => (
-                                        <button
-                                            key={t.label}
-                                            onClick={() => applyBulkShift(t.s, t.e, false)}
-                                            className={`px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all shadow-sm active:scale-95 ${c.isDark ? "bg-[#155DFC]/10 border border-[#155DFC]/30 text-[#A9C5FF]" : "bg-[#EEF4FF] border border-[#B7CDFF] text-[#155DFC]"} hover:bg-[#155DFC] hover:text-white`}
-                                        >
-                                            {t.label}
-                                        </button>
-                                    ))}
+                            <div className="min-w-0 flex-1 flex flex-col gap-3">
+                                <div className="flex items-center justify-between gap-3">
+                                    <span className={`text-[10px] ${c.textMuted} font-bold`}>共通シフト</span>
+                                    {selectedBulkTemplate ? (
+                                        <span className={`text-[10px] font-semibold ${c.textMuted}`}>
+                                            テンプレート: {selectedBulkTemplate.name}
+                                        </span>
+                                    ) : null}
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {quickTemplates.map(template => {
+                                        const isActive = bulkShiftDraft?.templateId === template.id;
+                                        return (
+                                            <button
+                                                key={template.id}
+                                                type="button"
+                                                onClick={() => setBulkShiftDraft(createBulkShiftDraft(template))}
+                                                className={`px-3 py-1.5 rounded-lg text-[12px] font-bold transition-all shadow-sm active:scale-95 ${
+                                                    isActive
+                                                        ? "bg-[#155DFC] border border-[#155DFC] text-white"
+                                                        : c.isDark
+                                                            ? "bg-[#155DFC]/10 border border-[#155DFC]/30 text-[#A9C5FF] hover:bg-[#155DFC]/18"
+                                                            : "bg-[#EEF4FF] border border-[#B7CDFF] text-[#155DFC] hover:bg-[#DDEAFF]"
+                                                }`}
+                                            >
+                                                {template.name}
+                                            </button>
+                                        );
+                                    })}
                                 </div>
                             </div>
 
-                            <div className={`h-10 w-[1px] ${dividerTone}`} />
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => applyBulkShift("", "", true, [], null)}
+                                    className="flex items-center gap-2 px-4 py-2 bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-500/30 rounded-lg text-[13px] font-bold hover:bg-rose-500 hover:text-white transition-all shadow-sm whitespace-nowrap"
+                                >
+                                    <CalendarX className="w-4 h-4" /> 一括休日
+                                </button>
 
-                            <button
-                                onClick={() => applyBulkShift("", "", true)}
-                                className="flex items-center gap-2 px-4 py-2 bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-500/30 rounded-lg text-[13px] font-bold hover:bg-rose-500 hover:text-white transition-all shadow-sm"
-                            >
-                                <CalendarX className="w-4 h-4" /> 一括休日
-                            </button>
+                                <button
+                                    onClick={clearSelection}
+                                    className={`p-2 ${c.textMuted} ${c.isDark ? "hover:text-gray-200" : "hover:text-gray-600"} transition-colors`}
+                                    title="キャンセル"
+                                >
+                                    <X className="w-5 h-5" />
+                                </button>
+                            </div>
+                        </div>
 
-                            <button
-                                onClick={clearSelection}
-                                className={`p-2 ${c.textMuted} ${c.isDark ? "hover:text-gray-200" : "hover:text-gray-600"} transition-colors`}
-                                title="キャンセル"
-                            >
-                                <X className="w-5 h-5" />
-                            </button>
+                        <div className="grid grid-cols-[180px_1fr] gap-4">
+                            <div className={`rounded-xl border p-3 ${c.bgSurface} ${c.borderCard} flex flex-col gap-3`}>
+                                <div className="flex items-center gap-2">
+                                    <div className="flex flex-col gap-1 flex-1">
+                                        <span className={`text-[10px] ${c.textMuted} uppercase font-bold text-center`}>開始</span>
+                                        <input
+                                            type="text"
+                                            value={bulkShiftDraft?.start ?? ""}
+                                            onChange={(e) =>
+                                                setBulkShiftDraft((current) => ({
+                                                    ...(current ?? createBulkShiftDraft()),
+                                                    start: e.target.value,
+                                                    isOff: false,
+                                                }))
+                                            }
+                                            className={inputClass}
+                                        />
+                                    </div>
+                                    <div className={`pt-4 ${c.textMuted} font-bold`}>~</div>
+                                    <div className="flex flex-col gap-1 flex-1">
+                                        <span className={`text-[10px] ${c.textMuted} uppercase font-bold text-center`}>終了</span>
+                                        <input
+                                            type="text"
+                                            value={bulkShiftDraft?.end ?? ""}
+                                            onChange={(e) =>
+                                                setBulkShiftDraft((current) => ({
+                                                    ...(current ?? createBulkShiftDraft()),
+                                                    end: e.target.value,
+                                                    isOff: false,
+                                                }))
+                                            }
+                                            className={inputClass}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className={`text-right text-[10px] font-semibold ${c.textMuted}`}>
+                                    実働 {calculateHours(bulkShiftDraft?.start ?? "", bulkShiftDraft?.end ?? "").toFixed(1)}h / 休憩 {calculateBreakHoursFromAssignments(bulkShiftDraft?.breaks ?? []).toFixed(1)}h
+                                </div>
+
+                                {bulkComplianceItems.length ? (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {bulkComplianceItems.map((item) => (
+                                            <span
+                                                key={item.label}
+                                                className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${
+                                                    item.tone === "warn"
+                                                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                                                        : c.isDark
+                                                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                                                            : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                                }`}
+                                            >
+                                                {item.tone === "warn" ? (
+                                                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                                                ) : (
+                                                    <CheckCircle2 className="h-3 w-3 shrink-0" />
+                                                )}
+                                                {item.label}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : null}
+
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        applyBulkShift(
+                                            bulkShiftDraft?.start ?? "",
+                                            bulkShiftDraft?.end ?? "",
+                                            bulkShiftDraft?.isOff ?? false,
+                                            bulkShiftDraft?.breaks ?? [],
+                                            bulkShiftDraft?.templateId ?? null,
+                                        )
+                                    }
+                                    className="rounded-lg bg-[#155DFC] px-4 py-2 text-[12px] font-bold text-white shadow-sm transition hover:bg-[#0F4FE3]"
+                                >
+                                    一括適用
+                                </button>
+                            </div>
+
+                            <div className={`rounded-xl border p-3 ${c.bgSurface} ${c.borderCard}`}>
+                                <div className="mb-2 flex items-center justify-between gap-2">
+                                    <span className={`text-[10px] font-bold uppercase ${c.textMuted}`}>休憩</span>
+                                    <button
+                                        type="button"
+                                        onClick={addBulkShiftDraftBreak}
+                                        className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-semibold transition ${c.borderCard} ${c.bgCard} ${c.textSecondary}`}
+                                    >
+                                        <Plus className="h-3 w-3" />
+                                        追加
+                                    </button>
+                                </div>
+
+                                {bulkShiftDraft?.breaks?.length ? (
+                                    <div className="flex flex-col gap-2">
+                                        {bulkShiftDraft.breaks.map((breakItem) => (
+                                            <div key={breakItem.id} className="grid grid-cols-[minmax(0,1fr)_78px_78px_32px] gap-1.5">
+                                                <input
+                                                    type="text"
+                                                    value={breakItem.name}
+                                                    onChange={(event) => updateBulkShiftDraftBreak(breakItem.id, { name: event.target.value })}
+                                                    className={`rounded-md border px-2 py-1.5 text-[11px] ${c.bgInput} ${c.borderCard} ${c.textPrimary} outline-none`}
+                                                />
+                                                <input
+                                                    type="text"
+                                                    value={breakItem.start}
+                                                    onChange={(event) => updateBulkShiftDraftBreak(breakItem.id, { start: event.target.value })}
+                                                    className={`rounded-md border px-2 py-1.5 text-[11px] tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary} outline-none`}
+                                                />
+                                                <input
+                                                    type="text"
+                                                    value={breakItem.end}
+                                                    onChange={(event) => updateBulkShiftDraftBreak(breakItem.id, { end: event.target.value })}
+                                                    className={`rounded-md border px-2 py-1.5 text-[11px] tabular-nums ${c.bgInput} ${c.borderCard} ${c.textPrimary} outline-none`}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removeBulkShiftDraftBreak(breakItem.id)}
+                                                    className={`inline-flex h-[32px] w-[32px] items-center justify-center rounded-md border transition ${c.borderCard} ${c.bgCard} text-rose-500 hover:bg-rose-500/10`}
+                                                >
+                                                    <Trash2 className="h-3.5 w-3.5" />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className={`rounded-lg border border-dashed px-3 py-2 text-center text-[11px] ${c.borderCard} ${c.textMuted}`}>
+                                        休憩なし
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 )}

@@ -4,6 +4,7 @@ import { buildDeploymentWorkerIdFromUserId, readUsersFromStorage, type User } fr
 const MASTER_DATA_STORAGE_KEY = "fluxview-master-data-v3";
 const LEGACY_MASTER_DATA_STORAGE_KEY = "fluxview-master-data-v2";
 const FIELD_DEPLOYMENT_WORKER_NOTES_STORAGE_KEY = "fluxview-field-worker-notes-v1";
+const MANAGEMENT_TEAM_STORAGE_KEY = "fluxview-management-teams-v1";
 const DEPLOYMENT_COLORS = [
   "bg-pink-500",
   "bg-teal-500",
@@ -22,10 +23,24 @@ const DEPLOYMENT_COLORS = [
   "bg-slate-400",
   "bg-gray-400",
 ] as const;
+const TEAM_COLOR_CLASS_MAP = {
+  blue: "bg-[#155DFC]",
+  emerald: "bg-emerald-500",
+  violet: "bg-violet-500",
+  amber: "bg-amber-500",
+  rose: "bg-rose-500",
+  slate: "bg-slate-400",
+} as const;
 
 type WorkforceMasterData = {
   qualifications: QualificationMaster[];
   skills: SkillMaster[];
+};
+
+type StoredManagementTeam = {
+  id: string;
+  memberUserIds: string[];
+  themeColor?: string;
 };
 
 export type DeploymentWorkerStatus = "active" | "break" | "absent";
@@ -94,6 +109,32 @@ function resolveColor(index: number) {
   return DEPLOYMENT_COLORS[index % DEPLOYMENT_COLORS.length];
 }
 
+function readManagementTeams() {
+  const teams = readJsonStorage<StoredManagementTeam[]>(MANAGEMENT_TEAM_STORAGE_KEY);
+  if (!Array.isArray(teams)) return [];
+  return teams.filter(
+    (team): team is StoredManagementTeam =>
+      !!team &&
+      typeof team.id === "string" &&
+      Array.isArray(team.memberUserIds),
+  );
+}
+
+function buildTeamColorMap() {
+  const colorMap = new Map<string, string>();
+  readManagementTeams().forEach((team) => {
+    const teamColorClass =
+      (team.themeColor && TEAM_COLOR_CLASS_MAP[team.themeColor as keyof typeof TEAM_COLOR_CLASS_MAP]) ||
+      TEAM_COLOR_CLASS_MAP.blue;
+    team.memberUserIds.forEach((userId) => {
+      if (!colorMap.has(userId)) {
+        colorMap.set(userId, teamColorClass);
+      }
+    });
+  });
+  return colorMap;
+}
+
 function mapUserStatus(status: User["status"]): DeploymentWorkerStatus {
   switch (status) {
     case "inactive":
@@ -138,6 +179,7 @@ export function readDeploymentWorkers() {
   const qualificationIdByName = buildCapabilityIdMap(masterData.qualifications);
   const skillIdByName = buildCapabilityIdMap(masterData.skills);
   const storedNotes = readJsonStorage<Record<string, string>>(FIELD_DEPLOYMENT_WORKER_NOTES_STORAGE_KEY) ?? {};
+  const teamColorMap = buildTeamColorMap();
 
   return users.map((user, index) => {
     const workerId = resolveDeploymentWorkerId(user, index);
@@ -146,7 +188,7 @@ export function readDeploymentWorkers() {
       userId: user.id,
       name: user.name,
       initials: buildInitials(user),
-      color: resolveColor(index),
+      color: teamColorMap.get(user.id) ?? TEAM_COLOR_CLASS_MAP.slate ?? resolveColor(index),
       qualificationIds: user.certifications.flatMap((item) => qualificationIdByName.get(item.name) ?? []),
       skillIds: user.skills.flatMap((item) => skillIdByName.get(item.name) ?? []),
       status: mapUserStatus(user.status),
@@ -160,12 +202,13 @@ export function readDeploymentWorkers() {
 
 export function readAttendanceWorkers() {
   const users = readUsersFromStorage();
+  const teamColorMap = buildTeamColorMap();
   return users.map((user, index) => ({
     id: resolveDeploymentWorkerId(user, index),
     userId: user.id,
     name: user.name,
     initials: buildInitials(user),
-    color: resolveColor(index),
+    color: teamColorMap.get(user.id) ?? TEAM_COLOR_CLASS_MAP.slate ?? resolveColor(index),
     skills: buildAttendanceSkillChips(user),
     status: mapUserStatus(user.status),
     category: user.employmentType,

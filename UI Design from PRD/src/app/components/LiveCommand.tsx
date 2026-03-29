@@ -13,6 +13,7 @@ import {
   Search,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
@@ -288,6 +289,12 @@ type DragState = {
   fromStepId: string | null;
 };
 
+type TeamDragState = {
+  teamId: string;
+  teamName: string;
+  workerIds: string[];
+};
+
 type PlacementAlertState =
   | {
       message: string;
@@ -394,6 +401,37 @@ type WorkerPoolSlot = {
   worker: DeploymentWorker;
 };
 
+type WorkerTaskSegment = {
+  stepId: string;
+  processName: string;
+  shipperName: string;
+  workflowName: string;
+  areaName: string;
+  startTime: string;
+  endTime: string;
+  startIndex: number;
+  endIndex: number;
+};
+
+type WorkerTaskCardView = {
+  worker: DeploymentWorker;
+  splitCount: number;
+  shiftLabel: string;
+  remainingLabel: string | null;
+  statusLabel: string;
+  statusClassName: string;
+  currentSegment: WorkerTaskSegment | null;
+  nextSegment: WorkerTaskSegment | null;
+  utilizationPercent: number;
+  actionLabel: string | null;
+  qualificationItems: CapabilityItem[];
+  skillItems: CapabilityItem[];
+  dragFromStepId: string | null;
+  draggable: boolean;
+  muted: boolean;
+  isOff: boolean;
+};
+
 type RightTab = "staff" | "adjustments";
 
 type AdjustmentListItem = {
@@ -405,13 +443,98 @@ type AdjustmentListItem = {
   nextAssignment: string;
 };
 
+type StoredManagementTeamView = {
+  id: string;
+  name?: string;
+  memberUserIds: string[];
+  themeColor?: string;
+};
+
+type TemporaryWorkerTeam = {
+  id: string;
+  name: string;
+  themeColor: string;
+  memberUserIds: string[];
+  createdAt: string;
+};
+
 const FIELD_DEPLOYMENT_AREA_ASSIGNMENT_STORAGE_PREFIX = "fluxview-field-deployment-area-assignments-v1";
+const MANAGEMENT_TEAM_STORAGE_KEY = "fluxview-management-teams-v1";
+const TEMPORARY_TEAM_STORAGE_PREFIX = "fluxview-live-command-temp-teams-v1";
+const TEMPORARY_TEAM_COLOR_OPTIONS = [
+  { id: "blue", name: "ブルー", colorClass: "bg-[#155DFC]" },
+  { id: "emerald", name: "グリーン", colorClass: "bg-emerald-500" },
+  { id: "violet", name: "バイオレット", colorClass: "bg-violet-500" },
+  { id: "amber", name: "アンバー", colorClass: "bg-amber-500" },
+  { id: "rose", name: "ローズ", colorClass: "bg-rose-500" },
+  { id: "slate", name: "グレー", colorClass: "bg-slate-400" },
+] as const;
 
 function buildAreaAssignmentStorageKey(siteId: string, dateKey?: string) {
   const scopeKey = siteId || "default";
   return dateKey
     ? `${FIELD_DEPLOYMENT_AREA_ASSIGNMENT_STORAGE_PREFIX}:${scopeKey}:${dateKey}`
     : `${FIELD_DEPLOYMENT_AREA_ASSIGNMENT_STORAGE_PREFIX}:${scopeKey}`;
+}
+
+function buildTemporaryTeamStorageKey(siteId: string, dateKey?: string) {
+  const scopeKey = siteId || "default";
+  return dateKey
+    ? `${TEMPORARY_TEAM_STORAGE_PREFIX}:${scopeKey}:${dateKey}`
+    : `${TEMPORARY_TEAM_STORAGE_PREFIX}:${scopeKey}`;
+}
+
+function formatHourBalance(minutes: number) {
+  return `${(Math.max(0, minutes) / 60).toFixed(1)}h`;
+}
+
+function calculateClockDuration(start: string, end: string) {
+  if (!isClockValue(start) || !isClockValue(end)) return 0;
+  const startMinutes = parseTimeLabel(start);
+  let endMinutes = parseTimeLabel(end);
+  if (endMinutes < startMinutes) endMinutes += 24 * 60;
+  return Math.max(endMinutes - startMinutes, 0);
+}
+
+function getWorkerTaskCardStatusMeta(params: {
+  isOff: boolean;
+  hasCurrentAssignment: boolean;
+  workerStatus: DeploymentWorker["status"];
+}) {
+  const { isOff, hasCurrentAssignment, workerStatus } = params;
+
+  if (isOff) {
+    return {
+      label: "シフト休み",
+      className: "bg-white/8 text-white/72",
+    };
+  }
+
+  if (hasCurrentAssignment) {
+    return {
+      label: "稼働中",
+      className: "bg-[#155DFC]/20 text-[#8bb3ff]",
+    };
+  }
+
+  if (workerStatus === "absent") {
+    return {
+      label: "離席",
+      className: "bg-white/10 text-white/60",
+    };
+  }
+
+  if (workerStatus === "break") {
+    return {
+      label: "休憩中",
+      className: "bg-amber-500/20 text-amber-300",
+    };
+  }
+
+  return {
+    label: "待機中",
+    className: "bg-amber-500/20 text-amber-300",
+  };
 }
 
 function readAreaAssignmentSnapshots(siteId: string, dateKey?: string) {
@@ -672,6 +795,7 @@ function buildAdjustmentListItems(params: {
 function WorkerCard({
   worker,
   subtitle,
+  hoverCardData,
   shiftLabel,
   splitCount = 1,
   muted = false,
@@ -685,6 +809,7 @@ function WorkerCard({
 }: {
   worker: DeploymentWorker;
   subtitle?: string;
+  hoverCardData?: WorkerTaskCardView;
   shiftLabel: string;
   splitCount?: number;
   muted?: boolean;
@@ -696,13 +821,49 @@ function WorkerCard({
   skillItems: CapabilityItem[];
   c: ReturnType<typeof useThemeColors>;
 }) {
-  const qualificationToneClasses = getCapabilityToneClasses("qualification");
-  const skillToneClasses = getCapabilityToneClasses("skill");
   const statusMeta = getWorkerStatusMeta(worker.status);
   const triggerRef = useRef<HTMLDivElement | null>(null);
   const hoverCardRef = useRef<HTMLDivElement | null>(null);
   const [isHoverCardVisible, setIsHoverCardVisible] = useState(false);
   const [hoverCardPosition, setHoverCardPosition] = useState<{ top: number; left: number } | null>(null);
+  const capabilityItems = [
+    ...qualificationItems.map((item) => ({ ...item, kind: "qualification" as const })),
+    ...skillItems.map((item) => ({ ...item, kind: "skill" as const })),
+  ].slice(0, 4);
+  const hoverStatusLabel = hoverCardData?.statusLabel ?? statusMeta.label;
+  const hoverStatusClassName = hoverCardData?.statusClassName ?? "bg-white/10 text-white/72";
+  const hoverCurrentSegment = hoverCardData?.currentSegment ?? null;
+  const hoverNextSegment = hoverCardData?.nextSegment ?? null;
+  const hoverRemainingLabel = hoverCardData?.remainingLabel ?? null;
+  const hoverUtilizationPercent = hoverCardData?.utilizationPercent ?? 0;
+  const hoverActionLabel = hoverCardData?.actionLabel ?? subtitle ?? null;
+  const isHoverOff = hoverCardData?.isOff ?? false;
+  const hoverStatusToneClass = c.isDark
+    ? hoverStatusClassName
+    : hoverStatusLabel === "稼働中"
+      ? "bg-[#EEF4FF] text-[#155DFC]"
+      : hoverStatusLabel === "待機中" || hoverStatusLabel === "休憩中"
+        ? "bg-amber-50 text-amber-700"
+        : "bg-slate-100 text-slate-600";
+  const hoverRootClass = c.isDark
+    ? "border-[#2a2a3e] bg-[#171b26] text-white shadow-[0_24px_64px_rgba(15,23,42,0.28)]"
+    : "border-gray-200 bg-white/98 text-gray-900 shadow-[0_24px_64px_rgba(15,23,42,0.16)]";
+  const hoverCurrentBlockClass = c.isDark ? "bg-[#213758]" : "border border-[#D9E6FF] bg-[#EEF4FF]";
+  const hoverCurrentLabelClass = c.isDark ? "text-[#bad1ff]" : "text-[#155DFC]";
+  const hoverCurrentMetaClass = c.isDark ? "bg-white/10 text-white/88" : "bg-white text-[#3B5BA9] border border-[#D9E6FF]";
+  const hoverNextBlockClass = c.isDark ? "bg-[#262522]" : "border border-gray-200 bg-gray-50";
+  const hoverNextMetaClass = c.isDark ? "bg-white/8 text-white/76" : "bg-white text-gray-600 border border-gray-200";
+  const hoverEmptyCurrentClass = c.isDark
+    ? "border-amber-400/60 text-white/65"
+    : "border-amber-300 bg-amber-50/70 text-amber-700";
+  const hoverEmptyNextClass = c.isDark
+    ? "border-white/12 text-white/58"
+    : "border-gray-200 bg-gray-50 text-gray-500";
+  const hoverMetricTrackClass = c.isDark ? "bg-white/8" : "bg-gray-200";
+  const hoverCapabilityClass = c.isDark
+    ? "bg-white/6 text-white/78"
+    : "border border-gray-200 bg-gray-50 text-gray-600";
+  const hoverActionChipClass = c.isDark ? "bg-white/8 text-white/72" : "bg-gray-100 text-gray-700";
 
   useEffect(() => {
     if (!isHoverCardVisible) return;
@@ -737,7 +898,16 @@ function WorkerCard({
       window.removeEventListener("resize", updateHoverCardPosition);
       window.removeEventListener("scroll", updateHoverCardPosition, true);
     };
-  }, [isHoverCardVisible, qualificationItems.length, skillItems.length, subtitle]);
+  }, [
+    hoverCardData?.actionLabel,
+    hoverCardData?.currentSegment?.stepId,
+    hoverCardData?.isOff,
+    hoverCardData?.nextSegment?.stepId,
+    hoverCardData?.remainingLabel,
+    hoverCardData?.statusLabel,
+    hoverCardData?.utilizationPercent,
+    isHoverCardVisible,
+  ]);
 
   return (
     <div
@@ -795,78 +965,315 @@ function WorkerCard({
       {isHoverCardVisible && hoverCardPosition && createPortal(
         <div
           ref={hoverCardRef}
-          className={`pointer-events-none fixed z-[120] w-[260px] rounded-2xl border p-3 text-left shadow-2xl ${c.bgCard} ${c.borderCard}`}
+          className={`pointer-events-none fixed z-[120] w-[316px] rounded-[22px] border p-3.5 text-left ${hoverRootClass}`}
           style={{ top: hoverCardPosition.top, left: hoverCardPosition.left }}
         >
-          <div className="flex items-start gap-3">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm ${worker.color}`}>
+          <div className="flex items-start gap-2.5">
+            <div className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm ring-4 ${c.isDark ? "ring-white/5" : "ring-slate-100"} ${worker.color}`}>
               {worker.initials}
+              {splitCount > 1 ? (
+                <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-[28px] items-center justify-center rounded-full bg-[#155DFC] px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                  1/{splitCount}
+                </span>
+              ) : null}
             </div>
             <div className="min-w-0 flex-1">
-              <div className={`truncate text-sm font-semibold ${c.textPrimary}`}>{worker.name}</div>
-              <div className={`mt-0.5 text-xs ${c.textSecondary}`}>{shiftLabel}</div>
-              <div className={`mt-1 text-[11px] ${c.textMuted}`}>{worker.id}</div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className={`truncate text-[17px] font-semibold leading-5 ${c.textPrimary}`}>{worker.name}</div>
+                  <div className={`mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] ${c.textSecondary}`}>
+                    <span>{shiftLabel}</span>
+                    <span className={c.textMuted}>•</span>
+                    <span>{hoverRemainingLabel ? `残 ${hoverRemainingLabel}` : "残 0.0h"}</span>
+                  </div>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${hoverStatusToneClass}`}>
+                  {hoverStatusLabel}
+                </span>
+              </div>
             </div>
-            <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${statusMeta.badgeClass}`}>
-              {statusMeta.label}
-            </span>
           </div>
 
-          {subtitle && (
-            <div className={`mt-3 rounded-xl px-2.5 py-2 text-[11px] leading-5 ${c.bgSurface} ${c.textSecondary}`}>
-              {subtitle}
+          {isHoverOff ? (
+            <div className={`mt-4 rounded-[16px] border border-dashed px-4 py-5 text-center text-[13px] font-medium ${c.isDark ? "border-white/14 text-white/60" : "border-gray-200 bg-gray-50 text-gray-500"}`}>
+              本日シフトなし
+            </div>
+          ) : (
+            <div className="mt-3.5">
+              {hoverCurrentSegment ? (
+                <div className={`rounded-[16px] px-3 py-3 ${hoverCurrentBlockClass}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className={`text-[11px] font-semibold ${hoverCurrentLabelClass}`}>現在の配置</div>
+                      <div className={`mt-1 truncate text-[15px] font-semibold ${c.textPrimary}`}>{hoverCurrentSegment.processName}</div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-medium ${hoverCurrentMetaClass}`}>
+                          {hoverCurrentSegment.shipperName}
+                        </span>
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-medium ${hoverCurrentMetaClass}`}>
+                          {hoverCurrentSegment.areaName}
+                        </span>
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-medium ${hoverCurrentMetaClass}`}>
+                          {hoverCurrentSegment.workflowName}
+                        </span>
+                      </div>
+                    </div>
+                    <div className={`text-right text-[13px] font-bold leading-5 tabular-nums ${c.textPrimary}`}>
+                      {hoverCurrentSegment.startTime} →
+                      <br />
+                      {hoverCurrentSegment.endTime}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className={`rounded-[16px] border border-dashed px-4 py-4 text-center text-[13px] font-medium ${hoverEmptyCurrentClass}`}>
+                  現在未配置・配置可能
+                </div>
+              )}
+
+              <div className={`flex items-center justify-center py-1.5 ${c.textMuted}`}>
+                <ArrowRight className="h-4 w-4 rotate-90" />
+              </div>
+
+              {hoverNextSegment ? (
+                <div className={`rounded-[16px] px-3 py-3 ${hoverNextBlockClass}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className={`text-[11px] font-semibold ${c.textSecondary}`}>次の配置</div>
+                      <div className={`mt-1 truncate text-[15px] font-semibold ${c.textPrimary}`}>{hoverNextSegment.processName}</div>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-medium ${hoverNextMetaClass}`}>
+                          {hoverNextSegment.shipperName}
+                        </span>
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-medium ${hoverNextMetaClass}`}>
+                          {hoverNextSegment.areaName}
+                        </span>
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-medium ${hoverNextMetaClass}`}>
+                          {hoverNextSegment.workflowName}
+                        </span>
+                      </div>
+                    </div>
+                    <div className={`text-right text-[13px] font-bold leading-5 tabular-nums ${c.textPrimary}`}>
+                      {hoverNextSegment.startTime} →
+                      <br />
+                      {hoverNextSegment.endTime}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className={`rounded-[16px] border border-dashed px-4 py-4 text-center text-[13px] font-medium ${hoverEmptyNextClass}`}>
+                  次の配置なし・{hoverRemainingLabel ?? "0.0h"} 空き
+                </div>
+              )}
+
+              <div className="mt-4">
+                <div className="flex items-center justify-between gap-3 text-[11px]">
+                  <span className={`font-medium ${c.textSecondary}`}>稼働率</span>
+                  <span className={`text-[13px] font-semibold ${c.textPrimary}`}>{hoverUtilizationPercent}%</span>
+                </div>
+                <div className={`mt-1.5 h-1.5 overflow-hidden rounded-full ${hoverMetricTrackClass}`}>
+                  <div
+                    className="h-full rounded-full bg-amber-400 transition-all"
+                    style={{ width: `${Math.max(hoverUtilizationPercent, hoverUtilizationPercent > 0 ? 8 : 0)}%` }}
+                  />
+                </div>
+              </div>
             </div>
           )}
 
-          {skillItems.length > 0 || qualificationItems.length > 0 ? (
-            <div className="mt-3 grid gap-2">
-              {qualificationItems.length > 0 && (
-                <div>
-                  <div className={`mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${c.textMuted}`}>資格</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {qualificationItems.map((item) => {
-                      const iconOption = getMasterIconOption(item.iconKey, DEFAULT_QUALIFICATION_ICON_KEY);
-                      const Icon = iconOption.icon;
-                      return (
-                        <span
-                          key={item.id}
-                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${qualificationToneClasses.surfaceClass}`}
-                        >
-                          <Icon className={`h-3 w-3 ${qualificationToneClasses.accentClass}`} />
-                          <span className={qualificationToneClasses.accentClass}>{item.name}</span>
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-              {skillItems.length > 0 && (
-                <div>
-                  <div className={`mb-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${c.textMuted}`}>スキル</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {skillItems.map((item) => {
-                      const iconOption = getMasterIconOption(item.iconKey, DEFAULT_SKILL_ICON_KEY);
-                      const Icon = iconOption.icon;
-                      return (
-                        <span
-                          key={item.id}
-                          className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] ${skillToneClasses.surfaceClass}`}
-                        >
-                          <Icon className={`h-3 w-3 ${skillToneClasses.accentClass}`} />
-                          <span className={skillToneClasses.accentClass}>{item.name}</span>
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {capabilityItems.length > 0 ? (
+                capabilityItems.map((item) => {
+                  const iconOption = getMasterIconOption(
+                    item.iconKey,
+                    item.kind === "qualification" ? DEFAULT_QUALIFICATION_ICON_KEY : DEFAULT_SKILL_ICON_KEY,
+                  );
+                  const Icon = iconOption.icon;
+                  return (
+                    <span
+                      key={`${worker.id}:${item.kind}:${item.id}`}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-xl ${hoverCapabilityClass}`}
+                      title={item.name}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                    </span>
+                  );
+                })
+              ) : (
+                <span className={`text-[11px] ${c.textMuted}`}>資格・スキル未設定</span>
               )}
             </div>
-          ) : (
-            <div className={`mt-3 text-[11px] ${c.textMuted}`}>登録済みの資格・スキルはありません</div>
-          )}
+
+            {hoverActionLabel ? (
+              <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${hoverActionChipClass}`}>
+                {hoverActionLabel}
+              </span>
+            ) : null}
+          </div>
         </div>,
         document.body,
       )}
+    </div>
+  );
+}
+
+function WorkerTaskPoolCard({
+  card,
+  onDragStart,
+  onDragEnd,
+  onSplit,
+  c,
+}: {
+  card: WorkerTaskCardView;
+  onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
+  onSplit?: (workerId: string) => void;
+  c: ReturnType<typeof useThemeColors>;
+}) {
+  const capabilityItems = [...card.qualificationItems, ...card.skillItems].slice(0, 4);
+
+  return (
+    <div
+      draggable={card.draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onContextMenu={(event) => {
+        if (!onSplit) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSplit(card.worker.id);
+      }}
+      className={[
+        "group rounded-[24px] border border-white/10 bg-[#2f2d2a] p-4 text-white shadow-[0_10px_32px_rgba(15,23,42,0.14)] transition duration-200",
+        card.draggable ? "cursor-grab active:cursor-grabbing hover:-translate-y-0.5" : "",
+        card.muted ? "opacity-90" : "",
+      ].join(" ")}
+    >
+      <div className="flex items-start gap-3">
+        <div className={`relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-base font-semibold text-white shadow-sm ring-4 ring-white/5 ${card.worker.color}`}>
+          {card.worker.initials}
+          {card.splitCount > 1 ? (
+            <span className="absolute -right-1.5 -top-1.5 inline-flex min-w-[28px] items-center justify-center rounded-full bg-sky-500 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+              1/{card.splitCount}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-[18px] font-semibold leading-5 text-white">{card.worker.name}</div>
+              <div className="mt-1 text-[12px] text-white/60">
+                {card.isOff ? card.worker.id : `${card.worker.id}・シフト`}
+              </div>
+              {card.remainingLabel ? <div className="text-[14px] text-white/72">残 {card.remainingLabel}</div> : null}
+            </div>
+            <span className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-semibold ${card.statusClassName}`}>
+              {card.statusLabel}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {card.isOff ? (
+        <div className="mt-5 rounded-[18px] border border-dashed border-white/14 px-4 py-6 text-center text-[14px] font-medium text-white/60">
+          本日シフトなし
+        </div>
+      ) : (
+        <>
+          {card.currentSegment ? (
+            <div className="mt-4 rounded-[18px] bg-[#2f4c7a] px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-[#bad1ff]">現在の配置</div>
+                  <div className="mt-2 truncate text-[18px] font-semibold text-white">{card.currentSegment.processName}</div>
+                  <div className="mt-1 truncate text-[12px] text-[#b8caf0]">{card.currentSegment.shipperName}</div>
+                </div>
+                <div className="text-right text-[13px] font-semibold text-white/88">
+                  {card.currentSegment.startTime} →
+                  <br />
+                  {card.currentSegment.endTime}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 rounded-[18px] border border-dashed border-amber-400/60 px-4 py-5 text-center text-[14px] font-medium text-white/65">
+              現在未配置・配置可能
+            </div>
+          )}
+
+          <div className="flex items-center justify-center py-2.5 text-white/45">
+            <ChevronRight className="h-5 w-5 rotate-90" />
+          </div>
+
+          {card.nextSegment ? (
+            <div className="rounded-[18px] bg-[#262522] px-4 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-white/58">次の配置</div>
+                  <div className="mt-2 truncate text-[18px] font-semibold text-white">{card.nextSegment.processName}</div>
+                  <div className="mt-1 truncate text-[12px] text-white/68">{card.nextSegment.shipperName}</div>
+                </div>
+                <div className="text-right text-[13px] font-semibold text-white/82">
+                  {card.nextSegment.startTime} →
+                  <br />
+                  {card.nextSegment.endTime}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-[18px] border border-dashed border-white/12 px-4 py-5 text-center text-[14px] font-medium text-white/58">
+              次の配置なし・{card.remainingLabel ?? "0.0h"} 空き
+            </div>
+          )}
+
+          <div className="mt-5">
+            <div className="flex items-center justify-between gap-3 text-[12px]">
+              <span className="font-medium text-white/60">稼働率</span>
+              <span className="text-[14px] font-semibold text-white/82">{card.utilizationPercent}%</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/8">
+              <div
+                className="h-full rounded-full bg-amber-400 transition-all"
+                style={{ width: `${Math.max(card.utilizationPercent, card.utilizationPercent > 0 ? 8 : 0)}%` }}
+              />
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="mt-5 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          {capabilityItems.length > 0 ? (
+            capabilityItems.map((item) => {
+              const fallbackIconKey = card.qualificationItems.some((qualification) => qualification.id === item.id)
+                ? DEFAULT_QUALIFICATION_ICON_KEY
+                : DEFAULT_SKILL_ICON_KEY;
+              const iconOption = getMasterIconOption(item.iconKey, fallbackIconKey);
+              const Icon = iconOption.icon;
+
+              return (
+                <span
+                  key={`${card.worker.id}:${item.id}`}
+                  className="inline-flex h-9 w-9 items-center justify-center rounded-2xl bg-white/6 text-white/78"
+                  title={item.name}
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
+              );
+            })
+          ) : (
+            <span className="text-[12px] text-white/38">資格・スキル未設定</span>
+          )}
+        </div>
+
+        {card.actionLabel ? (
+          <span className="rounded-full bg-white/8 px-3 py-1.5 text-[12px] font-medium text-white/72">
+            {card.actionLabel}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -886,7 +1293,10 @@ export function LiveCommand() {
   const [selectedTime, setSelectedTime] = useState("");
   const [keyword, setKeyword] = useState("");
   const [rightTab, setRightTab] = useState<RightTab>("staff");
+  const [isWorkerPoolModalOpen, setIsWorkerPoolModalOpen] = useState(false);
+  const [temporaryTeams, setTemporaryTeams] = useState<TemporaryWorkerTeam[]>([]);
   const [dragState, setDragState] = useState<DragState | null>(null);
+  const [teamDragState, setTeamDragState] = useState<TeamDragState | null>(null);
   const [placementAlert, setPlacementAlert] = useState<PlacementAlertState>(null);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [savedSnapshots, setSavedSnapshots] = useState<Record<string, AssignmentSnapshot>>({});
@@ -907,6 +1317,56 @@ export function LiveCommand() {
     const timerId = window.setTimeout(() => setPlacementAlert(null), 4000);
     return () => window.clearTimeout(timerId);
   }, [placementAlert]);
+
+  useEffect(() => {
+    if (!isWorkerPoolModalOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsWorkerPoolModalOpen(false);
+        setTeamDragState(null);
+        setDragState(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isWorkerPoolModalOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(buildTemporaryTeamStorageKey(selectedSiteId, selectedDate));
+      if (!raw) {
+        setTemporaryTeams([]);
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        setTemporaryTeams([]);
+        return;
+      }
+      setTemporaryTeams(
+        parsed.filter(
+          (team): team is TemporaryWorkerTeam =>
+            !!team &&
+            typeof team.id === "string" &&
+            typeof team.name === "string" &&
+            typeof team.themeColor === "string" &&
+            Array.isArray(team.memberUserIds) &&
+            typeof team.createdAt === "string",
+        ),
+      );
+    } catch {
+      setTemporaryTeams([]);
+    }
+  }, [selectedDate, selectedSiteId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      buildTemporaryTeamStorageKey(selectedSiteId, selectedDate),
+      JSON.stringify(temporaryTeams),
+    );
+  }, [selectedDate, selectedSiteId, temporaryTeams]);
 
   const siteScope = useMemo(() => buildSiteScope(sites, selectedSiteId), [sites, selectedSiteId]);
   const qualificationMap = useMemo(
@@ -944,6 +1404,16 @@ export function LiveCommand() {
     });
   const workerShiftLabelMap = useMemo(
     () => new Map(deploymentWorkers.map((worker) => [worker.id, formatWorkerShiftLabel(worker.id, worker.name, selectedDate)])),
+    [deploymentWorkers, selectedDate],
+  );
+  const workerShiftMap = useMemo(
+    () =>
+      new Map(
+        deploymentWorkers.map((worker) => [
+          worker.id,
+          resolveWorkerShiftForDate(worker.id, selectedDate) ?? resolveWorkerShiftForDate(worker.name, selectedDate) ?? null,
+        ]),
+      ),
     [deploymentWorkers, selectedDate],
   );
 
@@ -1173,6 +1643,144 @@ export function LiveCommand() {
       stepLookup: deploymentStepMap,
       stepAreaEntriesMap,
     });
+
+  const workerTaskCardViews = useMemo(() => {
+    if (timeLabels.length === 0) return [] satisfies WorkerTaskCardView[];
+
+    const selectedIndex = Math.max(timeLabels.indexOf(selectedTime), 0);
+    const referenceMinutes = selectedTime
+      ? parseTimeLabel(selectedTime)
+      : floorToInterval(now.getHours() * 60 + now.getMinutes(), timeInterval);
+
+    const getIntervalMinutes = (index: number) => {
+      if (index < timeLabels.length - 1) {
+        return Math.max(parseTimeLabel(timeLabels[index + 1]) - parseTimeLabel(timeLabels[index]), timeInterval);
+      }
+      return timeInterval;
+    };
+
+    const buildSegment = (workerId: string, index: number, stepId: string) => {
+      const step = deploymentStepMap.get(stepId);
+      if (!step) return null;
+
+      let startIndex = index;
+      while (startIndex > 0 && (draftSnapshots[timeLabels[startIndex - 1]]?.[stepId] ?? []).includes(workerId)) {
+        startIndex -= 1;
+      }
+
+      let endIndex = index;
+      while (endIndex + 1 < timeLabels.length && (draftSnapshots[timeLabels[endIndex + 1]]?.[stepId] ?? []).includes(workerId)) {
+        endIndex += 1;
+      }
+
+      const areaAssignments = draftAreaAssignments[timeLabels[index]] ?? draftAreaAssignments[timeLabels[startIndex]] ?? {};
+      const assignedAreaId = getAssignedAreaId(stepId, workerId, areaAssignments);
+      const areaName =
+        (stepAreaEntriesMap.get(stepId) ?? []).find((entry) => entry.areaId === assignedAreaId)?.areaName ?? "未設定エリア";
+
+      return {
+        stepId,
+        processName: step.processName,
+        shipperName: step.shipperName,
+        workflowName: step.workflowName,
+        areaName,
+        startTime: timeLabels[startIndex] ?? step.startTime,
+        endTime: endIndex + 1 < timeLabels.length ? timeLabels[endIndex + 1] : step.targetEndTime,
+        startIndex,
+        endIndex,
+      } satisfies WorkerTaskSegment;
+    };
+
+    const findNextSegment = (workerId: string, searchFromIndex: number) => {
+      for (let index = Math.max(searchFromIndex, 0); index < timeLabels.length; index += 1) {
+        const stepIds = findAssignedStepIds(draftSnapshots[timeLabels[index]] ?? {}, workerId);
+        if (stepIds.length === 0) continue;
+        return buildSegment(workerId, index, stepIds[0]);
+      }
+      return null;
+    };
+
+    return deploymentWorkers
+      .map((worker) => {
+        const shift = workerShiftMap.get(worker.id);
+        const isOff = Boolean(shift?.isOff);
+        const currentStepIds = findAssignedStepIds(currentSnapshot, worker.id);
+        const currentSegment = !isOff && currentStepIds.length > 0 ? buildSegment(worker.id, selectedIndex, currentStepIds[0]) : null;
+        const nextSegment = !isOff
+          ? findNextSegment(worker.id, currentSegment ? currentSegment.endIndex + 1 : selectedIndex + 1)
+          : null;
+
+        const assignedMinutes = timeLabels.reduce((sum, timeLabel, index) => {
+          const stepIds = findAssignedStepIds(draftSnapshots[timeLabel] ?? {}, worker.id);
+          if (stepIds.length === 0) return sum;
+          return sum + getIntervalMinutes(index);
+        }, 0);
+
+        const shiftMinutes =
+          shift && !shift.isOff && isClockValue(shift.start) && isClockValue(shift.end)
+            ? calculateClockDuration(shift.start, shift.end)
+            : 0;
+        const remainingMinutes =
+          shift && !shift.isOff && isClockValue(shift.end)
+            ? Math.max(parseTimeLabel(shift.end) - referenceMinutes, 0)
+            : 0;
+        const utilizationPercent = shiftMinutes > 0 ? Math.min(100, Math.round((assignedMinutes / shiftMinutes) * 100)) : 0;
+        const splitCount = effectiveWorkerSplitCounts.get(worker.id) ?? 1;
+        const assignedCount = currentWorkerAssignmentCounts.get(worker.id) ?? 0;
+        const hasSpareCapacity = splitCount > assignedCount;
+        const statusMeta = getWorkerTaskCardStatusMeta({
+          isOff,
+          hasCurrentAssignment: Boolean(currentSegment),
+          workerStatus: worker.status,
+        });
+
+        return {
+          worker,
+          splitCount,
+          shiftLabel: workerShiftLabelMap.get(worker.id) ?? "シフト未設定",
+          remainingLabel: isOff ? null : formatHourBalance(remainingMinutes),
+          statusLabel: statusMeta.label,
+          statusClassName: statusMeta.className,
+          currentSegment,
+          nextSegment,
+          utilizationPercent,
+          actionLabel: worker.note?.trim() || currentSegment?.workflowName || nextSegment?.workflowName || null,
+          qualificationItems: qualificationItemsForIds(worker.qualificationIds),
+          skillItems: skillItemsForIds(worker.skillIds),
+          dragFromStepId: hasSpareCapacity ? null : currentSegment?.stepId ?? null,
+          draggable: !isOff && worker.status !== "absent",
+          muted: isOff || worker.status !== "active",
+          isOff,
+        } satisfies WorkerTaskCardView;
+      })
+      .sort((left, right) => {
+        const leftRank = left.isOff ? 3 : left.currentSegment ? 0 : left.worker.status === "active" ? 1 : 2;
+        const rightRank = right.isOff ? 3 : right.currentSegment ? 0 : right.worker.status === "active" ? 1 : 2;
+        return leftRank - rightRank || left.worker.name.localeCompare(right.worker.name, "ja");
+      });
+  }, [
+    currentSnapshot,
+    deploymentStepMap,
+    deploymentWorkers,
+    draftAreaAssignments,
+    draftSnapshots,
+    effectiveWorkerSplitCounts,
+    currentWorkerAssignmentCounts,
+    getAssignedAreaId,
+    now,
+    qualificationItemsForIds,
+    selectedTime,
+    skillItemsForIds,
+    stepAreaEntriesMap,
+    timeInterval,
+    timeLabels,
+    workerShiftLabelMap,
+    workerShiftMap,
+  ]);
+  const workerTaskCardViewMap = useMemo(
+    () => new Map(workerTaskCardViews.map((card) => [card.worker.id, card])),
+    [workerTaskCardViews],
+  );
 
   const processViews = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLowerCase();
@@ -1581,6 +2189,309 @@ export function LiveCommand() {
   );
   const activeWorkers = availableWorkerSlots.filter((slot) => slot.worker.status === "active");
   const standbyWorkers = availableWorkerSlots.filter((slot) => slot.worker.status !== "active");
+  const workerTeamMetaMap = useMemo(() => {
+    const teamMap = new Map<string, { id: string; name: string; colorClass: string; isTemporary: boolean }>();
+
+    try {
+      temporaryTeams.forEach((team) => {
+        const colorClass =
+          TEMPORARY_TEAM_COLOR_OPTIONS.find((option) => option.id === team.themeColor)?.colorClass ?? "bg-[#155DFC]";
+        team.memberUserIds.forEach((userId) => {
+          if (typeof userId === "string" && !teamMap.has(userId)) {
+            teamMap.set(userId, {
+              id: team.id,
+              name: team.name,
+              colorClass,
+              isTemporary: true,
+            });
+          }
+        });
+      });
+
+      if (typeof window === "undefined") return teamMap;
+      const raw = window.localStorage.getItem(MANAGEMENT_TEAM_STORAGE_KEY);
+      if (!raw) return teamMap;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return teamMap;
+
+      parsed.forEach((team, index) => {
+        const typedTeam = team as StoredManagementTeamView;
+        if (!typedTeam || typeof typedTeam.id !== "string" || !Array.isArray(typedTeam.memberUserIds)) return;
+        const teamName =
+          typeof typedTeam.name === "string" && typedTeam.name.trim()
+            ? typedTeam.name.trim()
+            : `チーム ${index + 1}`;
+        const colorClass =
+          TEMPORARY_TEAM_COLOR_OPTIONS.find((option) => option.id === typedTeam.themeColor)?.colorClass ?? "bg-[#155DFC]";
+
+        typedTeam.memberUserIds.forEach((userId) => {
+          if (typeof userId === "string" && !teamMap.has(userId)) {
+            teamMap.set(userId, {
+              id: typedTeam.id,
+              name: teamName,
+              colorClass,
+              isTemporary: false,
+            });
+          }
+        });
+      });
+    } catch {
+      return teamMap;
+    }
+
+    return teamMap;
+  }, [temporaryTeams]);
+  const displayWorkerMap = useMemo(
+    () =>
+      new Map(
+        deploymentWorkers.map((worker) => {
+          const effectiveColor = worker.userId ? workerTeamMetaMap.get(worker.userId)?.colorClass : undefined;
+          return [worker.id, effectiveColor ? { ...worker, color: effectiveColor } : worker];
+        }),
+      ),
+    [deploymentWorkers, workerTeamMetaMap],
+  );
+  const activeWorkerGroups = useMemo(() => {
+    const groupMap = new Map<string, { id: string; name: string; colorClass: string; isTemporary: boolean; slots: typeof activeWorkers }>();
+
+    activeWorkers.forEach((slot) => {
+      const teamMeta = slot.worker.userId ? workerTeamMetaMap.get(slot.worker.userId) : undefined;
+      const groupId = teamMeta?.id ?? "__unassigned__";
+      const existing = groupMap.get(groupId);
+      if (existing) {
+        existing.slots.push(slot);
+        return;
+      }
+
+      groupMap.set(groupId, {
+        id: groupId,
+        name: teamMeta?.name ?? "未所属",
+        colorClass: teamMeta?.colorClass ?? "bg-slate-400",
+        isTemporary: teamMeta?.isTemporary ?? false,
+        slots: [slot],
+      });
+    });
+
+    return Array.from(groupMap.values())
+      .map((group) => ({
+        ...group,
+        slots: [...group.slots].sort((left, right) => left.worker.name.localeCompare(right.worker.name, "ja")),
+      }))
+      .sort((left, right) => {
+        if (left.id === "__unassigned__") return 1;
+        if (right.id === "__unassigned__") return -1;
+        return left.name.localeCompare(right.name, "ja");
+      });
+  }, [activeWorkers, workerTeamMetaMap]);
+  const createTemporaryTeamFromUserId = (userId: string) => {
+    let nextTeamName = "";
+    let nextTeamColor = TEMPORARY_TEAM_COLOR_OPTIONS[0].id;
+
+    setTemporaryTeams((prev) => {
+      let nameIndex = 1;
+      const existingNames = new Set(prev.map((team) => team.name));
+      while (existingNames.has(`仮チーム ${nameIndex}`)) {
+        nameIndex += 1;
+      }
+
+      nextTeamName = `仮チーム ${nameIndex}`;
+      nextTeamColor = TEMPORARY_TEAM_COLOR_OPTIONS[prev.length % TEMPORARY_TEAM_COLOR_OPTIONS.length].id;
+
+      const stripped = prev
+        .map((team) => ({
+          ...team,
+          memberUserIds: team.memberUserIds.filter((memberUserId) => memberUserId !== userId),
+        }))
+        .filter((team) => team.memberUserIds.length > 0);
+
+      return [
+        ...stripped,
+        {
+          id: `temp-team-${Date.now()}`,
+          name: nextTeamName,
+          themeColor: nextTeamColor,
+          memberUserIds: [userId],
+          createdAt: new Date().toISOString(),
+        },
+      ];
+    });
+
+    setPlacementAlert({
+      tone: "info",
+      message: `仮チーム「${nextTeamName || "仮チーム"}」を作成しました。`,
+    });
+  };
+  const assignUserToTemporaryTeam = (userId: string, teamId: string) => {
+    let targetTeamName = "";
+
+    setTemporaryTeams((prev) =>
+      prev
+        .map((team) => {
+          const filteredMemberIds = team.memberUserIds.filter((memberUserId) => memberUserId !== userId);
+          if (team.id === teamId) {
+            targetTeamName = team.name;
+            return { ...team, memberUserIds: [...filteredMemberIds, userId] };
+          }
+          return { ...team, memberUserIds: filteredMemberIds };
+        })
+        .filter((team) => team.memberUserIds.length > 0),
+    );
+
+    setPlacementAlert({
+      tone: "info",
+      message: `作業者を仮チーム「${targetTeamName || "仮チーム"}」へ追加しました。`,
+    });
+  };
+  const deleteTemporaryTeam = (teamId: string) => {
+    const team = temporaryTeams.find((item) => item.id === teamId);
+    setTemporaryTeams((prev) => prev.filter((item) => item.id !== teamId));
+    if (team) {
+      setPlacementAlert({
+        tone: "info",
+        message: `仮チーム「${team.name}」を削除しました。`,
+      });
+    }
+  };
+  const draggedWorker = dragState
+    ? (displayWorkerMap.get(dragState.workerId) ?? workerMap.get(dragState.workerId) ?? null)
+    : null;
+  const draggedWorkerUserId = draggedWorker?.userId ?? null;
+  const isPlacementDragActive = dragState !== null || teamDragState !== null;
+  const renderGroupedActiveWorkers = (interactive: boolean, modalMode = false) => {
+    if (activeWorkerGroups.length === 0) {
+      return (
+        <div className={`w-full rounded-2xl border border-dashed px-4 py-5 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
+          未配置の作業者はいません
+        </div>
+      );
+    }
+
+    return (
+      <div className="grid gap-3">
+        {activeWorkerGroups.map((group) => (
+          <div
+            key={group.id}
+            onDragOver={(event) => {
+              if (!modalMode || !group.isTemporary || !draggedWorkerUserId) return;
+              event.preventDefault();
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (!modalMode || !group.isTemporary || !draggedWorkerUserId) return;
+              assignUserToTemporaryTeam(draggedWorkerUserId, group.id);
+              setDragState(null);
+            }}
+            className={`rounded-2xl border border-dashed px-3 py-3 ${
+              modalMode && group.isTemporary && draggedWorkerUserId
+                ? "border-[#155DFC]/50 bg-[#EEF4FF]/55"
+                : `${c.borderCard} ${c.isDark ? "bg-white/[0.03]" : "bg-slate-50/80"}`
+            }`}
+          >
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${group.colorClass}`} />
+                <div className={`truncate text-xs font-semibold ${c.textSecondary}`}>{group.name}</div>
+                {group.isTemporary ? (
+                  <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600">
+                    仮チーム
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`rounded-full px-2 py-0.5 text-[10px] ${c.bgSurface} ${c.textMuted}`}>{group.slots.length} 名</div>
+                {modalMode && group.id !== "__unassigned__" ? (
+                  <button
+                    type="button"
+                    draggable
+                    onDragStart={(event) => {
+                      event.dataTransfer.effectAllowed = "move";
+                      setDragState(null);
+                      setTeamDragState({
+                        teamId: group.id,
+                        teamName: group.name,
+                        workerIds: group.slots.map((slot) => slot.workerId),
+                      });
+                    }}
+                    onDragEnd={() => setTeamDragState(null)}
+                    className="inline-flex items-center gap-1 rounded-full border border-[#155DFC]/20 bg-[#EEF4FF] px-2.5 py-1 text-[10px] font-semibold text-[#155DFC]"
+                  >
+                    <Users className="h-3.5 w-3.5" />
+                    チーム配置
+                  </button>
+                ) : null}
+                {group.isTemporary ? (
+                  <button
+                    type="button"
+                    onClick={() => deleteTemporaryTeam(group.id)}
+                    className={`inline-flex h-6 w-6 items-center justify-center rounded-lg border transition ${c.borderCard} ${c.bgCard} ${c.textMuted}`}
+                    aria-label={`${group.name} を削除`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {group.slots.map((slot) => (
+                <WorkerCard
+                  key={slot.id}
+                  worker={displayWorkerMap.get(slot.worker.id) ?? slot.worker}
+                  subtitle={slot.worker.note}
+                  hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
+                  shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
+                  splitCount={slot.splitCount}
+                  muted={false}
+                  draggable={interactive || modalMode}
+                  onSplit={interactive ? splitWorker : undefined}
+                  qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
+                  skillItems={skillItemsForIds(slot.worker.skillIds)}
+                  onDragStart={
+                    interactive || modalMode
+                      ? () => {
+                          setTeamDragState(null);
+                          setDragState({ workerId: slot.workerId, fromStepId: null });
+                        }
+                      : undefined
+                  }
+                  onDragEnd={interactive || modalMode ? () => setDragState(null) : undefined}
+                  c={c}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+        {modalMode ? (
+          <div
+            onDragOver={(event) => {
+              if (!draggedWorkerUserId) return;
+              event.preventDefault();
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              if (!draggedWorkerUserId) return;
+              createTemporaryTeamFromUserId(draggedWorkerUserId);
+              setDragState(null);
+            }}
+            className={`rounded-2xl border border-dashed px-4 py-5 text-center transition ${
+              draggedWorkerUserId
+                ? "border-[#155DFC]/60 bg-[#EEF4FF] text-[#155DFC]"
+                : `${c.borderCard} ${c.isDark ? "bg-white/[0.03]" : "bg-slate-50/80"} ${c.textSecondary}`
+            }`}
+          >
+            <div className="flex flex-col items-center justify-center gap-2">
+              <div className={`inline-flex h-11 w-11 items-center justify-center rounded-full border ${draggedWorkerUserId ? "border-[#155DFC]/30 bg-white text-[#155DFC]" : `${c.borderCard} ${c.bgCard} ${c.textMuted}`}`}>
+                <Plus className="h-4.5 w-4.5" />
+              </div>
+              <div className="text-sm font-semibold">仮チーム作成</div>
+              <div className={`text-[11px] ${draggedWorkerUserId ? "text-[#3B5BA9]" : c.textMuted}`}>
+                icon をここへ入れると新しい仮チームを作成します
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
   const canDeleteSplit =
     dragState !== null && (effectiveWorkerSplitCounts.get(dragState.workerId) ?? 1) > 1;
   const changedTimeLabels = useMemo(
@@ -1706,14 +2617,17 @@ export function LiveCommand() {
     });
   };
 
-  const applyPlacement = (
-    workerId: string,
-    processView: ProcessView,
-    sourceStepId: string | null,
-    targetShipper: ProcessShipperRow | null = null,
-  ) => {
+  const buildPlacementDraftResult = (params: {
+    workerId: string;
+    processView: ProcessView;
+    sourceStepId: string | null;
+    targetShipper?: ProcessShipperRow | null;
+    baseSnapshots: Record<string, AssignmentSnapshot>;
+    baseAreaAssignments: Record<string, AreaAssignmentSnapshot>;
+  }) => {
+    const { workerId, processView, sourceStepId, targetShipper = null, baseSnapshots, baseAreaAssignments } = params;
     const worker = workerMap.get(workerId);
-    if (!worker) return;
+    if (!worker) return null;
 
     const candidateRows = targetShipper ? [targetShipper] : processView.shipperRows;
     const shipperOptions = candidateRows
@@ -1724,7 +2638,7 @@ export function LiveCommand() {
       }))
       .filter((option) => option.stepIds.length > 0);
 
-    if (shipperOptions.length === 0) return;
+    if (shipperOptions.length === 0) return null;
 
     const workerShift = resolveWorkerShiftForDate(worker.id, selectedDate) ?? resolveWorkerShiftForDate(worker.name, selectedDate);
     const selectedMinutes = parseTimeLabel(selectedTime || timeLabels[0] || "00:00");
@@ -1745,16 +2659,16 @@ export function LiveCommand() {
       startTime;
     const endTime = parseTimeLabel(baseEndTime) < parseTimeLabel(startTime) ? startTime : baseEndTime;
 
-    const selectedOptions = shipperOptions;
-    const eligibleStepIds = Array.from(new Set(selectedOptions.flatMap((option) => option.stepIds)));
-    if (eligibleStepIds.length === 0) return;
+    const eligibleStepIds = Array.from(new Set(shipperOptions.flatMap((option) => option.stepIds)));
+    if (eligibleStepIds.length === 0) return null;
 
     const startMinutes = parseTimeLabel(startTime);
     const endMinutes = parseTimeLabel(endTime);
-    if (endMinutes < startMinutes) return;
+    if (endMinutes < startMinutes) return null;
+
     const allowParallelAssignment = (workerSplitOverrides[worker.id] ?? 1) > 1;
-    const nextSnapshots = { ...draftSnapshots };
-    const nextAreaAssignments = { ...draftAreaAssignments };
+    const nextSnapshots = { ...baseSnapshots };
+    const nextAreaAssignments = { ...baseAreaAssignments };
 
     timeLabels.forEach((timeLabel) => {
       const timeMinutes = parseTimeLabel(timeLabel);
@@ -1809,27 +2723,91 @@ export function LiveCommand() {
       nextAreaAssignments[timeLabel] = currentAreaSnapshot;
     });
 
-    setDraftSnapshots(nextSnapshots);
-    setDraftAreaAssignments(nextAreaAssignments);
+    return {
+      worker,
+      nextSnapshots,
+      nextAreaAssignments,
+      startTime,
+      endTime,
+      selectedSteps: eligibleStepIds
+        .map((stepId) => deploymentStepMap.get(stepId))
+        .filter((step): step is DeploymentStep => Boolean(step)),
+      targetLabel: targetShipper?.shipperName
+        ? `${processView.processName} / ${targetShipper.shipperName}`
+        : processView.processName,
+    };
+  };
 
-    const selectedSteps = eligibleStepIds
-      .map((stepId) => deploymentStepMap.get(stepId))
-      .filter((step): step is DeploymentStep => Boolean(step));
-    const requirementWarningLines = getRequirementWarningLines(worker.id, selectedSteps);
+  const applyPlacement = (
+    workerId: string,
+    processView: ProcessView,
+    sourceStepId: string | null,
+    targetShipper: ProcessShipperRow | null = null,
+  ) => {
+    const placement = buildPlacementDraftResult({
+      workerId,
+      processView,
+      sourceStepId,
+      targetShipper,
+      baseSnapshots: draftSnapshots,
+      baseAreaAssignments: draftAreaAssignments,
+    });
+    if (!placement) return;
+
+    setDraftSnapshots(placement.nextSnapshots);
+    setDraftAreaAssignments(placement.nextAreaAssignments);
+
+    const requirementWarningLines = getRequirementWarningLines(workerId, placement.selectedSteps);
     const requirementWarning = requirementWarningLines.join(" / ");
 
     setPlacementAlert({
       tone: requirementWarning ? "warning" : "info",
       title: requirementWarning ? "資格・スキル不足を確認してください" : undefined,
       details: requirementWarning ? requirementWarningLines : undefined,
-      message: (() => {
-        const targetLabel = targetShipper?.shipperName
-          ? `${processView.processName} / ${targetShipper.shipperName}`
-          : processView.processName;
-        return requirementWarning
-          ? `${worker.name} を ${targetLabel} に ${startTime} - ${endTime} で配置しました。`
-          : `${worker.name} を ${targetLabel} に ${startTime} - ${endTime} で配置しました。`;
-      })(),
+      message: `${placement.worker.name} を ${placement.targetLabel} に ${placement.startTime} - ${placement.endTime} で配置しました。`,
+    });
+  };
+
+  const applyTeamPlacement = (
+    team: TeamDragState,
+    processView: ProcessView,
+    targetShipper: ProcessShipperRow | null = null,
+  ) => {
+    let nextSnapshots = draftSnapshots;
+    let nextAreaAssignments = draftAreaAssignments;
+    const warningLines = new Set<string>();
+    let placedCount = 0;
+    let targetLabel = processView.processName;
+
+    team.workerIds.forEach((workerId) => {
+      const placement = buildPlacementDraftResult({
+        workerId,
+        processView,
+        sourceStepId: null,
+        targetShipper,
+        baseSnapshots: nextSnapshots,
+        baseAreaAssignments: nextAreaAssignments,
+      });
+      if (!placement) return;
+
+      nextSnapshots = placement.nextSnapshots;
+      nextAreaAssignments = placement.nextAreaAssignments;
+      targetLabel = placement.targetLabel;
+      placedCount += 1;
+      getRequirementWarningLines(workerId, placement.selectedSteps).forEach((line) => warningLines.add(line));
+    });
+
+    if (placedCount === 0) return;
+
+    setDraftSnapshots(nextSnapshots);
+    setDraftAreaAssignments(nextAreaAssignments);
+
+    const details = Array.from(warningLines);
+    setPlacementAlert({
+      tone: details.length > 0 ? "warning" : "info",
+      title: details.length > 0 ? "資格・スキル不足を確認してください" : undefined,
+      details: details.length > 0 ? details : undefined,
+      message: `チーム「${team.teamName}」の ${placedCount} 名を ${targetLabel} にまとめて配置しました。`,
     });
   };
 
@@ -1943,10 +2921,10 @@ export function LiveCommand() {
   const isSelectedDateFuture = selectedDate > todayKey;
   const boardLayoutClass =
     cardsPerRow === 5
-      ? "xl:grid-cols-[minmax(0,1fr)_260px]"
+      ? "xl:grid-cols-[minmax(0,1fr)_292px]"
       : cardsPerRow === 4
-        ? "xl:grid-cols-[minmax(0,1fr)_280px]"
-        : "xl:grid-cols-[minmax(0,1fr)_320px]";
+        ? "xl:grid-cols-[minmax(0,1fr)_316px]"
+        : "xl:grid-cols-[minmax(0,1fr)_352px]";
   const cardsGridClass =
     cardsPerRow === 5
       ? "md:grid-cols-2 xl:grid-cols-5"
@@ -1971,37 +2949,18 @@ export function LiveCommand() {
           setDragState(null);
         }}
       >
-        <div className={`mb-2 text-xs font-medium ${c.textSecondary}`}>未配置の作業者</div>
-        {dragState?.fromStepId && (
-          <div className="mb-3 rounded-xl bg-cyan-500/10 px-3 py-2 text-xs text-cyan-600">
-            ここへドロップすると未配置へ戻します。
-          </div>
-        )}
-        <div className="flex flex-wrap gap-2">
-          {activeWorkers.map((slot) => (
-            <WorkerCard
-              key={slot.id}
-              worker={slot.worker}
-              subtitle={slot.worker.note}
-              shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
-              splitCount={slot.splitCount}
-              onSplit={splitWorker}
-              qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
-              skillItems={skillItemsForIds(slot.worker.skillIds)}
-              onDragStart={() => setDragState({ workerId: slot.workerId, fromStepId: null })}
-              onDragEnd={() => setDragState(null)}
-              c={c}
-            />
-          ))}
-          {activeWorkers.length === 0 && (
-            <div className={`w-full rounded-2xl border border-dashed px-4 py-6 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
-              未配置の作業者はいません
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <div className={`text-xs font-medium ${c.textSecondary}`}>未配置の作業者</div>
+          {dragState?.fromStepId ? (
+            <div className="rounded-full bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-600">
+              ここへ戻す
             </div>
-          )}
+          ) : null}
         </div>
+        {renderGroupedActiveWorkers(true)}
       </div>
 
-      <div>
+      <div className={`rounded-2xl border border-dashed p-3 ${c.borderCard}`}>
         <div className={`mb-2 text-xs font-medium ${c.textSecondary}`}>待機・離席</div>
         <div className="flex flex-wrap gap-2">
           {standbyWorkers.map((slot) => (
@@ -2009,20 +2968,24 @@ export function LiveCommand() {
               key={slot.id}
               worker={slot.worker}
               subtitle={slot.worker.note}
+              hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
               shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
               splitCount={slot.splitCount}
               muted
               onSplit={splitWorker}
               qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
               skillItems={skillItemsForIds(slot.worker.skillIds)}
-              onDragStart={() => setDragState({ workerId: slot.workerId, fromStepId: null })}
+              onDragStart={() => {
+                setTeamDragState(null);
+                setDragState({ workerId: slot.workerId, fromStepId: null });
+              }}
               onDragEnd={() => setDragState(null)}
               c={c}
             />
           ))}
           {standbyWorkers.length === 0 && (
-            <div className={`w-full rounded-2xl border border-dashed px-4 py-6 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
-              待機・離席の作業者はいません
+            <div className={`w-full rounded-2xl border border-dashed px-4 py-5 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
+              待機・離席なし
             </div>
           )}
         </div>
@@ -2086,28 +3049,7 @@ export function LiveCommand() {
             </div>
           ) : null}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {activeWorkers.map((slot) => (
-            <WorkerCard
-              key={slot.id}
-              worker={slot.worker}
-              subtitle={slot.worker.note}
-              shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
-              splitCount={slot.splitCount}
-              onSplit={splitWorker}
-              qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
-              skillItems={skillItemsForIds(slot.worker.skillIds)}
-              onDragStart={() => setDragState({ workerId: slot.workerId, fromStepId: null })}
-              onDragEnd={() => setDragState(null)}
-              c={c}
-            />
-          ))}
-          {activeWorkers.length === 0 && (
-            <div className={`w-full rounded-2xl border border-dashed px-4 py-5 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
-              未配置の作業者はいません
-            </div>
-          )}
-        </div>
+        {renderGroupedActiveWorkers(true)}
       </div>
 
       <div className={`rounded-2xl border border-dashed p-3 ${c.borderCard}`}>
@@ -2118,13 +3060,17 @@ export function LiveCommand() {
               key={slot.id}
               worker={slot.worker}
               subtitle={slot.worker.note}
+              hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
               shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
               splitCount={slot.splitCount}
               muted
               onSplit={splitWorker}
               qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
               skillItems={skillItemsForIds(slot.worker.skillIds)}
-              onDragStart={() => setDragState({ workerId: slot.workerId, fromStepId: null })}
+              onDragStart={() => {
+                setTeamDragState(null);
+                setDragState({ workerId: slot.workerId, fromStepId: null });
+              }}
               onDragEnd={() => setDragState(null)}
               c={c}
             />
@@ -2166,6 +3112,179 @@ export function LiveCommand() {
         </div>
       </div>
     </div>
+  );
+  const workerPoolModalContent = (
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,6fr)_minmax(0,3fr)_minmax(0,1fr)]">
+      <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className={`text-sm font-semibold ${c.textPrimary}`}>未配置の作業者</div>
+          <div className={`rounded-full px-2.5 py-1 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>{activeWorkers.length} 名</div>
+        </div>
+        {renderGroupedActiveWorkers(false, true)}
+      </section>
+
+      <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className={`text-sm font-semibold ${c.textPrimary}`}>待機・離席</div>
+          <div className={`rounded-full px-2.5 py-1 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>{standbyWorkers.length} 名</div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {standbyWorkers.map((slot) => (
+            <WorkerCard
+              key={`modal:${slot.id}`}
+              worker={slot.worker}
+              subtitle={slot.worker.note}
+              hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
+              shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
+              splitCount={slot.splitCount}
+              muted
+              draggable={false}
+              qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
+              skillItems={skillItemsForIds(slot.worker.skillIds)}
+              c={c}
+            />
+          ))}
+          {standbyWorkers.length === 0 ? (
+            <div className={`w-full rounded-2xl border border-dashed px-4 py-6 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
+              待機・離席なし
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
+        <div className={`mb-3 text-sm font-semibold ${c.textPrimary}`}>分割枠を削除</div>
+        <div className={`flex min-h-[168px] flex-col items-center justify-center rounded-2xl border border-dashed text-center ${c.borderCard} ${c.bgSurface}`}>
+          <div className={`inline-flex h-11 w-11 items-center justify-center rounded-full border ${c.borderCard} ${c.textMuted}`}>
+            <Trash2 className="h-4.5 w-4.5" />
+          </div>
+          <div className={`mt-3 text-xs font-semibold ${c.textSecondary}`}>一覧確認用プール</div>
+          <div className={`mt-1 px-4 text-[11px] leading-5 ${c.textMuted}`}>削除操作は右側の通常プールから行えます。</div>
+        </div>
+      </section>
+    </div>
+  );
+  const workerPoolModalPlacementTargetsContent = (
+    <section className={`${c.bgCard} ${c.border} flex min-h-0 flex-col overflow-hidden rounded-2xl border`}>
+      <div className={`flex items-center justify-between gap-3 border-b px-4 py-4 ${c.border}`}>
+        <div>
+          <div className={`text-sm font-semibold ${c.textPrimary}`}>チーム配置先</div>
+          <div className={`mt-1 text-xs ${c.textSecondary}`}>
+            チーム見出しの「チーム配置」または個別 icon を、下の業務行へドロップしてまとめて配置できます。
+          </div>
+        </div>
+        <div className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>{workflowCardViews.length} 業務フロー</div>
+      </div>
+      <div className="min-h-0 overflow-auto">
+        {workflowCardViews.length === 0 ? (
+          <div className="p-10 text-center">
+            <div className={`text-base font-medium ${c.textPrimary}`}>配置できる業務がありません</div>
+            <div className={`mt-2 text-sm ${c.textSecondary}`}>対象日に進捗対象が登録されているか確認してください。</div>
+          </div>
+        ) : (
+          <table className="w-full min-w-[1180px] border-collapse">
+            <thead className={`${c.bgSurface} ${c.textSecondary}`}>
+              <tr className={`border-b ${c.border}`}>
+                <th className="px-3 py-3 text-left text-xs font-semibold">業務フロー</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold">業務</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold">荷主</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold">エリア</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold">開始予定</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold">終了予定</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold">予定数</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold">残数</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold">状態</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold">配置中の作業者</th>
+              </tr>
+            </thead>
+            {workflowCardViews.map((workflowCard) => {
+              const workflowTone = getWorkflowCardTone(workflowCard.workflowId || workflowCard.workflowName, c.isDark);
+
+              return (
+                <tbody key={`modal-table:${workflowCard.workflowId || workflowCard.workflowName}`}>
+                  {workflowCard.rows.map(({ areaView, processView, row }, rowIndex) => {
+                    const status = statusConfig(row.status);
+                    return (
+                      <tr
+                        key={`modal-table:${workflowCard.workflowId}:${areaView.areaId}:${processView.processId}:${row.shipperId}`}
+                        className={`border-b transition ${c.border} ${isPlacementDragActive ? "bg-[#155DFC]/[0.01] hover:bg-[#155DFC]/[0.04]" : ""}`}
+                        onDragOver={(event) => {
+                          if (!isPlacementDragActive) return;
+                          event.preventDefault();
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          if (teamDragState) {
+                            applyTeamPlacement(teamDragState, processView, row);
+                            setTeamDragState(null);
+                            return;
+                          }
+                          if (dragState) {
+                            applyPlacement(dragState.workerId, processView, dragState.fromStepId, row);
+                            setDragState(null);
+                          }
+                        }}
+                      >
+                        <td className="px-3 py-3 align-top">
+                          {rowIndex === 0 ? (
+                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold ${workflowTone.badge}`}>
+                              {workflowCard.workflowName}
+                            </span>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-3 align-top">
+                          <div className={`text-sm font-semibold ${c.textPrimary}`}>{processView.processName}</div>
+                        </td>
+                        <td className={`px-3 py-3 align-top text-sm ${c.textPrimary}`}>{row.shipperName}</td>
+                        <td className="px-3 py-3 align-top">
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${workflowTone.metric} ${c.textSecondary}`}>
+                            {areaView.areaName}
+                          </span>
+                        </td>
+                        <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.startTime}</td>
+                        <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.targetEndTime}</td>
+                        <td className={`px-3 py-3 align-top text-right text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.planned.toLocaleString("ja-JP")}</td>
+                        <td className="px-3 py-3 align-top text-right">
+                          <span className="text-sm font-semibold tabular-nums text-amber-500">{row.remaining.toLocaleString("ja-JP")}</span>
+                        </td>
+                        <td className="px-3 py-3 align-top">
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold ${status.className}`}>{status.label}</span>
+                        </td>
+                        <td className="px-3 py-3 align-top">
+                          <div className={`flex min-h-[40px] flex-wrap items-center gap-2 rounded-xl border border-dashed px-2.5 py-2 ${c.borderCard}`}>
+                            {row.assignedWorkers.length > 0 ? (
+                              row.assignedWorkers.map((assignment) => {
+                                const worker = displayWorkerMap.get(assignment.workerId) ?? workerMap.get(assignment.workerId);
+                                if (!worker) return null;
+                                return (
+                                  <div
+                                    key={`modal-assigned:${assignment.id}`}
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/60 shadow-sm"
+                                    title={worker.name}
+                                  >
+                                    <span className={`flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-semibold text-white ${worker.color}`}>
+                                      {worker.initials}
+                                    </span>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <span className={`text-xs ${c.textMuted}`}>
+                                {teamDragState ? `チーム「${teamDragState.teamName}」をここへドロップ` : dragState ? "ここへドロップして配置" : "配置先"}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              );
+            })}
+          </table>
+        )}
+      </div>
+    </section>
   );
   const adjustmentListContent = (
     <div className="grid gap-3">
@@ -2269,13 +3388,12 @@ export function LiveCommand() {
           </div>
 
           <div className={`grid gap-3 overflow-hidden rounded-2xl border px-4 py-3 ${c.borderCard} ${c.bgPanel}`}>
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className={`font-medium ${c.textSecondary}`}>配置タイムライン</span>
                 <span className={`rounded-full px-3 py-1 ${c.bgSurface} ${c.textSecondary}`}>選択中: {selectedTime || "-"}</span>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <div className={`text-xs ${c.textMuted}`}>オレンジは未保存の変更、ライン上の点は現在時刻です。</div>
                 <div className={`inline-flex rounded-xl border p-1 ${c.borderCard} ${c.bgCard}`}>
                   {TIME_INTERVAL_OPTIONS.map((option) => (
                     <button
@@ -2379,7 +3497,6 @@ export function LiveCommand() {
                       : isPast
                         ? c.textMuted
                         : c.textSecondary;
-                    const statusLabel = isCurrent ? "現在" : isChanged ? "変更" : isFuture ? "未来" : "過去";
 
                     return (
                       <button
@@ -2402,7 +3519,6 @@ export function LiveCommand() {
                             <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
                           </span>
                         </div>
-                        <div className={`mt-2 text-[10px] ${isSelected ? c.textPrimary : c.textMuted}`}>{statusLabel}</div>
                       </button>
                     );
                   })}
@@ -2587,12 +3703,16 @@ export function LiveCommand() {
                                       key={assignment.id}
                                       worker={worker}
                                       subtitle={worker.note}
+                                      hoverCardData={workerTaskCardViewMap.get(worker.id)}
                                       shiftLabel={workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}
                                       splitCount={effectiveWorkerSplitCounts.get(worker.id) ?? 1}
                                       onSplit={splitWorker}
                                       qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
                                       skillItems={skillItemsForIds(worker.skillIds)}
-                                      onDragStart={() => setDragState({ workerId: worker.id, fromStepId: assignment.sourceStepId })}
+                                      onDragStart={() => {
+                                        setTeamDragState(null);
+                                        setDragState({ workerId: worker.id, fromStepId: assignment.sourceStepId });
+                                      }}
                                       onDragEnd={() => setDragState(null)}
                                       c={c}
                                     />
@@ -2638,7 +3758,7 @@ export function LiveCommand() {
                   className={`inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${rightTab === "staff" ? "bg-[#155DFC] text-white" : `${c.bgSurface} ${c.textSecondary}`}`}
                 >
                   <Users className="h-4 w-4" />
-                  作業者プール
+                  <span className="whitespace-nowrap">作業者プール</span>
                 </button>
                 <button
                   type="button"
@@ -2646,7 +3766,7 @@ export function LiveCommand() {
                   className={`inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold transition ${rightTab === "adjustments" ? "bg-[#155DFC] text-white" : `${c.bgSurface} ${c.textSecondary}`}`}
                 >
                   <AlertTriangle className="h-4 w-4" />
-                  調整リスト
+                  <span className="whitespace-nowrap">調整リスト</span>
                   {adjustmentItems.length > 0 && (
                     <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${rightTab === "adjustments" ? "bg-white/20 text-white" : "bg-amber-500/10 text-amber-500"}`}>
                       {adjustmentItems.length}
@@ -2658,116 +3778,25 @@ export function LiveCommand() {
 
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               {rightTab === "staff" ? (
-                <div className="grid gap-4">
-                  <div
-                    className={[
-                      "rounded-2xl border border-dashed p-3 transition",
-                      dragState?.fromStepId ? "border-cyan-500/50 bg-cyan-500/5" : `${c.borderCard}`,
-                    ].join(" ")}
-                    onDragOver={(event) => {
-                      if (!dragState?.fromStepId) return;
-                      event.preventDefault();
-                    }}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      if (!dragState?.fromStepId) return;
-                      updateFutureSnapshots(dragState.workerId, dragState.fromStepId, null);
-                      setDragState(null);
-                    }}
-                  >
-                    <div className={`mb-2 text-xs font-medium ${c.textSecondary}`}>未配置の作業者</div>
-                    {dragState?.fromStepId && (
-                      <div className="mb-3 rounded-xl bg-cyan-500/10 px-3 py-2 text-xs text-cyan-600">
-                        ここへドロップすると未配置へ戻します。
-                      </div>
-                    )}
-                    <div className="flex flex-wrap gap-2">
-                      {activeWorkers.map((slot) => (
-                        <WorkerCard
-                          key={slot.id}
-                          worker={slot.worker}
-                          subtitle={slot.worker.note}
-                          shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
-                          splitCount={slot.splitCount}
-                          onSplit={splitWorker}
-                          qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
-                          skillItems={skillItemsForIds(slot.worker.skillIds)}
-                          onDragStart={() => setDragState({ workerId: slot.workerId, fromStepId: null })}
-                          onDragEnd={() => setDragState(null)}
-                          c={c}
-                        />
-                      ))}
-                      {activeWorkers.length === 0 && (
-                        <div className={`w-full rounded-2xl border border-dashed px-4 py-6 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
-                          未配置の作業者はいません
-                        </div>
-                      )}
+                <div className="grid gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className={`text-sm font-semibold ${c.textPrimary}`}>作業者プール</div>
+                      <div className={`mt-1 text-xs ${c.textSecondary}`}>未配置・待機中の作業者を確認できます。</div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTeamDragState(null);
+                        setDragState(null);
+                        setIsWorkerPoolModalOpen(true);
+                      }}
+                      className={`inline-flex items-center justify-center rounded-xl border px-3 py-2 text-xs font-semibold transition ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
+                    >
+                      拡大表示
+                    </button>
                   </div>
-
-                  <div>
-                    <div className={`mb-2 text-xs font-medium ${c.textSecondary}`}>待機・離席</div>
-                    <div className="flex flex-wrap gap-2">
-                      {standbyWorkers.map((slot) => (
-                        <WorkerCard
-                          key={slot.id}
-                          worker={slot.worker}
-                          subtitle={slot.worker.note}
-                          shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
-                          splitCount={slot.splitCount}
-                          muted
-                          onSplit={splitWorker}
-                          qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
-                          skillItems={skillItemsForIds(slot.worker.skillIds)}
-                          onDragStart={() => setDragState({ workerId: slot.workerId, fromStepId: null })}
-                          onDragEnd={() => setDragState(null)}
-                          c={c}
-                        />
-                      ))}
-                      {standbyWorkers.length === 0 && (
-                        <div className={`w-full rounded-2xl border border-dashed px-4 py-6 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
-                          待機・離席の作業者はいません
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div
-                    className={[
-                      "rounded-2xl border border-dashed px-4 py-5 transition",
-                      canDeleteSplit
-                        ? "border-rose-400/60 bg-rose-500/8"
-                        : `${c.borderCard} ${c.bgSurface}`,
-                    ].join(" ")}
-                    onDragOver={(event) => {
-                      if (!canDeleteSplit) return;
-                      event.preventDefault();
-                    }}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      if (!dragState || !canDeleteSplit) return;
-                      deleteWorkerSplit(dragState.workerId, dragState.fromStepId);
-                      setDragState(null);
-                    }}
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 text-center">
-                      <div
-                        className={`inline-flex h-11 w-11 items-center justify-center rounded-full border ${
-                          canDeleteSplit
-                            ? "border-rose-400/60 bg-rose-500/12 text-rose-500"
-                            : `${c.borderCard} ${c.textMuted}`
-                        }`}
-                      >
-                        <Trash2 className="h-5 w-5" />
-                      </div>
-                      <div className={`text-xs font-semibold ${canDeleteSplit ? "text-rose-500" : c.textSecondary}`}>
-                        分割枠を削除
-                      </div>
-                      <div className={`text-[11px] ${c.textMuted}`}>
-                        分割済みアイコンをここへドロップ
-                      </div>
-                    </div>
-                  </div>
+                  {workerPoolContent}
                 </div>
               ) : (
                 <div className="grid gap-3">
@@ -2821,10 +3850,23 @@ export function LiveCommand() {
           <section className={`${c.bgCard} ${c.border} shrink-0 rounded-2xl border`}>
             <div className={`flex items-center justify-between gap-3 border-b px-4 py-4 ${c.border}`}>
               <div>
-                <div className={`text-sm font-semibold ${c.textPrimary}`}>作業者プール</div>
+                <div className={`whitespace-nowrap text-sm font-semibold ${c.textPrimary}`}>作業者プール</div>
                 <div className={`mt-1 text-xs ${c.textSecondary}`}>上段からドラッグして、下段の業務行へそのまま配置できます。</div>
               </div>
-              <div className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>選択中: {selectedTime || "-"}</div>
+              <div className="flex items-center gap-2">
+                <div className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>選択中: {selectedTime || "-"}</div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTeamDragState(null);
+                    setDragState(null);
+                    setIsWorkerPoolModalOpen(true);
+                  }}
+                  className={`inline-flex items-center justify-center rounded-xl border px-3 py-2 text-xs font-semibold transition ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
+                >
+                  拡大表示
+                </button>
+              </div>
             </div>
             <div className="max-h-[220px] overflow-y-auto p-4">{workerPoolCompactContent}</div>
           </section>
@@ -2925,7 +3967,10 @@ export function LiveCommand() {
                                           <div
                                             key={assignment.id}
                                             draggable
-                                            onDragStart={() => setDragState({ workerId: worker.id, fromStepId: assignment.sourceStepId })}
+                                            onDragStart={() => {
+                                              setTeamDragState(null);
+                                              setDragState({ workerId: worker.id, fromStepId: assignment.sourceStepId });
+                                            }}
                                             onDragEnd={() => setDragState(null)}
                                             onContextMenu={(event) => {
                                               event.preventDefault();
@@ -2958,6 +4003,43 @@ export function LiveCommand() {
         </div>
       )}
 
+      {isWorkerPoolModalOpen ? (
+        <div className="fixed inset-0 z-[115] flex items-center justify-center bg-slate-950/45 px-6 py-8 backdrop-blur-[2px]">
+          <div className={`${c.bgCard} ${c.border} flex max-h-[calc(100vh-64px)] w-full max-w-[1320px] flex-col overflow-hidden rounded-[28px] border shadow-[0_28px_80px_rgba(15,23,42,0.22)]`}>
+            <div className={`flex items-start justify-between gap-4 border-b px-6 py-5 ${c.border}`}>
+              <div>
+                <div className={`text-lg font-semibold ${c.textPrimary}`}>作業者プール</div>
+                <div className={`mt-1 text-sm ${c.textSecondary}`}>多人数をまとめて確認できる拡大ビューです。icon を仮チーム作成枠へ入れると新しい仮チームを作成でき、チーム単位でもそのまま配置できます。</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsWorkerPoolModalOpen(false);
+                  setTeamDragState(null);
+                  setDragState(null);
+                }}
+                className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border transition ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
+                aria-label="作業者プールを閉じる"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+            </div>
+            <div className="flex items-center justify-between gap-3 border-b px-6 py-3">
+              <div className={`text-sm ${c.textSecondary}`}>選択中時刻: <span className={`font-semibold ${c.textPrimary}`}>{selectedTime || "-"}</span></div>
+              <div className="flex items-center gap-2">
+                <span className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>未配置 {activeWorkers.length} 名</span>
+                <span className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>待機・離席 {standbyWorkers.length} 名</span>
+              </div>
+            </div>
+            <div className="min-h-0 overflow-y-auto p-6">
+              <div className="grid gap-4">
+                {workerPoolModalContent}
+                {workerPoolModalPlacementTargetsContent}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
