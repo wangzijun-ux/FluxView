@@ -256,7 +256,9 @@ const getEditorPopoverStyle = (anchorRect: EditingCellState["anchorRect"]) => {
     };
 };
 
-const ANALYSIS_SLOT_STARTS = [6, 8, 10, 12, 14, 16, 18, 20] as const;
+const ANALYSIS_SLOT_STARTS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22] as const;
+const DAY_VIEW_START_MINUTES = 0;
+const DAY_VIEW_END_MINUTES = 24 * 60;
 const SHIFT_SETUP_CLEANUP_HOURS = 0.5;
 const DEFAULT_SHIFT_RECOMMENDATION_HOURS = 8;
 const MIN_SHIFT_RECOMMENDATION_HOURS = 4;
@@ -300,6 +302,7 @@ type ScheduledShiftRange = {
     workerName: string;
     startMinutes: number;
     endMinutes: number;
+    capabilityKeys: Set<string>;
 };
 
 type AnalysisDayViewSlot = {
@@ -418,6 +421,61 @@ function formatHeadcountValue(value: number) {
     return Number.isInteger(rounded) ? `${rounded}` : rounded.toFixed(1);
 }
 
+function expandScheduledShiftRanges(worker: ShiftAnalysisWorker): ScheduledShiftRange[] {
+    if (!worker.shift.start || !worker.shift.end) return [];
+
+    const startMinutes = parseTime(worker.shift.start);
+    const endMinutes = parseTime(worker.shift.end);
+    const baseRange = {
+        workerId: worker.worker.id,
+        workerName: worker.worker.name,
+        capabilityKeys: worker.capabilityKeys,
+    };
+
+    if (endMinutes <= startMinutes) {
+        return [
+            {
+                ...baseRange,
+                startMinutes,
+                endMinutes: DAY_VIEW_END_MINUTES,
+            },
+            ...(endMinutes > DAY_VIEW_START_MINUTES
+                ? [
+                    {
+                        ...baseRange,
+                        startMinutes: DAY_VIEW_START_MINUTES,
+                        endMinutes,
+                    },
+                ]
+                : []),
+        ];
+    }
+
+    return [
+        {
+            ...baseRange,
+            startMinutes,
+            endMinutes,
+        },
+    ];
+}
+
+function countAvailableWorkers(
+    scheduledShiftRanges: ScheduledShiftRange[],
+    startMinutes: number,
+    endMinutes: number,
+    capabilityKey?: string,
+) {
+    return new Set(
+        scheduledShiftRanges
+            .filter((worker) =>
+                overlapMinutes(startMinutes, endMinutes, worker.startMinutes, worker.endMinutes) > 0 &&
+                (!capabilityKey || worker.capabilityKeys.has(capabilityKey)),
+            )
+            .map((worker) => worker.workerId),
+    ).size;
+}
+
 function buildDayViewSlotRows(
     stepRows: AnalysisStepRow[],
     scheduledShiftRanges: ScheduledShiftRange[],
@@ -434,8 +492,8 @@ function buildDayViewSlotRows(
 
     if (relevantStarts.length === 0 || relevantEnds.length === 0) return [] satisfies AnalysisDayViewSlot[];
 
-    const rangeStart = floorToGranularity(Math.min(...relevantStarts), granularity);
-    const rangeEnd = Math.max(rangeStart + granularity, ceilToGranularity(Math.max(...relevantEnds), granularity));
+    const rangeStart = DAY_VIEW_START_MINUTES;
+    const rangeEnd = DAY_VIEW_END_MINUTES;
     const slotHours = granularity / 60;
     const rows: AnalysisDayViewSlot[] = [];
 
@@ -450,9 +508,7 @@ function buildDayViewSlotRows(
                 }, 0)
                 .toFixed(1),
         );
-        const availableHeadcount = scheduledShiftRanges.filter((worker) =>
-            overlapMinutes(startMinutes, endMinutes, worker.startMinutes, worker.endMinutes) > 0,
-        ).length;
+        const availableHeadcount = countAvailableWorkers(scheduledShiftRanges, startMinutes, endMinutes);
         const activeProcesses = [...new Set(
             stepRows
                 .filter((row) => overlapMinutes(startMinutes, endMinutes, row.startMinutes, row.endMinutes) > 0)
@@ -474,6 +530,7 @@ function buildDayViewSlotRows(
 }
 
 export function AttendanceManagement() {
+    const cellEditorPopoverRef = React.useRef<HTMLDivElement | null>(null);
     const [viewYear, setViewYear] = useState(2026);
     const [viewMonth, setViewMonth] = useState(2); // 2 = March
     const [activeTab, setActiveTab] = useState<"table" | "dayView" | "templates">("table");
@@ -639,12 +696,9 @@ export function AttendanceManagement() {
             })
             .filter((candidate): candidate is ShiftAnalysisWorker => Boolean(candidate));
 
-        const scheduledShiftRanges = scheduledWorkers.map((worker) => ({
-            workerId: worker.worker.id,
-            workerName: worker.worker.name,
-            startMinutes: parseTime(worker.shift.start),
-            endMinutes: parseTime(worker.shift.end),
-        })) satisfies ScheduledShiftRange[];
+        const scheduledShiftRanges = scheduledWorkers.flatMap((worker) =>
+            expandScheduledShiftRanges(worker),
+        ) satisfies ScheduledShiftRange[];
 
         const stepRows = workflowViews.flatMap((workflow, workflowIndex) =>
             workflow.steps.map((step, stepIndex) => {
@@ -697,9 +751,7 @@ export function AttendanceManagement() {
                 if (overlapHours <= 0) return sum;
                 return sum + (row.theoreticalHeadcount * overlapHours) / slotHours;
             }, 0).toFixed(1));
-            const availableHeadcount = scheduledWorkers.filter((item) =>
-                overlapMinutes(startMinutes, endMinutes, parseTime(item.shift.start), parseTime(item.shift.end)) > 0,
-            ).length;
+            const availableHeadcount = countAvailableWorkers(scheduledShiftRanges, startMinutes, endMinutes);
 
             return {
                 label: `${String(hour).padStart(2, "0")}-${String(hour + 2).padStart(2, "0")}`,
@@ -745,10 +797,7 @@ export function AttendanceManagement() {
                         if (overlapHours <= 0) return sum;
                         return sum + (row.theoreticalHeadcount * overlapHours) / slotHours;
                     }, 0);
-                    const available = scheduledWorkers.filter((worker) =>
-                        worker.capabilityKeys.has(meta.key) &&
-                        overlapMinutes(startMinutes, endMinutes, parseTime(worker.shift.start), parseTime(worker.shift.end)) > 0,
-                    ).length;
+                    const available = countAvailableWorkers(scheduledShiftRanges, startMinutes, endMinutes, meta.key);
                     return {
                         startMinutes,
                         endMinutes,
@@ -1713,6 +1762,23 @@ export function AttendanceManagement() {
         setEditorShiftTab("plan");
     };
 
+    useEffect(() => {
+        if (!editingCell) return;
+
+        const handlePointerDownOutside = (event: PointerEvent) => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement)) return;
+            if (cellEditorPopoverRef.current?.contains(target)) return;
+            if (target.closest("[data-shift-cell]")) return;
+            closeCellEditor();
+        };
+
+        document.addEventListener("pointerdown", handlePointerDownOutside, true);
+        return () => {
+            document.removeEventListener("pointerdown", handlePointerDownOutside, true);
+        };
+    }, [editingCell]);
+
     const saveCellEditor = () => {
         if (!editingCell || !editingShiftDraft) {
             closeCellEditor();
@@ -2394,6 +2460,7 @@ export function AttendanceManagement() {
                                                                 </button>
                                                                 {isEditing && editingCell ? (
                                                                     <div
+                                                                        ref={cellEditorPopoverRef}
                                                                         className={`z-[120] p-3.5 ${popoverSurface} border-2 border-cyan-500 shadow-2xl rounded-xl flex flex-col gap-3 animate-in fade-in zoom-in duration-200 backdrop-blur-md`}
                                                                         style={getEditorPopoverStyle(editingCell.anchorRect)}
                                                                     >

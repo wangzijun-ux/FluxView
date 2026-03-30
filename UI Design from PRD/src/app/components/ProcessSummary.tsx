@@ -103,6 +103,7 @@ type AddWorkflowStepDraft = {
   previousStepId: string;
   areaId: string;
   planned: number;
+  uph: number;
   startTime: string;
   targetEndTime: string;
 };
@@ -585,6 +586,13 @@ function progressDisplayWidth(progress: number, planned: number) {
   if (planned <= 0) return "0%";
   if (progress <= 0) return "12px";
   return `${Math.min(progress, 100)}%`;
+}
+
+function formatEtaOffset(etaMinutes: number | null, referenceMinutes: number, etaLabel: string) {
+  if (etaMinutes === null || etaLabel === "-" || etaLabel === "未設定" || etaLabel === "完了") return "";
+  const deltaMinutes = Math.max(0, etaMinutes - Math.max(0, referenceMinutes));
+  if (deltaMinutes <= 0) return "";
+  return `(+${(deltaMinutes / 60).toFixed(1)}h)`;
 }
 
 function getStepExecutionMetrics(params: {
@@ -1220,6 +1228,7 @@ export function ProcessSummary() {
   const [addBulkStartTime, setAddBulkStartTime] = useState("06:00");
   const [addBulkTargetEndTime, setAddBulkTargetEndTime] = useState("20:30");
   const [addBulkPlanned, setAddBulkPlanned] = useState(0);
+  const [addBulkUph, setAddBulkUph] = useState(1);
   const [addStepDrafts, setAddStepDrafts] = useState<AddWorkflowStepDraft[]>([]);
   const [isAddRowOpen, setIsAddRowOpen] = useState(false);
   const [addRowDraft, setAddRowDraft] = useState<AddWorkflowStepDraft>({
@@ -1229,6 +1238,7 @@ export function ProcessSummary() {
     previousStepId: "",
     areaId: "",
     planned: 0,
+    uph: 1,
     startTime: "06:00",
     targetEndTime: "20:30",
   });
@@ -1286,6 +1296,7 @@ export function ProcessSummary() {
       processId: availableProcessOptions[0]?.id ?? "",
       processName: availableProcessOptions[0]?.name ?? "",
       previousStepId: nextDraftId,
+      uph: Math.max(1, processById.get(availableProcessOptions[0]?.id ?? "")?.defaultUph || 1),
     }));
     setIsAddRowOpen(false);
   };
@@ -1303,6 +1314,7 @@ export function ProcessSummary() {
         previousStepId: step.previousStepId ?? template.steps[stepIndex - 1]?.id ?? "",
         areaId: step.layoutAreaIds?.[0] ?? selectedSiteLayoutAreas[0]?.id ?? "",
         planned: defaults.planned,
+        uph,
         startTime: defaults.startTime,
         targetEndTime: defaults.targetEndTime,
       };
@@ -1333,7 +1345,7 @@ export function ProcessSummary() {
           standardHeadcount: templateStep
             ? Math.max(1, templateStep.standardHeadcount || 1)
             : Math.max(1, process?.defaultHeadcount || 1),
-          uph: templateStep ? Math.max(1, templateStep.uph || 1) : Math.max(1, process?.defaultUph || 1),
+          uph: Math.max(1, draft.uph || templateStep?.uph || process?.defaultUph || 1),
           manual: templateStep?.manual ?? "",
           caution: templateStep?.caution ?? "",
         },
@@ -1478,7 +1490,14 @@ export function ProcessSummary() {
     Boolean(addWorkflowTemplateId) &&
     addStepDrafts.length > 0 &&
     areAddStepDependenciesValid &&
-    addStepDrafts.every((draft) => draft.startTime && draft.targetEndTime && Number.isFinite(draft.planned));
+    addStepDrafts.every(
+      (draft) =>
+        draft.startTime &&
+        draft.targetEndTime &&
+        Number.isFinite(draft.planned) &&
+        Number.isFinite(draft.uph) &&
+        draft.uph > 0,
+    );
 
   useEffect(() => {
     if (!isAddDialogOpen) return;
@@ -1493,6 +1512,7 @@ export function ProcessSummary() {
         previousStepId: "",
         areaId: selectedSiteLayoutAreas[0]?.id ?? "",
         planned: 0,
+        uph: Math.max(1, processById.get(availableProcessOptions[0]?.id ?? "")?.defaultUph || 1),
         startTime: "06:00",
         targetEndTime: "20:30",
       });
@@ -1506,6 +1526,7 @@ export function ProcessSummary() {
     setAddBulkStartTime(drafts[0]?.startTime ?? "06:00");
     setAddBulkTargetEndTime(drafts[0]?.targetEndTime ?? "20:30");
     setAddBulkPlanned(drafts[0]?.planned ?? 0);
+    setAddBulkUph(drafts[0]?.uph ?? 1);
     setAddRowDraft({
       sourceStepId: "",
       processId: availableProcessOptions[0]?.id ?? "",
@@ -1513,10 +1534,11 @@ export function ProcessSummary() {
       previousStepId: drafts.at(-1)?.sourceStepId ?? "",
       areaId: drafts[0]?.areaId ?? selectedSiteLayoutAreas[0]?.id ?? "",
       planned: drafts[0]?.planned ?? 0,
+      uph: drafts[0]?.uph ?? Math.max(1, processById.get(availableProcessOptions[0]?.id ?? "")?.defaultUph || 1),
       startTime: drafts[0]?.startTime ?? "06:00",
       targetEndTime: drafts[0]?.targetEndTime ?? "20:30",
     });
-  }, [isAddDialogOpen, selectedAddTemplate, selectedSiteLayoutAreas, availableProcessOptions]);
+  }, [isAddDialogOpen, selectedAddTemplate, selectedSiteLayoutAreas, availableProcessOptions, processById]);
 
   const rows = useMemo(() => {
     const dayStore = planStore[selectedDate];
@@ -1986,20 +2008,16 @@ export function ProcessSummary() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="min-w-[1680px] w-full text-center text-sm">
+                <table className="min-w-[1360px] w-full text-center text-sm">
                   <thead className={`${c.bgSurface} ${c.textSecondary}`}>
                     <tr>
                       <th className="px-4 py-3 text-center font-medium">工程</th>
-                      <th className="px-4 py-3 text-center font-medium">荷主</th>
-                      <th className="px-4 py-3 text-center font-medium">エリア</th>
-                      <th className="px-4 py-3 text-center font-medium">開始予定時刻</th>
-                      <th className="px-4 py-3 text-center font-medium">終了予定時刻</th>
+                      <th className="px-4 py-3 text-center font-medium">予定時刻</th>
                       <th className="px-4 py-3 text-center font-medium">予定数</th>
-                      <th className="px-4 py-3 text-center font-medium">実績数</th>
-                      <th className="px-4 py-3 text-center font-medium">残数</th>
+                      <th className="px-4 py-3 text-center font-medium">UPH</th>
+                      <th className="px-4 py-3 text-center font-medium">進捗</th>
                       <th className="px-4 py-3 text-center font-medium">必要人時</th>
                       <th className="px-4 py-3 text-center font-medium">進捗推移</th>
-                      <th className="px-4 py-3 text-center font-medium">完了見込み時刻</th>
                       <th className="px-4 py-3 text-center font-medium">状態</th>
                     </tr>
                   </thead>
@@ -2028,6 +2046,20 @@ export function ProcessSummary() {
                             <td className="px-4 py-4 align-middle">
                               <div className="min-w-0 text-left">
                                 <div className={`font-medium ${c.textPrimary}`}>{step.processName}</div>
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  <span
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                                      c.isDark ? "bg-violet-500/12 text-violet-200" : "bg-violet-50 text-violet-700"
+                                    }`}
+                                  >
+                                    {workflow.shipperName}
+                                  </span>
+                                  {areaLabels.map((area) => (
+                                    <span key={area.id} className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${area.className}`}>
+                                      {area.name}
+                                    </span>
+                                  ))}
+                                </div>
                                 {(step.manual || step.caution) && (
                                   <div className={`mt-2 space-y-1 text-xs ${c.textSecondary}`}>
                                     {step.manual && <div>マニュアル: {step.manual}</div>}
@@ -2037,43 +2069,63 @@ export function ProcessSummary() {
                               </div>
                             </td>
                         <td className="px-4 py-4 align-middle">
-                          <div className={`text-sm ${c.textPrimary}`}>{workflow.shipperName}</div>
-                        </td>
-                        <td className="px-4 py-4 align-middle">
-                          <div className="flex flex-wrap justify-center gap-1.5">
-                            {areaLabels.map((area) => (
-                              <span key={area.id} className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${area.className}`}>
-                                {area.name}
-                              </span>
-                            ))}
+                          <div className="mx-auto flex max-w-[280px] items-center gap-2">
+                            <input
+                              type="time"
+                              value={step.startTime}
+                              readOnly
+                              tabIndex={-1}
+                              className={`${inputClass} max-w-[132px] cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
+                            />
+                            <span className={`shrink-0 text-xs font-semibold ${c.textMuted}`}>~</span>
+                            <input
+                              type="time"
+                              value={step.targetEndTime}
+                              readOnly
+                              tabIndex={-1}
+                              className={`${inputClass} max-w-[132px] cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
+                            />
                           </div>
-                        </td>
-                        <td className="px-4 py-4 align-middle">
-                          <input
-                            type="time"
-                            value={step.startTime}
-                            readOnly
-                            tabIndex={-1}
-                            className={`${inputClass} mx-auto max-w-[132px] cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
-                          />
-                        </td>
-                        <td className="px-4 py-4 align-middle">
-                          <input
-                            type="time"
-                            value={step.targetEndTime}
-                            readOnly
-                            tabIndex={-1}
-                            className={`${inputClass} mx-auto max-w-[132px] cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
-                          />
                         </td>
                         <td className="px-4 py-4 align-middle">
                           <input
                             type="number"
                             min={0}
                             value={step.planned}
-                            readOnly
-                            tabIndex={-1}
-                            className={`${inputClass} mx-auto max-w-[132px] cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
+                            onChange={(event) => {
+                              const nextPlanned = Math.max(0, Number(event.target.value) || 0);
+                              const nextAreaRows = step.areaRows;
+                              setPlanStore((prev) => {
+                                let nextStore = updateStepPlanEntry(
+                                  prev,
+                                  selectedDate,
+                                  step.id,
+                                  { planned: nextPlanned },
+                                  {
+                                    planned: step.planned,
+                                    startTime: step.startTime,
+                                    targetEndTime: step.targetEndTime,
+                                  },
+                                );
+
+                                nextAreaRows.forEach((detail, areaIndex, details) => {
+                                  nextStore = updateStepPlanEntry(
+                                    nextStore,
+                                    selectedDate,
+                                    detail.planKey,
+                                    { planned: splitPlannedQuantity(nextPlanned, details.length, areaIndex) },
+                                    {
+                                      planned: detail.planned,
+                                      startTime: detail.startTime,
+                                      targetEndTime: detail.targetEndTime,
+                                    },
+                                  );
+                                });
+
+                                return nextStore;
+                              });
+                            }}
+                            className={`${inputClass} mx-auto max-w-[132px] text-center`}
                           />
                           {step.processableCount !== null && (
                             <div
@@ -2086,10 +2138,32 @@ export function ProcessSummary() {
                           )}
                         </td>
                         <td className="px-4 py-4 align-middle">
-                          <div className={`font-medium ${c.textPrimary}`}>{step.actual.toLocaleString("ja-JP")} 件</div>
+                          <div className={`font-medium ${c.textPrimary}`}>{step.uph.toLocaleString("ja-JP")}</div>
                         </td>
                         <td className="px-4 py-4 align-middle">
-                          <div className={`font-medium ${c.textPrimary}`}>{step.remaining.toLocaleString("ja-JP")} 件</div>
+                          <div className="mx-auto min-w-[178px] text-left">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`font-semibold ${c.textPrimary}`}>
+                                {step.actual.toLocaleString("ja-JP")} / {step.planned.toLocaleString("ja-JP")}
+                              </span>
+                              <span className={`text-xs font-semibold ${c.textSecondary}`}>{formatPercent(step.progress)}</span>
+                            </div>
+                            <div className={`mt-2 h-2 overflow-hidden rounded-full border ${c.borderCard} ${c.bgSurface}`}>
+                              <div
+                                className={`h-full rounded-full bg-gradient-to-r ${progressBarTone(step.progress, step.status)} transition-all`}
+                                style={{ width: progressDisplayWidth(step.progress, step.planned) }}
+                              />
+                            </div>
+                            <div className="mt-2 text-xs">
+                              <span className={c.textMuted}>見込み </span>
+                              <span className="font-semibold text-violet-500">{step.eta}</span>
+                              {formatEtaOffset(step.etaMinutes, step.referenceMinutes, step.eta) ? (
+                                <span className="ml-1 font-medium text-rose-500">
+                                  {formatEtaOffset(step.etaMinutes, step.referenceMinutes, step.eta)}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-4 py-4 align-middle">
                           <div className={`${c.textPrimary}`}>{step.requiredPersonHours.toFixed(1)} 人時</div>
@@ -2103,9 +2177,6 @@ export function ProcessSummary() {
                           >
                             <TrendSparkline points={step.trend} colors={c} />
                           </button>
-                        </td>
-                        <td className="px-4 py-4 align-middle">
-                          <div className={`${c.textPrimary}`}>{step.eta}</div>
                         </td>
                         <td className="px-4 py-4 align-middle">
                           {(() => {
@@ -2203,7 +2274,7 @@ export function ProcessSummary() {
                   </div>
                 </div>
                 {selectedAddTemplate && (
-                  <div className="grid gap-4 md:grid-cols-4">
+                  <div className="grid gap-4 md:grid-cols-5">
                     <label className="grid gap-1">
                       <span className={`text-xs font-medium ${c.textSecondary}`}>エリア</span>
                       <select
@@ -2267,6 +2338,22 @@ export function ProcessSummary() {
                       />
                       <span className={`text-[11px] ${c.textMuted}`}>下表の全業務へ一括反映</span>
                     </label>
+                    <label className="grid gap-1">
+                      <span className={`text-xs font-medium ${c.textSecondary}`}>UPH</span>
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={addBulkUph}
+                        onChange={(event) => {
+                          const nextValue = Math.max(1, Number(event.target.value) || 1);
+                          setAddBulkUph(nextValue);
+                          setAddStepDrafts((prev) => prev.map((draft) => ({ ...draft, uph: nextValue })));
+                        }}
+                        className={inputClass}
+                      />
+                      <span className={`text-[11px] ${c.textMuted}`}>下表の全業務へ一括反映</span>
+                    </label>
                   </div>
                 )}
                 {addStepDrafts.length > 0 && (
@@ -2276,13 +2363,14 @@ export function ProcessSummary() {
                       <div className="overflow-hidden">
                         <table className="w-full table-fixed text-[13px]">
                           <colgroup>
-                            <col className="w-[18%]" />
-                            <col className="w-[12%]" />
-                            <col className="w-[12%]" />
+                            <col className="w-[16%]" />
                             <col className="w-[11%]" />
-                            <col className="w-[15%]" />
-                            <col className="w-[12%]" />
-                            <col className="w-[12%]" />
+                            <col className="w-[11%]" />
+                            <col className="w-[10%]" />
+                            <col className="w-[10%]" />
+                            <col className="w-[14%]" />
+                            <col className="w-[10%]" />
+                            <col className="w-[10%]" />
                             <col className="w-[8%]" />
                           </colgroup>
                           <thead className={c.tableHeader}>
@@ -2291,6 +2379,7 @@ export function ProcessSummary() {
                               <th className="px-2.5 py-2.5 text-left text-[12px] font-semibold">開始予定時刻</th>
                               <th className="px-2.5 py-2.5 text-left text-[12px] font-semibold">終了予定時刻</th>
                               <th className="px-2.5 py-2.5 text-left text-[12px] font-semibold">予定数</th>
+                              <th className="px-2.5 py-2.5 text-left text-[12px] font-semibold">UPH</th>
                               <th className="px-2.5 py-2.5 text-left text-[12px] font-semibold">荷主</th>
                               <th className="px-2.5 py-2.5 text-left text-[12px] font-semibold">エリア</th>
                               <th className="px-2.5 py-2.5 text-left text-[12px] font-semibold">前業務</th>
@@ -2353,6 +2442,26 @@ export function ProcessSummary() {
                                     }}
                                     className={`${tableInputClass} w-full min-w-0`}
                                   />
+                                </td>
+                                <td className="px-2.5 py-2.5">
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={draft.uph}
+                                    onChange={(event) => {
+                                      const nextValue = Math.max(1, Number(event.target.value) || 1);
+                                      setAddStepDrafts((prev) =>
+                                        prev.map((item) =>
+                                          item.sourceStepId === draft.sourceStepId ? { ...item, uph: nextValue } : item,
+                                        ),
+                                      );
+                                    }}
+                                    className={`${tableInputClass} w-full min-w-0`}
+                                  />
+                                  <div className={`mt-1 text-[10px] ${c.textMuted}`}>
+                                    推奨 {calculateRequiredHeadcount(draft.planned, draft.uph, draft.startTime, draft.targetEndTime, 1)}人
+                                  </div>
                                 </td>
                                 <td className="px-2.5 py-2.5">
                                   <select
@@ -2497,6 +2606,7 @@ export function ProcessSummary() {
                                         ...prev,
                                         processId: nextValue,
                                         processName: processNameById.get(nextValue) ?? "",
+                                        uph: Math.max(1, processById.get(nextValue)?.defaultUph || prev.uph || 1),
                                       }));
                                     }}
                                     className={`${tableInputClass} w-full min-w-0`}
@@ -2542,6 +2652,24 @@ export function ProcessSummary() {
                                     }
                                     className={`${tableInputClass} w-full min-w-0`}
                                   />
+                                </td>
+                                <td className="px-2.5 py-2.5">
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    step={1}
+                                    value={addRowDraft.uph}
+                                    onChange={(event) =>
+                                      setAddRowDraft((prev) => ({
+                                        ...prev,
+                                        uph: Math.max(1, Number(event.target.value) || 1),
+                                      }))
+                                    }
+                                    className={`${tableInputClass} w-full min-w-0`}
+                                  />
+                                  <div className={`mt-1 text-[10px] ${c.textMuted}`}>
+                                    推奨 {calculateRequiredHeadcount(addRowDraft.planned, addRowDraft.uph, addRowDraft.startTime, addRowDraft.targetEndTime, 1)}人
+                                  </div>
                                 </td>
                                 <td className="px-2.5 py-2.5">
                                   <select
