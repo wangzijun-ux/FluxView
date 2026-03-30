@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
+import { useLocation } from "react-router";
 import {
   AlertTriangle,
   ArrowRight,
@@ -7,8 +8,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Info,
+  LayoutGrid,
   Plus,
   RotateCcw,
+  Rows3,
   Save,
   Search,
   Trash2,
@@ -70,9 +74,7 @@ const TIME_INTERVAL_OPTIONS = [
 ] as const;
 
 type TimeInterval = (typeof TIME_INTERVAL_OPTIONS)[number]["value"];
-type BoardView = "card" | "table";
-const CARD_PER_ROW_OPTIONS = [3, 4, 5] as const;
-type CardsPerRow = (typeof CARD_PER_ROW_OPTIONS)[number];
+type WorkCardViewMode = "card" | "table";
 
 function floorToInterval(totalMinutes: number, intervalMinutes: number) {
   const safeInterval = Math.max(5, intervalMinutes);
@@ -82,6 +84,15 @@ function floorToInterval(totalMinutes: number, intervalMinutes: number) {
 function parseTime(value: string) {
   const [hours, minutes] = value.split(":").map(Number);
   return (hours || 0) * 60 + (minutes || 0);
+}
+
+function buildLiveCommandRowKey(params: { workflowId: string; processId: string; shipperId: string; areaId?: string }) {
+  const { workflowId, processId, shipperId, areaId } = params;
+  return [workflowId, processId, shipperId, areaId || "all"].join("::");
+}
+
+function buildLiveCommandRowDomId(rowKey: string) {
+  return `live-command-row-${rowKey.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
 }
 
 function findNearestTimeLabel(timeLabels: string[], targetMinutes: number) {
@@ -289,10 +300,16 @@ type DragState = {
   fromStepId: string | null;
 };
 
+type DragMember = {
+  workerId: string;
+  fromStepId: string | null;
+};
+
 type TeamDragState = {
   teamId: string;
   teamName: string;
   workerIds: string[];
+  members?: DragMember[];
 };
 
 type PlacementAlertState =
@@ -799,13 +816,16 @@ function WorkerCard({
   shiftLabel,
   splitCount = 1,
   muted = false,
+  selected = false,
   draggable = true,
+  onClick,
   onDragStart,
   onDragEnd,
   onSplit,
   qualificationItems,
   skillItems,
   c,
+  size = "default",
 }: {
   worker: DeploymentWorker;
   subtitle?: string;
@@ -813,14 +833,18 @@ function WorkerCard({
   shiftLabel: string;
   splitCount?: number;
   muted?: boolean;
+  selected?: boolean;
   draggable?: boolean;
+  onClick?: (event: any) => void;
   onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnd?: () => void;
   onSplit?: (workerId: string) => void;
   qualificationItems: CapabilityItem[];
   skillItems: CapabilityItem[];
   c: ReturnType<typeof useThemeColors>;
+  size?: "default" | "compact";
 }) {
+  const isCompact = size === "compact";
   const statusMeta = getWorkerStatusMeta(worker.status);
   const triggerRef = useRef<HTMLDivElement | null>(null);
   const hoverCardRef = useRef<HTMLDivElement | null>(null);
@@ -924,6 +948,7 @@ function WorkerCard({
     >
       <div
         draggable={draggable}
+        onClick={onClick}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
         onContextMenu={(event) => {
@@ -935,13 +960,16 @@ function WorkerCard({
         tabIndex={0}
         aria-label={`${worker.name} / ${shiftLabel}`}
         className={[
-          "relative inline-flex h-12 w-12 items-center justify-center rounded-full border shadow-sm transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50",
+          isCompact
+            ? "relative inline-flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
+            : "relative inline-flex h-12 w-12 items-center justify-center rounded-full border shadow-sm transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50",
+          selected ? "ring-2 ring-[#155DFC] ring-offset-2 ring-offset-white" : "",
           muted ? `${c.borderCard} ${c.bgSurface}` : `${c.borderCard} ${c.bgPanel}`,
           draggable ? "cursor-grab active:cursor-grabbing hover:-translate-y-0.5" : "",
         ].join(" ")}
       >
         <div
-          className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-semibold text-white shadow-sm ${worker.color} ${
+          className={`flex ${isCompact ? "h-7 w-7 text-[11px]" : "h-10 w-10 text-sm"} items-center justify-center rounded-full font-semibold text-white shadow-sm ${worker.color} ${
             muted ? "opacity-75" : ""
           }`}
         >
@@ -949,11 +977,11 @@ function WorkerCard({
         </div>
         <span
           aria-hidden="true"
-          className={`absolute bottom-0 right-0 h-3.5 w-3.5 rounded-full border-2 ${c.isDark ? "border-slate-900" : "border-white"} ${statusMeta.dotClass}`}
+          className={`absolute bottom-0 right-0 ${isCompact ? "h-3 w-3" : "h-3.5 w-3.5"} rounded-full border-2 ${c.isDark ? "border-slate-900" : "border-white"} ${statusMeta.dotClass}`}
         />
         {splitCount > 1 && (
           <span
-            className={`absolute -right-2 -top-2 inline-flex min-w-[32px] items-center justify-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold shadow-sm ${
+            className={`absolute ${isCompact ? "-right-1.5 -top-1.5 min-w-[26px] px-1 py-0 text-[9px]" : "-right-2 -top-2 min-w-[32px] px-1.5 py-0.5 text-[10px]"} inline-flex items-center justify-center rounded-full border font-semibold shadow-sm ${
               c.isDark ? "border-sky-300/30 bg-sky-500 text-white" : "border-sky-200 bg-sky-500 text-white"
             }`}
           >
@@ -1279,6 +1307,7 @@ function WorkerTaskPoolCard({
 }
 
 export function LiveCommand() {
+  const location = useLocation();
   const c = useThemeColors();
   const { sites, shippers, qualifications, skills, processes, workflows, selectedSiteId } = useMasterData();
   const qualificationToneClasses = getCapabilityToneClasses("qualification");
@@ -1288,8 +1317,7 @@ export function LiveCommand() {
   const [now, setNow] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState(() => toDateInput(new Date()));
   const [timeInterval, setTimeInterval] = useState<TimeInterval>(30);
-  const [boardView, setBoardView] = useState<BoardView>("card");
-  const [cardsPerRow, setCardsPerRow] = useState<CardsPerRow>(4);
+  const [workCardViewMode, setWorkCardViewMode] = useState<WorkCardViewMode>("table");
   const [selectedTime, setSelectedTime] = useState("");
   const [keyword, setKeyword] = useState("");
   const [rightTab, setRightTab] = useState<RightTab>("staff");
@@ -1297,6 +1325,8 @@ export function LiveCommand() {
   const [temporaryTeams, setTemporaryTeams] = useState<TemporaryWorkerTeam[]>([]);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [teamDragState, setTeamDragState] = useState<TeamDragState | null>(null);
+  const [selectedWorkerIds, setSelectedWorkerIds] = useState<string[]>([]);
+  const [selectedAssignedKeys, setSelectedAssignedKeys] = useState<string[]>([]);
   const [placementAlert, setPlacementAlert] = useState<PlacementAlertState>(null);
   const [lastSavedAt, setLastSavedAt] = useState("");
   const [savedSnapshots, setSavedSnapshots] = useState<Record<string, AssignmentSnapshot>>({});
@@ -1304,8 +1334,10 @@ export function LiveCommand() {
   const [savedAreaAssignments, setSavedAreaAssignments] = useState<Record<string, AreaAssignmentSnapshot>>({});
   const [draftAreaAssignments, setDraftAreaAssignments] = useState<Record<string, AreaAssignmentSnapshot>>({});
   const [workerSplitOverrides, setWorkerSplitOverrides] = useState<Record<string, number>>({});
+  const [focusedPlacementRowKey, setFocusedPlacementRowKey] = useState("");
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
   const snapshotScopeRef = useRef("");
+  const handledPlacementFocusRef = useRef("");
 
   useEffect(() => {
     const timerId = window.setInterval(() => setNow(new Date()), 1000);
@@ -1336,14 +1368,20 @@ export function LiveCommand() {
     try {
       const raw = window.localStorage.getItem(buildTemporaryTeamStorageKey(selectedSiteId, selectedDate));
       if (!raw) {
+        setSelectedWorkerIds([]);
+        setSelectedAssignedKeys([]);
         setTemporaryTeams([]);
         return;
       }
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) {
+        setSelectedWorkerIds([]);
+        setSelectedAssignedKeys([]);
         setTemporaryTeams([]);
         return;
       }
+      setSelectedWorkerIds([]);
+      setSelectedAssignedKeys([]);
       setTemporaryTeams(
         parsed.filter(
           (team): team is TemporaryWorkerTeam =>
@@ -1356,6 +1394,8 @@ export function LiveCommand() {
         ),
       );
     } catch {
+      setSelectedWorkerIds([]);
+      setSelectedAssignedKeys([]);
       setTemporaryTeams([]);
     }
   }, [selectedDate, selectedSiteId]);
@@ -1463,6 +1503,22 @@ export function LiveCommand() {
     () => createTimeSlots(timeInterval),
     [timeInterval],
   );
+  const placementFocusTarget = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    const workflowId = params.get("workflowId") ?? "";
+    const processId = params.get("processId") ?? "";
+    const shipperId = params.get("shipperId") ?? "";
+    if (!workflowId || !processId || !shipperId) return null;
+
+    return {
+      workflowId,
+      processId,
+      shipperId,
+      areaId: params.get("areaId") ?? "",
+      date: params.get("date") ?? "",
+      time: params.get("time") ?? "",
+    };
+  }, [location.search]);
 
   useEffect(() => {
     if (selectedTime && timeLabels.includes(selectedTime)) return;
@@ -1472,6 +1528,29 @@ export function LiveCommand() {
     const nearest = findNearestTimeLabel(timeLabels, fallbackMinutes);
     setSelectedTime(nearest);
   }, [selectedTime, timeLabels, now, timeInterval]);
+
+  useEffect(() => {
+    if (!placementFocusTarget) {
+      handledPlacementFocusRef.current = "";
+      setFocusedPlacementRowKey("");
+      return;
+    }
+
+    if (placementFocusTarget.date && placementFocusTarget.date !== selectedDate) {
+      setSelectedDate(placementFocusTarget.date);
+    }
+
+    if (placementFocusTarget.time) {
+      const nearestTime = findNearestTimeLabel(timeLabels, parseTime(placementFocusTarget.time));
+      if (nearestTime && nearestTime !== selectedTime) {
+        setSelectedTime(nearestTime);
+      }
+    }
+
+    if (workCardViewMode !== "table") {
+      setWorkCardViewMode("table");
+    }
+  }, [placementFocusTarget, selectedDate, selectedTime, timeLabels, workCardViewMode]);
 
   useEffect(() => {
     const container = timelineScrollRef.current;
@@ -2171,6 +2250,35 @@ export function LiveCommand() {
           left.shipperName.localeCompare(right.shipperName, "ja"),
       );
   }, [shipperCardViews]);
+  useEffect(() => {
+    if (!placementFocusTarget) return;
+    if (handledPlacementFocusRef.current === location.search) return;
+
+    let clearHighlightTimer: number | undefined;
+    const scrollTimer = window.setTimeout(() => {
+      const baseSelector = [
+        `[data-live-workflow="${placementFocusTarget.workflowId}"]`,
+        `[data-live-process="${placementFocusTarget.processId}"]`,
+        `[data-live-shipper="${placementFocusTarget.shipperId}"]`,
+      ].join("");
+      const selector = placementFocusTarget.areaId
+        ? `${baseSelector}[data-live-area="${placementFocusTarget.areaId}"]`
+        : baseSelector;
+      const target = document.querySelector<HTMLElement>(selector);
+      if (!target) return;
+
+      handledPlacementFocusRef.current = location.search;
+      const rowKey = target.dataset.liveRowKey ?? "";
+      setFocusedPlacementRowKey(rowKey);
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      clearHighlightTimer = window.setTimeout(() => setFocusedPlacementRowKey(""), 2400);
+    }, 180);
+
+    return () => {
+      window.clearTimeout(scrollTimer);
+      if (clearHighlightTimer) window.clearTimeout(clearHighlightTimer);
+    };
+  }, [placementFocusTarget, workflowCardViews, location.search]);
   const availableWorkerSlots = useMemo(
     () =>
       deploymentWorkers.flatMap((worker) => {
@@ -2283,7 +2391,10 @@ export function LiveCommand() {
         return left.name.localeCompare(right.name, "ja");
       });
   }, [activeWorkers, workerTeamMetaMap]);
-  const createTemporaryTeamFromUserId = (userId: string) => {
+  const createTemporaryTeamFromUserIds = (userIds: string[]) => {
+    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+    if (uniqueUserIds.length === 0) return;
+
     let nextTeamName = "";
     let nextTeamColor = TEMPORARY_TEAM_COLOR_OPTIONS[0].id;
 
@@ -2300,7 +2411,7 @@ export function LiveCommand() {
       const stripped = prev
         .map((team) => ({
           ...team,
-          memberUserIds: team.memberUserIds.filter((memberUserId) => memberUserId !== userId),
+          memberUserIds: team.memberUserIds.filter((memberUserId) => !uniqueUserIds.includes(memberUserId)),
         }))
         .filter((team) => team.memberUserIds.length > 0);
 
@@ -2310,7 +2421,7 @@ export function LiveCommand() {
           id: `temp-team-${Date.now()}`,
           name: nextTeamName,
           themeColor: nextTeamColor,
-          memberUserIds: [userId],
+          memberUserIds: uniqueUserIds,
           createdAt: new Date().toISOString(),
         },
       ];
@@ -2318,19 +2429,22 @@ export function LiveCommand() {
 
     setPlacementAlert({
       tone: "info",
-      message: `仮チーム「${nextTeamName || "仮チーム"}」を作成しました。`,
+      message: `仮チーム「${nextTeamName || "仮チーム"}」を ${uniqueUserIds.length} 名で作成しました。`,
     });
   };
-  const assignUserToTemporaryTeam = (userId: string, teamId: string) => {
+  const assignUsersToTemporaryTeam = (userIds: string[], teamId: string) => {
+    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+    if (uniqueUserIds.length === 0) return;
+
     let targetTeamName = "";
 
     setTemporaryTeams((prev) =>
       prev
         .map((team) => {
-          const filteredMemberIds = team.memberUserIds.filter((memberUserId) => memberUserId !== userId);
+          const filteredMemberIds = team.memberUserIds.filter((memberUserId) => !uniqueUserIds.includes(memberUserId));
           if (team.id === teamId) {
             targetTeamName = team.name;
-            return { ...team, memberUserIds: [...filteredMemberIds, userId] };
+            return { ...team, memberUserIds: [...filteredMemberIds, ...uniqueUserIds] };
           }
           return { ...team, memberUserIds: filteredMemberIds };
         })
@@ -2339,7 +2453,7 @@ export function LiveCommand() {
 
     setPlacementAlert({
       tone: "info",
-      message: `作業者を仮チーム「${targetTeamName || "仮チーム"}」へ追加しました。`,
+      message: `${uniqueUserIds.length} 名を仮チーム「${targetTeamName || "仮チーム"}」へ追加しました。`,
     });
   };
   const deleteTemporaryTeam = (teamId: string) => {
@@ -2352,11 +2466,152 @@ export function LiveCommand() {
       });
     }
   };
-  const draggedWorker = dragState
-    ? (displayWorkerMap.get(dragState.workerId) ?? workerMap.get(dragState.workerId) ?? null)
-    : null;
-  const draggedWorkerUserId = draggedWorker?.userId ?? null;
+  const draggedWorkerIds = teamDragState?.workerIds ?? (dragState ? [dragState.workerId] : []);
+  const draggedWorkerUserIds = Array.from(
+    new Set(
+      draggedWorkerIds
+        .map((workerId) => (displayWorkerMap.get(workerId) ?? workerMap.get(workerId) ?? null)?.userId ?? null)
+        .filter((userId): userId is string => Boolean(userId)),
+    ),
+  );
+  const draggedWorkerUserId = draggedWorkerUserIds[0] ?? null;
   const isPlacementDragActive = dragState !== null || teamDragState !== null;
+  const buildAssignedSelectionKey = (workerId: string, fromStepId: string | null) => `${workerId}::${fromStepId ?? "__unassigned__"}`;
+  const parseAssignedSelectionKey = (key: string): DragMember => {
+    const [workerId, rawFromStepId = "__unassigned__"] = key.split("::");
+    return {
+      workerId,
+      fromStepId: rawFromStepId === "__unassigned__" ? null : rawFromStepId,
+    };
+  };
+  const resolveTeamDragMembers = (team: TeamDragState): DragMember[] =>
+    team.members ?? team.workerIds.map((workerId) => ({ workerId, fromStepId: null }));
+  const returnableDragMembers =
+    teamDragState?.members?.filter((member) => member.fromStepId) ??
+    (dragState?.fromStepId ? [{ workerId: dragState.workerId, fromStepId: dragState.fromStepId }] : []);
+  const toggleWorkerSelection = (workerId: string, event: any) => {
+    const isMultiSelect = Boolean(event?.ctrlKey || event?.metaKey);
+    setSelectedAssignedKeys([]);
+
+    if (isMultiSelect) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      setSelectedWorkerIds((prev) =>
+        prev.includes(workerId) ? prev.filter((id) => id !== workerId) : [...prev, workerId],
+      );
+      return;
+    }
+
+    setSelectedWorkerIds((prev) => (prev.length === 1 && prev[0] === workerId ? prev : [workerId]));
+    setSelectedAssignedKeys([]);
+  };
+
+  const toggleAssignedSelection = (workerId: string, fromStepId: string | null, event: any) => {
+    const key = buildAssignedSelectionKey(workerId, fromStepId);
+    const isMultiSelect = Boolean(event?.ctrlKey || event?.metaKey);
+    setSelectedWorkerIds([]);
+
+    if (isMultiSelect) {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      setSelectedAssignedKeys((prev) => (prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key]));
+      return;
+    }
+
+    setSelectedAssignedKeys((prev) => (prev.length === 1 && prev[0] === key ? prev : [key]));
+    setSelectedWorkerIds([]);
+  };
+
+  const beginWorkerDrag = (workerId: string) => {
+    const selectedIds =
+      selectedWorkerIds.includes(workerId) && selectedWorkerIds.length > 1
+        ? selectedWorkerIds
+        : [workerId];
+
+    if (selectedIds.length > 1) {
+      setDragState(null);
+      setTeamDragState({
+        teamId: "__selected__",
+        teamName: `選択中作業者 ${selectedIds.length}名`,
+        workerIds: selectedIds,
+        members: selectedIds.map((selectedWorkerId) => ({ workerId: selectedWorkerId, fromStepId: null })),
+      });
+      return;
+    }
+
+    setTeamDragState(null);
+    setDragState({ workerId, fromStepId: null });
+  };
+
+  const beginAssignedDrag = (workerId: string, fromStepId: string | null) => {
+    const key = buildAssignedSelectionKey(workerId, fromStepId);
+    const selectedMembers =
+      selectedAssignedKeys.includes(key) && selectedAssignedKeys.length > 1
+        ? selectedAssignedKeys.map(parseAssignedSelectionKey)
+        : [{ workerId, fromStepId }];
+
+    if (selectedMembers.length > 1) {
+      setDragState(null);
+      setTeamDragState({
+        teamId: "__selected-assigned__",
+        teamName: `選択中作業者 ${selectedMembers.length}名`,
+        workerIds: selectedMembers.map((member) => member.workerId),
+        members: selectedMembers,
+      });
+      return;
+    }
+
+    setTeamDragState(null);
+    setDragState({ workerId, fromStepId });
+  };
+
+  const endWorkerDrag = () => {
+    setDragState(null);
+    setTeamDragState(null);
+  };
+  const returnMembersToUnassigned = (members: DragMember[]) => {
+    const effectiveMembers = members.filter((member) => member.fromStepId);
+    if (!selectedTime || effectiveMembers.length === 0) return;
+
+    const nextSnapshots = { ...draftSnapshots };
+    const nextAreaAssignments = { ...draftAreaAssignments };
+    const selectedMinutes = parseTimeLabel(selectedTime);
+
+    timeLabels.forEach((timeLabel) => {
+      if (parseTimeLabel(timeLabel) < selectedMinutes) return;
+
+      const sourceSnapshot = nextSnapshots[timeLabel] ?? materializeSnapshot({}, steps);
+      const nextSnapshot = cloneSnapshot(sourceSnapshot);
+      const currentAreaSnapshot = { ...(nextAreaAssignments[timeLabel] ?? {}) };
+
+      effectiveMembers.forEach(({ workerId, fromStepId }) => {
+        if (!fromStepId) return;
+        nextSnapshot[fromStepId] = (nextSnapshot[fromStepId] ?? []).filter((assignedWorkerId) => assignedWorkerId !== workerId);
+        delete currentAreaSnapshot[buildAreaAssignmentKey(fromStepId, workerId)];
+      });
+
+      nextSnapshots[timeLabel] = materializeSnapshot(nextSnapshot, steps);
+      nextAreaAssignments[timeLabel] = currentAreaSnapshot;
+    });
+
+    setDraftSnapshots(nextSnapshots);
+    setDraftAreaAssignments(nextAreaAssignments);
+    setSelectedAssignedKeys([]);
+
+    if (effectiveMembers.length === 1) {
+      const worker = workerMap.get(effectiveMembers[0].workerId);
+      setPlacementAlert({
+        tone: "info",
+        message: `${worker?.name ?? "作業者"} を未配置へ戻しました。`,
+      });
+      return;
+    }
+
+    setPlacementAlert({
+      tone: "info",
+      message: `${effectiveMembers.length} 名を未配置へ戻しました。`,
+    });
+  };
   const renderGroupedActiveWorkers = (interactive: boolean, modalMode = false) => {
     if (activeWorkerGroups.length === 0) {
       return (
@@ -2372,14 +2627,14 @@ export function LiveCommand() {
           <div
             key={group.id}
             onDragOver={(event) => {
-              if (!modalMode || !group.isTemporary || !draggedWorkerUserId) return;
+              if (!modalMode || !group.isTemporary || draggedWorkerUserIds.length === 0) return;
               event.preventDefault();
             }}
             onDrop={(event) => {
               event.preventDefault();
-              if (!modalMode || !group.isTemporary || !draggedWorkerUserId) return;
-              assignUserToTemporaryTeam(draggedWorkerUserId, group.id);
-              setDragState(null);
+              if (!modalMode || !group.isTemporary || draggedWorkerUserIds.length === 0) return;
+              assignUsersToTemporaryTeam(draggedWorkerUserIds, group.id);
+              endWorkerDrag();
             }}
             className={`rounded-2xl border border-dashed px-3 py-3 ${
               modalMode && group.isTemporary && draggedWorkerUserId
@@ -2390,15 +2645,15 @@ export function LiveCommand() {
             <div className="mb-2 flex items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-2">
                 <span className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${group.colorClass}`} />
-                <div className={`truncate text-xs font-semibold ${c.textSecondary}`}>{group.name}</div>
+                <div className={`text-xs font-semibold whitespace-nowrap ${c.textSecondary}`}>{group.name}</div>
                 {group.isTemporary ? (
-                  <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold text-amber-600">
+                  <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap text-amber-600">
                     仮チーム
                   </span>
                 ) : null}
               </div>
               <div className="flex items-center gap-2">
-                <div className={`rounded-full px-2 py-0.5 text-[10px] ${c.bgSurface} ${c.textMuted}`}>{group.slots.length} 名</div>
+                <div className={`rounded-full px-2 py-0.5 text-[10px] whitespace-nowrap ${c.bgSurface} ${c.textMuted}`}>{group.slots.length} 名</div>
                 {modalMode && group.id !== "__unassigned__" ? (
                   <button
                     type="button"
@@ -2413,7 +2668,7 @@ export function LiveCommand() {
                       });
                     }}
                     onDragEnd={() => setTeamDragState(null)}
-                    className="inline-flex items-center gap-1 rounded-full border border-[#155DFC]/20 bg-[#EEF4FF] px-2.5 py-1 text-[10px] font-semibold text-[#155DFC]"
+                    className="inline-flex items-center gap-1 rounded-full border border-[#155DFC]/20 bg-[#EEF4FF] px-2.5 py-1 text-[10px] font-semibold whitespace-nowrap text-[#155DFC]"
                   >
                     <Users className="h-3.5 w-3.5" />
                     チーム配置
@@ -2440,20 +2695,25 @@ export function LiveCommand() {
                   hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
                   shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
                   splitCount={slot.splitCount}
+                  selected={selectedWorkerIds.includes(slot.workerId)}
                   muted={false}
                   draggable={interactive || modalMode}
                   onSplit={interactive ? splitWorker : undefined}
+                  onClick={
+                    interactive || modalMode
+                      ? (event) => toggleWorkerSelection(slot.workerId, event)
+                      : undefined
+                  }
                   qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
                   skillItems={skillItemsForIds(slot.worker.skillIds)}
                   onDragStart={
                     interactive || modalMode
                       ? () => {
-                          setTeamDragState(null);
-                          setDragState({ workerId: slot.workerId, fromStepId: null });
+                          beginWorkerDrag(slot.workerId);
                         }
                       : undefined
                   }
-                  onDragEnd={interactive || modalMode ? () => setDragState(null) : undefined}
+                  onDragEnd={interactive || modalMode ? endWorkerDrag : undefined}
                   c={c}
                 />
               ))}
@@ -2463,27 +2723,27 @@ export function LiveCommand() {
         {modalMode ? (
           <div
             onDragOver={(event) => {
-              if (!draggedWorkerUserId) return;
+              if (draggedWorkerUserIds.length === 0) return;
               event.preventDefault();
             }}
             onDrop={(event) => {
               event.preventDefault();
-              if (!draggedWorkerUserId) return;
-              createTemporaryTeamFromUserId(draggedWorkerUserId);
-              setDragState(null);
+              if (draggedWorkerUserIds.length === 0) return;
+              createTemporaryTeamFromUserIds(draggedWorkerUserIds);
+              endWorkerDrag();
             }}
             className={`rounded-2xl border border-dashed px-4 py-5 text-center transition ${
-              draggedWorkerUserId
+              draggedWorkerUserIds.length > 0
                 ? "border-[#155DFC]/60 bg-[#EEF4FF] text-[#155DFC]"
                 : `${c.borderCard} ${c.isDark ? "bg-white/[0.03]" : "bg-slate-50/80"} ${c.textSecondary}`
             }`}
           >
             <div className="flex flex-col items-center justify-center gap-2">
-              <div className={`inline-flex h-11 w-11 items-center justify-center rounded-full border ${draggedWorkerUserId ? "border-[#155DFC]/30 bg-white text-[#155DFC]" : `${c.borderCard} ${c.bgCard} ${c.textMuted}`}`}>
+              <div className={`inline-flex h-11 w-11 items-center justify-center rounded-full border ${draggedWorkerUserIds.length > 0 ? "border-[#155DFC]/30 bg-white text-[#155DFC]" : `${c.borderCard} ${c.bgCard} ${c.textMuted}`}`}>
                 <Plus className="h-4.5 w-4.5" />
               </div>
               <div className="text-sm font-semibold">仮チーム作成</div>
-              <div className={`text-[11px] ${draggedWorkerUserId ? "text-[#3B5BA9]" : c.textMuted}`}>
+              <div className={`text-[11px] ${draggedWorkerUserIds.length > 0 ? "text-[#3B5BA9]" : c.textMuted}`}>
                 icon をここへ入れると新しい仮チームを作成します
               </div>
             </div>
@@ -2778,12 +3038,13 @@ export function LiveCommand() {
     const warningLines = new Set<string>();
     let placedCount = 0;
     let targetLabel = processView.processName;
+    const teamMembers = resolveTeamDragMembers(team);
 
-    team.workerIds.forEach((workerId) => {
+    teamMembers.forEach(({ workerId, fromStepId }) => {
       const placement = buildPlacementDraftResult({
         workerId,
         processView,
-        sourceStepId: null,
+        sourceStepId: fromStepId,
         targetShipper,
         baseSnapshots: nextSnapshots,
         baseAreaAssignments: nextAreaAssignments,
@@ -2919,39 +3180,27 @@ export function LiveCommand() {
   const isSelectedDateToday = selectedDate === todayKey;
   const isSelectedDatePast = selectedDate < todayKey;
   const isSelectedDateFuture = selectedDate > todayKey;
-  const boardLayoutClass =
-    cardsPerRow === 5
-      ? "xl:grid-cols-[minmax(0,1fr)_292px]"
-      : cardsPerRow === 4
-        ? "xl:grid-cols-[minmax(0,1fr)_316px]"
-        : "xl:grid-cols-[minmax(0,1fr)_352px]";
-  const cardsGridClass =
-    cardsPerRow === 5
-      ? "md:grid-cols-2 xl:grid-cols-5"
-      : cardsPerRow === 4
-        ? "md:grid-cols-2 xl:grid-cols-4"
-        : "md:grid-cols-2 xl:grid-cols-3";
   const workerPoolContent = (
     <div className="grid gap-4">
       <div
         className={[
           "rounded-2xl border border-dashed p-3 transition",
-          dragState?.fromStepId ? "border-cyan-500/50 bg-cyan-500/5" : `${c.borderCard}`,
+          returnableDragMembers.length > 0 ? "border-cyan-500/50 bg-cyan-500/5" : `${c.borderCard}`,
         ].join(" ")}
         onDragOver={(event) => {
-          if (!dragState?.fromStepId) return;
+          if (returnableDragMembers.length === 0) return;
           event.preventDefault();
         }}
         onDrop={(event) => {
           event.preventDefault();
-          if (!dragState?.fromStepId) return;
-          updateFutureSnapshots(dragState.workerId, dragState.fromStepId, null);
-          setDragState(null);
+          if (returnableDragMembers.length === 0) return;
+          returnMembersToUnassigned(returnableDragMembers);
+          endWorkerDrag();
         }}
       >
         <div className="mb-2 flex items-center justify-between gap-3">
           <div className={`text-xs font-medium ${c.textSecondary}`}>未配置の作業者</div>
-          {dragState?.fromStepId ? (
+          {returnableDragMembers.length > 0 ? (
             <div className="rounded-full bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-600">
               ここへ戻す
             </div>
@@ -3023,143 +3272,53 @@ export function LiveCommand() {
       </div>
     </div>
   );
-  const workerPoolCompactContent = (
-    <div className="grid gap-3 xl:grid-cols-[minmax(0,6fr)_minmax(0,3fr)_minmax(0,1fr)]">
-      <div
-        className={[
-          "rounded-2xl border border-dashed p-3 transition",
-          dragState?.fromStepId ? "border-cyan-500/50 bg-cyan-500/5" : `${c.borderCard}`,
-        ].join(" ")}
-        onDragOver={(event) => {
-          if (!dragState?.fromStepId) return;
-          event.preventDefault();
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          if (!dragState?.fromStepId) return;
-          updateFutureSnapshots(dragState.workerId, dragState.fromStepId, null);
-          setDragState(null);
-        }}
-      >
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <div className={`text-xs font-medium ${c.textSecondary}`}>未配置の作業者</div>
-          {dragState?.fromStepId ? (
-            <div className="rounded-full bg-cyan-500/10 px-2.5 py-1 text-[10px] text-cyan-600">
-              ここへ戻す
-            </div>
-          ) : null}
-        </div>
-        {renderGroupedActiveWorkers(true)}
-      </div>
-
-      <div className={`rounded-2xl border border-dashed p-3 ${c.borderCard}`}>
-        <div className={`mb-2 text-xs font-medium ${c.textSecondary}`}>待機・離席</div>
-        <div className="flex flex-wrap gap-2">
-          {standbyWorkers.map((slot) => (
-            <WorkerCard
-              key={slot.id}
-              worker={slot.worker}
-              subtitle={slot.worker.note}
-              hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
-              shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
-              splitCount={slot.splitCount}
-              muted
-              onSplit={splitWorker}
-              qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
-              skillItems={skillItemsForIds(slot.worker.skillIds)}
-              onDragStart={() => {
-                setTeamDragState(null);
-                setDragState({ workerId: slot.workerId, fromStepId: null });
-              }}
-              onDragEnd={() => setDragState(null)}
-              c={c}
-            />
-          ))}
-          {standbyWorkers.length === 0 && (
-            <div className={`w-full rounded-2xl border border-dashed px-4 py-5 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
-              待機・離席なし
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div
-        className={[
-          "rounded-2xl border border-dashed px-3 py-4 transition",
-          canDeleteSplit ? "border-rose-400/60 bg-rose-500/8" : `${c.borderCard} ${c.bgSurface}`,
-        ].join(" ")}
-        onDragOver={(event) => {
-          if (!canDeleteSplit) return;
-          event.preventDefault();
-        }}
-        onDrop={(event) => {
-          event.preventDefault();
-          if (!dragState || !canDeleteSplit) return;
-          deleteWorkerSplit(dragState.workerId, dragState.fromStepId);
-          setDragState(null);
-        }}
-      >
-        <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-          <div
-            className={`inline-flex h-10 w-10 items-center justify-center rounded-full border ${
-              canDeleteSplit ? "border-rose-400/60 bg-rose-500/12 text-rose-500" : `${c.borderCard} ${c.textMuted}`
-            }`}
-          >
-            <Trash2 className="h-4.5 w-4.5" />
-          </div>
-          <div className={`text-[11px] font-semibold ${canDeleteSplit ? "text-rose-500" : c.textSecondary}`}>分割枠を削除</div>
-          <div className={`text-[10px] ${c.textMuted}`}>ここへドロップ</div>
-        </div>
-      </div>
-    </div>
-  );
   const workerPoolModalContent = (
-    <div className="grid gap-4 lg:grid-cols-[minmax(0,6fr)_minmax(0,3fr)_minmax(0,1fr)]">
-      <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className={`text-sm font-semibold ${c.textPrimary}`}>未配置の作業者</div>
-          <div className={`rounded-full px-2.5 py-1 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>{activeWorkers.length} 名</div>
-        </div>
-        {renderGroupedActiveWorkers(false, true)}
-      </section>
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px]">
+      <div className="grid gap-4">
+        <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className={`text-sm font-semibold whitespace-nowrap ${c.textPrimary}`}>未配置の作業者</div>
+            <div className={`rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap ${c.bgSurface} ${c.textSecondary}`}>{activeWorkers.length} 名</div>
+          </div>
+          {renderGroupedActiveWorkers(false, true)}
+        </section>
+
+        <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className={`text-sm font-semibold whitespace-nowrap ${c.textPrimary}`}>待機・離席</div>
+            <div className={`rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap ${c.bgSurface} ${c.textSecondary}`}>{standbyWorkers.length} 名</div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {standbyWorkers.map((slot) => (
+              <WorkerCard
+                key={`modal:${slot.id}`}
+                worker={slot.worker}
+                subtitle={slot.worker.note}
+                hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
+                shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
+                splitCount={slot.splitCount}
+                muted
+                draggable={false}
+                qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
+                skillItems={skillItemsForIds(slot.worker.skillIds)}
+                c={c}
+              />
+            ))}
+            {standbyWorkers.length === 0 ? (
+              <div className={`w-full rounded-2xl border border-dashed px-4 py-6 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
+                待機・離席なし
+              </div>
+            ) : null}
+          </div>
+        </section>
+      </div>
 
       <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div className={`text-sm font-semibold ${c.textPrimary}`}>待機・離席</div>
-          <div className={`rounded-full px-2.5 py-1 text-[11px] ${c.bgSurface} ${c.textSecondary}`}>{standbyWorkers.length} 名</div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {standbyWorkers.map((slot) => (
-            <WorkerCard
-              key={`modal:${slot.id}`}
-              worker={slot.worker}
-              subtitle={slot.worker.note}
-              hoverCardData={workerTaskCardViewMap.get(slot.workerId)}
-              shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
-              splitCount={slot.splitCount}
-              muted
-              draggable={false}
-              qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
-              skillItems={skillItemsForIds(slot.worker.skillIds)}
-              c={c}
-            />
-          ))}
-          {standbyWorkers.length === 0 ? (
-            <div className={`w-full rounded-2xl border border-dashed px-4 py-6 text-center text-sm ${c.borderCard} ${c.textMuted}`}>
-              待機・離席なし
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      <section className={`${c.bgCard} ${c.border} rounded-2xl border p-4`}>
-        <div className={`mb-3 text-sm font-semibold ${c.textPrimary}`}>分割枠を削除</div>
+        <div className={`mb-3 text-sm font-semibold whitespace-nowrap ${c.textPrimary}`}>分割枠を削除</div>
         <div className={`flex min-h-[168px] flex-col items-center justify-center rounded-2xl border border-dashed text-center ${c.borderCard} ${c.bgSurface}`}>
           <div className={`inline-flex h-11 w-11 items-center justify-center rounded-full border ${c.borderCard} ${c.textMuted}`}>
             <Trash2 className="h-4.5 w-4.5" />
           </div>
-          <div className={`mt-3 text-xs font-semibold ${c.textSecondary}`}>一覧確認用プール</div>
-          <div className={`mt-1 px-4 text-[11px] leading-5 ${c.textMuted}`}>削除操作は右側の通常プールから行えます。</div>
         </div>
       </section>
     </div>
@@ -3168,12 +3327,12 @@ export function LiveCommand() {
     <section className={`${c.bgCard} ${c.border} flex min-h-0 flex-col overflow-hidden rounded-2xl border`}>
       <div className={`flex items-center justify-between gap-3 border-b px-4 py-4 ${c.border}`}>
         <div>
-          <div className={`text-sm font-semibold ${c.textPrimary}`}>チーム配置先</div>
-          <div className={`mt-1 text-xs ${c.textSecondary}`}>
+          <div className={`text-sm font-semibold whitespace-nowrap ${c.textPrimary}`}>チーム配置先</div>
+          <div className={`mt-1 overflow-x-auto text-xs whitespace-nowrap ${c.textSecondary}`}>
             チーム見出しの「チーム配置」または個別 icon を、下の業務行へドロップしてまとめて配置できます。
           </div>
         </div>
-        <div className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>{workflowCardViews.length} 業務フロー</div>
+        <div className={`rounded-full px-3 py-1 text-xs whitespace-nowrap ${c.bgSurface} ${c.textSecondary}`}>{workflowCardViews.length} 業務フロー</div>
       </div>
       <div className="min-h-0 overflow-auto">
         {workflowCardViews.length === 0 ? (
@@ -3185,16 +3344,16 @@ export function LiveCommand() {
           <table className="w-full min-w-[1180px] border-collapse">
             <thead className={`${c.bgSurface} ${c.textSecondary}`}>
               <tr className={`border-b ${c.border}`}>
-                <th className="px-3 py-3 text-left text-xs font-semibold">業務フロー</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold">業務</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold">荷主</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold">エリア</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold">開始予定</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold">終了予定</th>
-                <th className="px-3 py-3 text-right text-xs font-semibold">予定数</th>
-                <th className="px-3 py-3 text-right text-xs font-semibold">残数</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold">状態</th>
-                <th className="px-3 py-3 text-left text-xs font-semibold">配置中の作業者</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">業務フロー</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">業務</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">荷主</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">エリア</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">開始予定</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">終了予定</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold whitespace-nowrap">予定数</th>
+                <th className="px-3 py-3 text-right text-xs font-semibold whitespace-nowrap">残数</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">状態</th>
+                <th className="px-3 py-3 text-left text-xs font-semibold whitespace-nowrap">配置中の作業者</th>
               </tr>
             </thead>
             {workflowCardViews.map((workflowCard) => {
@@ -3227,28 +3386,28 @@ export function LiveCommand() {
                       >
                         <td className="px-3 py-3 align-top">
                           {rowIndex === 0 ? (
-                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold ${workflowTone.badge}`}>
+                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold whitespace-nowrap ${workflowTone.badge}`}>
                               {workflowCard.workflowName}
                             </span>
                           ) : null}
                         </td>
                         <td className="px-3 py-3 align-top">
-                          <div className={`text-sm font-semibold ${c.textPrimary}`}>{processView.processName}</div>
+                          <div className={`text-sm font-semibold whitespace-nowrap ${c.textPrimary}`}>{processView.processName}</div>
                         </td>
-                        <td className={`px-3 py-3 align-top text-sm ${c.textPrimary}`}>{row.shipperName}</td>
+                        <td className={`px-3 py-3 align-top text-sm whitespace-nowrap ${c.textPrimary}`}>{row.shipperName}</td>
                         <td className="px-3 py-3 align-top">
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${workflowTone.metric} ${c.textSecondary}`}>
+                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium whitespace-nowrap ${workflowTone.metric} ${c.textSecondary}`}>
                             {areaView.areaName}
                           </span>
                         </td>
-                        <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.startTime}</td>
-                        <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.targetEndTime}</td>
-                        <td className={`px-3 py-3 align-top text-right text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.planned.toLocaleString("ja-JP")}</td>
+                        <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums whitespace-nowrap ${c.textPrimary}`}>{row.startTime}</td>
+                        <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums whitespace-nowrap ${c.textPrimary}`}>{row.targetEndTime}</td>
+                        <td className={`px-3 py-3 align-top text-right text-sm font-semibold tabular-nums whitespace-nowrap ${c.textPrimary}`}>{row.planned.toLocaleString("ja-JP")}</td>
                         <td className="px-3 py-3 align-top text-right">
-                          <span className="text-sm font-semibold tabular-nums text-amber-500">{row.remaining.toLocaleString("ja-JP")}</span>
+                          <span className="text-sm font-semibold tabular-nums whitespace-nowrap text-amber-500">{row.remaining.toLocaleString("ja-JP")}</span>
                         </td>
                         <td className="px-3 py-3 align-top">
-                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold ${status.className}`}>{status.label}</span>
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold whitespace-nowrap ${status.className}`}>{status.label}</span>
                         </td>
                         <td className="px-3 py-3 align-top">
                           <div className={`flex min-h-[40px] flex-wrap items-center gap-2 rounded-xl border border-dashed px-2.5 py-2 ${c.borderCard}`}>
@@ -3256,16 +3415,25 @@ export function LiveCommand() {
                               row.assignedWorkers.map((assignment) => {
                                 const worker = displayWorkerMap.get(assignment.workerId) ?? workerMap.get(assignment.workerId);
                                 if (!worker) return null;
+                                const assignedSelectionKey = buildAssignedSelectionKey(worker.id, assignment.sourceStepId);
                                 return (
-                                  <div
+                                  <WorkerCard
                                     key={`modal-assigned:${assignment.id}`}
-                                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/60 shadow-sm"
-                                    title={worker.name}
-                                  >
-                                    <span className={`flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-semibold text-white ${worker.color}`}>
-                                      {worker.initials}
-                                    </span>
-                                  </div>
+                                    worker={worker}
+                                    subtitle={worker.note}
+                                    hoverCardData={workerTaskCardViewMap.get(worker.id)}
+                                    shiftLabel={workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}
+                                    splitCount={effectiveWorkerSplitCounts.get(worker.id) ?? 1}
+                                    selected={selectedAssignedKeys.includes(assignedSelectionKey)}
+                                    qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
+                                    skillItems={skillItemsForIds(worker.skillIds)}
+                                    onClick={(event) => toggleAssignedSelection(worker.id, assignment.sourceStepId, event)}
+                                    onDragStart={() => {
+                                      beginAssignedDrag(worker.id, assignment.sourceStepId);
+                                    }}
+                                    onDragEnd={endWorkerDrag}
+                                    c={c}
+                                  />
                                 );
                               })
                             ) : (
@@ -3329,9 +3497,78 @@ export function LiveCommand() {
       )}
     </div>
   );
+  const placementAlertSnackbar =
+    placementAlert && typeof document !== "undefined"
+      ? createPortal(
+          <div className="pointer-events-none fixed inset-x-0 top-5 z-[90] flex justify-center px-4">
+            <div
+              className={[
+                "pointer-events-auto w-full max-w-2xl rounded-2xl border px-5 py-3 shadow-2xl backdrop-blur-sm",
+                placementAlert.tone === "warning"
+                  ? "border-amber-500/25 bg-white/95 text-amber-600 shadow-amber-500/10"
+                  : "border-cyan-500/25 bg-white/95 text-cyan-600 shadow-cyan-500/10",
+              ].join(" ")}
+              role="status"
+              aria-live="polite"
+            >
+              <div className="flex items-start gap-3">
+                <div
+                  className={`mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
+                    placementAlert.tone === "warning"
+                      ? "bg-amber-500/15 text-amber-600"
+                      : "bg-cyan-500/15 text-cyan-600"
+                  }`}
+                >
+                  {placementAlert.tone === "warning" ? (
+                    <AlertTriangle className="h-4 w-4" />
+                  ) : (
+                    <Info className="h-4 w-4" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1 flex flex-wrap items-center gap-2">
+                    <span
+                      className={`inline-flex rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.08em] ${
+                        placementAlert.tone === "warning"
+                          ? "border-amber-500/30 bg-white/70 text-amber-700"
+                          : "border-cyan-500/25 bg-white/70 text-cyan-700"
+                      }`}
+                    >
+                      Severity: {placementAlert.tone === "warning" ? "Warning" : "Info"}
+                    </span>
+                    {placementAlert.title ? (
+                      <div className="text-sm font-semibold">{placementAlert.title}</div>
+                    ) : null}
+                  </div>
+                  <div className="text-sm">{placementAlert.message}</div>
+                  {placementAlert.details && placementAlert.details.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {placementAlert.details.map((detail) => (
+                        <span
+                          key={detail}
+                          className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                            placementAlert.tone === "warning"
+                              ? "border border-amber-500/25 bg-white/70 text-amber-700"
+                              : "border border-cyan-500/20 bg-white/70 text-cyan-700"
+                          }`}
+                        >
+                          {detail}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )
+      : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden p-6">
+      {placementAlertSnackbar}
+
       <section className={`${c.bgCard} ${c.border} shrink-0 rounded-2xl border`}>
         <div className={`flex flex-col gap-4 border-b px-5 py-4 ${c.border}`}>
           <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)_auto]">
@@ -3413,43 +3650,28 @@ export function LiveCommand() {
                 </div>
                 <div className={`inline-flex rounded-xl border p-1 ${c.borderCard} ${c.bgCard}`}>
                   {([
-                    { id: "card", label: "カード" },
-                    { id: "table", label: "表" },
-                  ] as const).map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => setBoardView(option.id)}
-                      className={[
-                        "rounded-lg px-3 py-1.5 text-xs font-medium transition",
-                        boardView === option.id
-                          ? "bg-[#155DFC] text-white"
-                          : `${c.textSecondary} hover:bg-[#155DFC]/10 hover:text-[#155DFC]`,
-                      ].join(" ")}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-                {boardView === "card" ? (
-                  <div className={`inline-flex rounded-xl border p-1 ${c.borderCard} ${c.bgCard}`}>
-                    {CARD_PER_ROW_OPTIONS.map((option) => (
+                    { id: "card", label: "カード", icon: LayoutGrid },
+                    { id: "table", label: "表", icon: Rows3 },
+                  ] as const).map((option) => {
+                    const Icon = option.icon;
+                    return (
                       <button
-                        key={option}
+                        key={option.id}
                         type="button"
-                        onClick={() => setCardsPerRow(option)}
+                        onClick={() => setWorkCardViewMode(option.id)}
                         className={[
-                          "rounded-lg px-3 py-1.5 text-xs font-medium transition",
-                          cardsPerRow === option
+                          "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition",
+                          workCardViewMode === option.id
                             ? "bg-[#155DFC] text-white"
                             : `${c.textSecondary} hover:bg-[#155DFC]/10 hover:text-[#155DFC]`,
                         ].join(" ")}
                       >
-                        {option}列
+                        <Icon className="h-3.5 w-3.5" />
+                        {option.label}
                       </button>
-                    ))}
-                  </div>
-                ) : null}
+                    );
+                  })}
+                </div>
               </div>
             </div>
 
@@ -3537,202 +3759,328 @@ export function LiveCommand() {
           </div>
         </div>
 
-        {placementAlert && (
-          <div
-            className={[
-              "border-b px-5 py-3",
-              placementAlert.tone === "warning"
-                ? "border-amber-500/20 bg-amber-500/10 text-amber-500"
-                : "border-cyan-500/20 bg-cyan-500/10 text-cyan-500",
-            ].join(" ")}
-          >
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div className="min-w-0 flex-1">
-                {placementAlert.title ? (
-                  <div className="text-sm font-semibold">{placementAlert.title}</div>
-                ) : null}
-                <div className="text-sm">{placementAlert.message}</div>
-                {placementAlert.details && placementAlert.details.length > 0 ? (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {placementAlert.details.map((detail) => (
-                      <span
-                        key={detail}
-                        className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${
-                          placementAlert.tone === "warning"
-                            ? "border border-amber-500/25 bg-white/70 text-amber-700"
-                            : "border border-cyan-500/20 bg-white/70 text-cyan-700"
-                        }`}
-                      >
-                        {detail}
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          </div>
-        )}
       </section>
 
-      {boardView === "card" ? (
-      <div className={`grid min-h-0 flex-1 gap-4 overflow-hidden ${boardLayoutClass}`}>
-        <div className={`grid min-h-0 content-start gap-2.5 overflow-y-auto pr-1 ${cardsGridClass}`}>
+      <div className="grid min-h-0 flex-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div
+          className={[
+            "min-h-0 content-start gap-2.5 pr-1",
+            workCardViewMode === "table"
+              ? "flex flex-col overflow-auto"
+              : "grid overflow-y-auto",
+          ].join(" ")}
+          style={
+            workCardViewMode === "table"
+              ? undefined
+              : { gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }
+          }
+        >
           {workflowCardViews.flatMap((workflowCard) => {
             const workflowTone = getWorkflowCardTone(workflowCard.workflowId || workflowCard.workflowName, c.isDark);
 
             return workflowCard.rows.map(({ areaView, processView, row }) => {
                     const status = statusConfig(row.status);
                     const progressPercent = row.planned > 0 ? Math.min(100, Math.round((row.actual / row.planned) * 100)) : 0;
+                    const assignedWorkersContent =
+                      row.assignedWorkers.length > 0 ? (
+                        <>
+                          {row.assignedWorkers.map((assignment) => {
+                            const worker = workerMap.get(assignment.workerId);
+                            if (!worker) return null;
+                            const assignedSelectionKey = buildAssignedSelectionKey(worker.id, assignment.sourceStepId);
+                            return (
+                              <WorkerCard
+                                key={assignment.id}
+                                worker={worker}
+                                subtitle={worker.note}
+                                hoverCardData={workerTaskCardViewMap.get(worker.id)}
+                                shiftLabel={workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}
+                                splitCount={effectiveWorkerSplitCounts.get(worker.id) ?? 1}
+                                selected={selectedAssignedKeys.includes(assignedSelectionKey)}
+                                onSplit={splitWorker}
+                                onClick={(event) => toggleAssignedSelection(worker.id, assignment.sourceStepId, event)}
+                                qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
+                                skillItems={skillItemsForIds(worker.skillIds)}
+                                onDragStart={() => {
+                                  beginAssignedDrag(worker.id, assignment.sourceStepId);
+                                }}
+                                onDragEnd={endWorkerDrag}
+                                c={c}
+                              />
+                            );
+                          })}
+                          <div
+                            aria-label={`${row.shipperName} にドロップ`}
+                            className={`inline-flex h-12 w-12 items-center justify-center rounded-full border border-dashed ${c.borderCard} ${c.textMuted} ${c.bgCard}`}
+                          >
+                            <Plus className="h-5 w-5" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className={`w-full rounded-2xl border border-dashed px-4 py-4 text-center text-sm ${c.borderCard} ${c.textMuted} ${c.bgCard}`}>
+                          ここへドロップしてこの荷主に配置
+                        </div>
+                      );
+                    const assignedWorkersTableContent =
+                      row.assignedWorkers.length > 0 ? (
+                        <>
+                          {row.assignedWorkers.map((assignment) => {
+                            const worker = workerMap.get(assignment.workerId);
+                            if (!worker) return null;
+                            const assignedSelectionKey = buildAssignedSelectionKey(worker.id, assignment.sourceStepId);
+                            return (
+                              <WorkerCard
+                                key={`${assignment.id}:table`}
+                                worker={worker}
+                                subtitle={worker.note}
+                                hoverCardData={workerTaskCardViewMap.get(worker.id)}
+                                shiftLabel={workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}
+                                splitCount={effectiveWorkerSplitCounts.get(worker.id) ?? 1}
+                                selected={selectedAssignedKeys.includes(assignedSelectionKey)}
+                                onSplit={splitWorker}
+                                onClick={(event) => toggleAssignedSelection(worker.id, assignment.sourceStepId, event)}
+                                qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
+                                skillItems={skillItemsForIds(worker.skillIds)}
+                                onDragStart={() => {
+                                  beginAssignedDrag(worker.id, assignment.sourceStepId);
+                                }}
+                                onDragEnd={endWorkerDrag}
+                                c={c}
+                              />
+                            );
+                          })}
+                          <div
+                            aria-label={`${row.shipperName} にドロップ`}
+                            className={`inline-flex h-9 w-9 items-center justify-center rounded-full border border-dashed ${c.borderCard} ${c.textMuted} ${c.bgCard}`}
+                          >
+                            <Plus className="h-4 w-4" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className={`w-full rounded-xl border border-dashed px-3 py-3 text-center text-xs ${c.borderCard} ${c.textMuted} ${c.bgCard}`}>
+                          ここへドロップ
+                        </div>
+                      );
+
+                    const liveRowKey = buildLiveCommandRowKey({
+                      workflowId: workflowCard.workflowId,
+                      processId: processView.processId,
+                      shipperId: row.shipperId,
+                      areaId: areaView.areaId,
+                    });
+                    const isFocusedPlacementRow = focusedPlacementRowKey === liveRowKey;
 
                     return (
                       <section
                         key={`${workflowCard.workflowId}:${areaView.areaId}:${processView.processId}:${row.shipperId}`}
+                        id={buildLiveCommandRowDomId(liveRowKey)}
+                        data-live-row-key={liveRowKey}
+                        data-live-workflow={workflowCard.workflowId}
+                        data-live-process={processView.processId}
+                        data-live-shipper={row.shipperId}
+                        data-live-area={areaView.areaId}
                         className={[
-                          "rounded-[18px] border p-3 shadow-sm transition-all duration-200",
-                          dragState
+                          workCardViewMode === "table"
+                            ? "rounded-[18px] border p-0 shadow-sm transition-all duration-200"
+                            : "rounded-[18px] border p-3 shadow-sm transition-all duration-200",
+                          isPlacementDragActive
                             ? "border-cyan-500/40 bg-cyan-500/5 shadow-cyan-500/10"
                             : workflowTone.surface,
+                          isFocusedPlacementRow ? "ring-2 ring-[#155DFC]/60 shadow-[0_0_0_3px_rgba(21,93,252,0.12)]" : "",
                         ].join(" ")}
                         onDragOver={(event) => event.preventDefault()}
                         onDrop={(event) => {
                           event.preventDefault();
+                          if (teamDragState) {
+                            applyTeamPlacement(teamDragState, processView, row);
+                            endWorkerDrag();
+                            return;
+                          }
                           if (!dragState) return;
                           applyPlacement(dragState.workerId, processView, dragState.fromStepId, row);
-                          setDragState(null);
+                          endWorkerDrag();
                         }}
                       >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <div className={`truncate text-[22px] font-semibold leading-none tracking-[-0.03em] ${c.textPrimary}`}>
-                              {processView.processName}
-                            </div>
-                          </div>
-                          <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-[10px] font-semibold shadow-sm ${status.className}`}>
-                            {status.label}
-                          </span>
-                        </div>
-
-                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTone.metric} ${c.textSecondary}`}>
-                            {row.workflowName}
-                          </span>
-                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTone.badge}`}>
-                            {areaView.areaName}
-                          </span>
-                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTone.metric} ${c.textSecondary}`}>
-                            {row.shipperName}
-                          </span>
-                        </div>
-
-                        <div className={`mt-3 grid grid-cols-[1fr_auto_1fr] items-end gap-2.5 border-y py-3.5 ${c.borderCard}`}>
-                          <div>
-                            <div className={`text-[11px] font-medium ${c.textMuted}`}>開始予定</div>
-                            <div className={`mt-1 text-[24px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
-                              {row.startTime}
-                            </div>
-                          </div>
-                          <div className={`pb-1 ${c.textMuted}`}>
-                            <ArrowRight className="h-4 w-4" />
-                          </div>
-                          <div className="text-right">
-                            <div className={`text-[11px] font-medium ${c.textMuted}`}>終了予定</div>
-                            <div className={`mt-1 text-[24px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
-                              {row.targetEndTime}
-                            </div>
-                          </div>
-                          <div className="col-span-3 flex items-center justify-between pt-1">
-                            <div className={`text-[11px] font-medium ${c.textMuted}`}>完了見込み</div>
-                            <div className={`inline-flex items-center gap-1.5 text-[15px] font-semibold tabular-nums ${c.textPrimary}`}>
-                              <Clock3 className="h-4 w-4" />
-                              {row.eta}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-3 grid grid-cols-3 gap-2.5">
-                          {[
-                            { label: "予定数", value: `${row.planned.toLocaleString("ja-JP")} 件` },
-                            { label: "実績数", value: `${row.actual.toLocaleString("ja-JP")} 件` },
-                            { label: "残数", value: `${row.remaining.toLocaleString("ja-JP")} 件`, accent: "text-amber-500" },
-                          ].map((metric) => (
-                            <div key={`${row.shipperId}-${row.workflowId}-${metric.label}`} className={`rounded-xl border px-3 py-2.5 ${workflowTone.metric}`}>
-                              <div className={`text-[11px] font-semibold ${c.textMuted}`}>{metric.label}</div>
-                              <div className={`mt-1.5 text-[15px] font-semibold tabular-nums ${metric.accent ?? c.textPrimary}`}>
-                                {metric.value}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="mt-3">
-                          <div className="flex items-center justify-between gap-3">
-                            <div className={`text-[12px] font-semibold ${c.textSecondary}`}>進捗推移</div>
-                            <div className={`text-[13px] font-semibold tabular-nums ${c.textPrimary}`}>
-                              {progressPercent}%
-                            </div>
-                          </div>
-                          <div className={`mt-2 h-2 overflow-hidden rounded-full ${c.isDark ? "bg-slate-900/70" : "bg-slate-200"}`}>
-                            <div
-                              className={`h-full rounded-full transition-all ${workflowTone.progress}`}
-                              style={{ width: `${Math.max(progressPercent, row.planned > 0 ? 6 : 0)}%` }}
-                            />
-                          </div>
-                        </div>
-
-                        <div className={`mt-3 flex items-center justify-between border-t pt-3 ${c.borderCard}`}>
-                          <div className={`text-[13px] font-semibold ${c.textSecondary}`}>必要人時</div>
-                          <div className={`text-[16px] font-semibold tabular-nums ${c.textPrimary}`}>
-                            {row.requiredPersonHours.toFixed(1)} 人時
-                          </div>
-                        </div>
-
-                        <div className={`mt-3 rounded-t-2xl border-t px-0 pt-3 ${c.borderCard}`}>
-                          <div className="flex items-center justify-between gap-3">
-                            <div className={`text-[13px] font-semibold ${c.textSecondary}`}>配置中の作業者 {row.assignedWorkers.length}名</div>
-                          </div>
-                          <div className={`mt-2.5 rounded-2xl border px-3 py-4 ${workflowTone.metric}`}>
-                            <div className="flex flex-wrap items-start gap-2">
-                            {row.assignedWorkers.length > 0 ? (
-                              <>
-                                {row.assignedWorkers.map((assignment) => {
-                                  const worker = workerMap.get(assignment.workerId);
-                                  if (!worker) return null;
-                                  return (
-                                    <WorkerCard
-                                      key={assignment.id}
-                                      worker={worker}
-                                      subtitle={worker.note}
-                                      hoverCardData={workerTaskCardViewMap.get(worker.id)}
-                                      shiftLabel={workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}
-                                      splitCount={effectiveWorkerSplitCounts.get(worker.id) ?? 1}
-                                      onSplit={splitWorker}
-                                      qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
-                                      skillItems={skillItemsForIds(worker.skillIds)}
-                                      onDragStart={() => {
-                                        setTeamDragState(null);
-                                        setDragState({ workerId: worker.id, fromStepId: assignment.sourceStepId });
-                                      }}
-                                      onDragEnd={() => setDragState(null)}
-                                      c={c}
-                                    />
-                                  );
-                                })}
-                                <div
-                                  aria-label={`${row.shipperName} にドロップ`}
-                                  className={`inline-flex h-12 w-12 items-center justify-center rounded-full border border-dashed ${c.borderCard} ${c.textMuted} ${c.bgCard}`}
-                                >
-                                  <Plus className="h-5 w-5" />
+                        {workCardViewMode === "table" ? (
+                          <div className="flex min-w-[960px] items-stretch">
+                            <div className={`flex w-[208px] shrink-0 flex-col justify-center gap-1.5 px-3.5 py-3 ${c.borderCard} border-r`}>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <div className={`truncate text-[17px] font-semibold leading-none tracking-[-0.02em] ${c.textPrimary}`}>
+                                    {processView.processName}
+                                  </div>
                                 </div>
-                              </>
-                            ) : (
-                              <div className={`w-full rounded-2xl border border-dashed px-4 py-4 text-center text-sm ${c.borderCard} ${c.textMuted} ${c.bgCard}`}>
-                                ここへドロップしてこの荷主に配置
+                                <span className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[10px] font-semibold shadow-sm ${status.className}`}>
+                                  {status.label}
+                                </span>
                               </div>
-                            )}
+                              <div className="flex flex-col items-start gap-1">
+                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none ${workflowTone.metric} ${c.textSecondary}`}>
+                                  {row.workflowName}
+                                </span>
+                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none ${workflowTone.badge}`}>
+                                  {areaView.areaName}
+                                </span>
+                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none ${workflowTone.metric} ${c.textSecondary}`}>
+                                  {row.shipperName}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className={`flex min-w-[170px] flex-[0.48] flex-col justify-center gap-2 px-3 py-3 ${c.borderCard} border-r`}>
+                              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
+                                <div>
+                                  <div className={`text-[11px] font-medium ${c.textMuted}`}>開始予定</div>
+                                  <div className={`mt-1 text-[18px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                                    {row.startTime}
+                                  </div>
+                                </div>
+                                <div className={`pt-4 ${c.textMuted}`}>
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                </div>
+                                <div className="text-right">
+                                  <div className={`text-[11px] font-medium ${c.textMuted}`}>終了予定</div>
+                                  <div className={`mt-1 text-[18px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                                    {row.targetEndTime}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className={`flex items-center justify-between border-t pt-2.5 ${c.borderCard}`}>
+                                <div className={`text-[11px] font-medium ${c.textMuted}`}>完了見込み</div>
+                                <div className={`inline-flex items-center gap-1 text-[13px] font-semibold tabular-nums ${c.textPrimary}`}>
+                                  <Clock3 className="h-3.5 w-3.5" />
+                                  {row.eta}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className={`flex min-w-[236px] flex-[0.66] flex-col justify-center px-2 py-3 ${c.borderCard} border-r`}>
+                              <div className={`w-full rounded-xl border px-2.5 py-2.5 ${workflowTone.metric}`}>
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className={`text-[16px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                                      {row.actual.toLocaleString("ja-JP")}
+                                      <span className={`px-1 text-[13px] font-medium ${c.textMuted}`}>/</span>
+                                      <span className={`text-[13px] font-medium ${c.textSecondary}`}>
+                                        {row.planned.toLocaleString("ja-JP")}
+                                      </span>
+                                    </div>
+                                    <div className={`mt-1 text-[11px] font-medium ${c.textMuted}`}>実績 / 予定</div>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className={`text-[13px] font-semibold tabular-nums ${c.textPrimary}`}>{progressPercent}%</div>
+                                    <div className="mt-1 text-[11px] font-medium text-amber-500">残 {row.remaining.toLocaleString("ja-JP")} 件</div>
+                                  </div>
+                                </div>
+                                <div className={`mt-2.5 h-2 overflow-hidden rounded-full ${c.isDark ? "bg-slate-900/70" : "bg-slate-200"}`}>
+                                  <div
+                                    className={`h-full rounded-full transition-all ${workflowTone.progress}`}
+                                    style={{ width: `${Math.max(progressPercent, row.planned > 0 ? 6 : 0)}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex min-w-[320px] flex-[1.18] flex-col justify-center px-3.5 py-3">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={`text-[11px] font-medium ${c.textMuted}`}>配置中の作業者 {row.assignedWorkers.length}名</div>
+                              </div>
+                              <div className={`mt-2 rounded-2xl border px-2.5 py-2.5 ${workflowTone.metric}`}>
+                                <div className="flex min-h-[48px] flex-wrap items-center gap-1.5">{assignedWorkersTableContent}</div>
+                              </div>
                             </div>
                           </div>
-                        </div>
+                        ) : (
+                          <>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className={`truncate text-[22px] font-semibold leading-none tracking-[-0.03em] ${c.textPrimary}`}>
+                                  {processView.processName}
+                                </div>
+                              </div>
+                              <span className={`inline-flex shrink-0 items-center rounded-full px-2.5 py-1 text-[10px] font-semibold shadow-sm ${status.className}`}>
+                                {status.label}
+                              </span>
+                            </div>
+
+                            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                              <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTone.metric} ${c.textSecondary}`}>
+                                {row.workflowName}
+                              </span>
+                              <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTone.badge}`}>
+                                {areaView.areaName}
+                              </span>
+                              <span className={`rounded-full border px-2.5 py-1 text-[10px] font-medium ${workflowTone.metric} ${c.textSecondary}`}>
+                                {row.shipperName}
+                              </span>
+                            </div>
+
+                            <div className={`mt-3 grid grid-cols-[1fr_auto_1fr] items-end gap-2.5 border-y py-3.5 ${c.borderCard}`}>
+                              <div>
+                                <div className={`text-[11px] font-medium ${c.textMuted}`}>開始予定</div>
+                                <div className={`mt-1 text-[24px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                                  {row.startTime}
+                                </div>
+                              </div>
+                              <div className={`pb-1 ${c.textMuted}`}>
+                                <ArrowRight className="h-4 w-4" />
+                              </div>
+                              <div className="text-right">
+                                <div className={`text-[11px] font-medium ${c.textMuted}`}>終了予定</div>
+                                <div className={`mt-1 text-[24px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                                  {row.targetEndTime}
+                                </div>
+                              </div>
+                              <div className="col-span-3 flex items-center justify-between pt-1">
+                                <div className={`text-[11px] font-medium ${c.textMuted}`}>完了見込み</div>
+                                <div className={`inline-flex items-center gap-1.5 text-[15px] font-semibold tabular-nums ${c.textPrimary}`}>
+                                  <Clock3 className="h-4 w-4" />
+                                  {row.eta}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className={`mt-3 rounded-xl border px-3 py-2.5 ${workflowTone.metric}`}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className={`text-[17px] font-semibold leading-none tabular-nums ${c.textPrimary}`}>
+                                    {row.actual.toLocaleString("ja-JP")}
+                                    <span className={`px-1 text-[14px] font-medium ${c.textMuted}`}>/</span>
+                                    <span className={`text-[15px] font-medium ${c.textSecondary}`}>
+                                      {row.planned.toLocaleString("ja-JP")}
+                                    </span>
+                                  </div>
+                                  <div className={`mt-1 text-[11px] font-medium ${c.textMuted}`}>
+                                    実績 / 予定
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className={`text-[14px] font-semibold tabular-nums ${c.textPrimary}`}>
+                                    {progressPercent}%
+                                  </div>
+                                  <div className="mt-1 text-[11px] font-medium text-amber-500">
+                                    残 {row.remaining.toLocaleString("ja-JP")} 件
+                                  </div>
+                                </div>
+                              </div>
+                              <div className={`mt-2.5 h-2 overflow-hidden rounded-full ${c.isDark ? "bg-slate-900/70" : "bg-slate-200"}`}>
+                                <div
+                                  className={`h-full rounded-full transition-all ${workflowTone.progress}`}
+                                  style={{ width: `${Math.max(progressPercent, row.planned > 0 ? 6 : 0)}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            <div className={`mt-3 rounded-t-2xl border-t px-0 pt-3 ${c.borderCard}`}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={`text-[13px] font-semibold ${c.textSecondary}`}>配置中の作業者 {row.assignedWorkers.length}名</div>
+                              </div>
+                              <div className={`mt-2.5 rounded-2xl border px-3 py-4 ${workflowTone.metric}`}>
+                                <div className="flex flex-wrap items-start gap-2">{assignedWorkersContent}</div>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </section>
                     );
                   });
@@ -3845,171 +4193,14 @@ export function LiveCommand() {
           </section>
         </aside>
       </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden">
-          <section className={`${c.bgCard} ${c.border} shrink-0 rounded-2xl border`}>
-            <div className={`flex items-center justify-between gap-3 border-b px-4 py-4 ${c.border}`}>
-              <div>
-                <div className={`whitespace-nowrap text-sm font-semibold ${c.textPrimary}`}>作業者プール</div>
-                <div className={`mt-1 text-xs ${c.textSecondary}`}>上段からドラッグして、下段の業務行へそのまま配置できます。</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>選択中: {selectedTime || "-"}</div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTeamDragState(null);
-                    setDragState(null);
-                    setIsWorkerPoolModalOpen(true);
-                  }}
-                  className={`inline-flex items-center justify-center rounded-xl border px-3 py-2 text-xs font-semibold transition ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
-                >
-                  拡大表示
-                </button>
-              </div>
-            </div>
-            <div className="max-h-[220px] overflow-y-auto p-4">{workerPoolCompactContent}</div>
-          </section>
-
-          <section className={`${c.bgCard} ${c.border} flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border`}>
-            <div className={`flex items-center justify-between gap-3 border-b px-4 py-4 ${c.border}`}>
-              <div>
-                <div className={`text-sm font-semibold ${c.textPrimary}`}>業務フロー配置テーブル</div>
-                <div className={`mt-1 text-xs ${c.textSecondary}`}>開始予定時刻・終了予定時刻・予定数は参照のみです。行へドロップするとそのまま配置します。</div>
-              </div>
-              <div className={`text-xs ${c.textMuted}`}>{workflowCardViews.length} 業務フロー</div>
-            </div>
-
-            <div className="min-h-0 overflow-auto">
-              {workflowCardViews.length === 0 ? (
-                <div className="p-10 text-center">
-                  <div className={`text-base font-medium ${c.textPrimary}`}>表示できる業務がありません</div>
-                  <div className={`mt-2 text-sm ${c.textSecondary}`}>検索条件を見直すか、対象日に業務と区域の設定があるか確認してください。</div>
-                </div>
-              ) : (
-                <table className="w-full min-w-[1360px] border-collapse">
-                  <thead className={`${c.bgSurface} ${c.textSecondary}`}>
-                    <tr className={`border-b ${c.border}`}>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">業務</th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">荷主</th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">エリア</th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">開始予定時刻</th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">終了予定時刻</th>
-                      <th className="px-3 py-3 text-right text-xs font-semibold">予定数</th>
-                      <th className="px-3 py-3 text-right text-xs font-semibold">実績数</th>
-                      <th className="px-3 py-3 text-right text-xs font-semibold">残数</th>
-                      <th className="px-3 py-3 text-right text-xs font-semibold">必要人時</th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">完了見込み</th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">状態</th>
-                      <th className="px-3 py-3 text-left text-xs font-semibold">配置中の作業者</th>
-                    </tr>
-                  </thead>
-                  {workflowCardViews.map((workflowCard) => {
-                    const workflowTone = getWorkflowCardTone(workflowCard.workflowId || workflowCard.workflowName, c.isDark);
-
-                    return (
-                        <tbody key={`table:${workflowCard.workflowId || workflowCard.workflowName}`}>
-                          <tr className={`border-b ${c.border}`}>
-                            <td colSpan={12} className={`px-4 py-3 ${workflowTone.surface}`}>
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="flex min-w-0 items-center gap-2">
-                                  <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${workflowTone.badge}`}>
-                                    業務フロー
-                                  </span>
-                                  <div className={`truncate text-sm font-semibold ${c.textPrimary}`}>{workflowCard.workflowName}</div>
-                                </div>
-                                <div className={`text-xs ${c.textSecondary}`}>業務 {workflowCard.rows.length} 件</div>
-                              </div>
-                            </td>
-                          </tr>
-                          {workflowCard.rows.map(({ areaView, processView, row }) => {
-                            const status = statusConfig(row.status);
-                            return (
-                              <tr
-                                key={`table:${workflowCard.workflowId}:${areaView.areaId}:${processView.processId}:${row.shipperId}`}
-                                className={`border-b transition ${c.border} ${dragState ? "hover:bg-[#155DFC]/[0.04]" : ""}`}
-                                onDragOver={(event) => event.preventDefault()}
-                                onDrop={(event) => {
-                                  event.preventDefault();
-                                  if (!dragState) return;
-                                  applyPlacement(dragState.workerId, processView, dragState.fromStepId, row);
-                                  setDragState(null);
-                                }}
-                              >
-                                <td className="px-3 py-3 align-top">
-                                  <div className={`text-sm font-semibold ${c.textPrimary}`}>{processView.processName}</div>
-                                </td>
-                                <td className={`px-3 py-3 align-top text-sm ${c.textPrimary}`}>{row.shipperName}</td>
-                                <td className="px-3 py-3 align-top">
-                                  <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-medium ${workflowTone.metric} ${c.textSecondary}`}>
-                                    {areaView.areaName}
-                                  </span>
-                                </td>
-                                <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.startTime}</td>
-                                <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.targetEndTime}</td>
-                                <td className={`px-3 py-3 align-top text-right text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.planned.toLocaleString("ja-JP")}</td>
-                                <td className={`px-3 py-3 align-top text-right text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.actual.toLocaleString("ja-JP")}</td>
-                                <td className="px-3 py-3 align-top text-right">
-                                  <span className="text-sm font-semibold tabular-nums text-amber-500">{row.remaining.toLocaleString("ja-JP")}</span>
-                                </td>
-                                <td className={`px-3 py-3 align-top text-right text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.requiredPersonHours.toFixed(1)}</td>
-                                <td className={`px-3 py-3 align-top text-sm font-semibold tabular-nums ${c.textPrimary}`}>{row.eta}</td>
-                                <td className="px-3 py-3 align-top">
-                                  <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-semibold ${status.className}`}>{status.label}</span>
-                                </td>
-                                <td className="px-3 py-3 align-top">
-                                  <div className={`flex min-h-[44px] flex-wrap items-center gap-2 rounded-xl border border-dashed px-2.5 py-2 ${c.borderCard}`}>
-                                    {row.assignedWorkers.length > 0 ? (
-                                      row.assignedWorkers.map((assignment) => {
-                                        const worker = workerMap.get(assignment.workerId);
-                                        if (!worker) return null;
-                                        return (
-                                          <div
-                                            key={assignment.id}
-                                            draggable
-                                            onDragStart={() => {
-                                              setTeamDragState(null);
-                                              setDragState({ workerId: worker.id, fromStepId: assignment.sourceStepId });
-                                            }}
-                                            onDragEnd={() => setDragState(null)}
-                                            onContextMenu={(event) => {
-                                              event.preventDefault();
-                                              splitWorker(worker.id);
-                                            }}
-                                            className="inline-flex h-9 w-9 cursor-grab items-center justify-center rounded-full border border-white/60 shadow-sm active:cursor-grabbing"
-                                            title={`${worker.name} / ${workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}`}
-                                          >
-                                            <span className={`flex h-8 w-8 items-center justify-center rounded-full text-[11px] font-semibold text-white ${worker.color}`}>
-                                              {worker.initials}
-                                            </span>
-                                          </div>
-                                        );
-                                      })
-                                    ) : (
-                                      <span className={`text-xs ${c.textMuted}`}>ここへドロップして配置</span>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                    );
-                  })}
-                </table>
-              )}
-            </div>
-          </section>
-        </div>
-      )}
 
       {isWorkerPoolModalOpen ? (
         <div className="fixed inset-0 z-[115] flex items-center justify-center bg-slate-950/45 px-6 py-8 backdrop-blur-[2px]">
           <div className={`${c.bgCard} ${c.border} flex max-h-[calc(100vh-64px)] w-full max-w-[1320px] flex-col overflow-hidden rounded-[28px] border shadow-[0_28px_80px_rgba(15,23,42,0.22)]`}>
             <div className={`flex items-start justify-between gap-4 border-b px-6 py-5 ${c.border}`}>
               <div>
-                <div className={`text-lg font-semibold ${c.textPrimary}`}>作業者プール</div>
-                <div className={`mt-1 text-sm ${c.textSecondary}`}>多人数をまとめて確認できる拡大ビューです。icon を仮チーム作成枠へ入れると新しい仮チームを作成でき、チーム単位でもそのまま配置できます。</div>
+                <div className={`text-lg font-semibold whitespace-nowrap ${c.textPrimary}`}>作業者プール</div>
+                <div className={`mt-1 overflow-x-auto text-sm whitespace-nowrap ${c.textSecondary}`}>多人数をまとめて確認できる拡大ビューです。icon を仮チーム作成枠へ入れると新しい仮チームを作成でき、チーム単位でもそのまま配置できます。</div>
               </div>
               <button
                 type="button"
@@ -4025,13 +4216,13 @@ export function LiveCommand() {
               </button>
             </div>
             <div className="flex items-center justify-between gap-3 border-b px-6 py-3">
-              <div className={`text-sm ${c.textSecondary}`}>選択中時刻: <span className={`font-semibold ${c.textPrimary}`}>{selectedTime || "-"}</span></div>
+              <div className={`text-sm whitespace-nowrap ${c.textSecondary}`}>選択中時刻: <span className={`font-semibold ${c.textPrimary}`}>{selectedTime || "-"}</span></div>
               <div className="flex items-center gap-2">
-                <span className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>未配置 {activeWorkers.length} 名</span>
-                <span className={`rounded-full px-3 py-1 text-xs ${c.bgSurface} ${c.textSecondary}`}>待機・離席 {standbyWorkers.length} 名</span>
+                <span className={`rounded-full px-3 py-1 text-xs whitespace-nowrap ${c.bgSurface} ${c.textSecondary}`}>未配置 {activeWorkers.length} 名</span>
+                <span className={`rounded-full px-3 py-1 text-xs whitespace-nowrap ${c.bgSurface} ${c.textSecondary}`}>待機・離席 {standbyWorkers.length} 名</span>
               </div>
             </div>
-            <div className="min-h-0 overflow-y-auto p-6">
+            <div className="min-h-0 overflow-auto p-6">
               <div className="grid gap-4">
                 {workerPoolModalContent}
                 {workerPoolModalPlacementTargetsContent}

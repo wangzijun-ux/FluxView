@@ -693,21 +693,19 @@ export function WorkPerformance() {
 
           <div className="space-y-1">
             <span className={`text-[11px] ${c.textMuted}`}>表示単位</span>
-            <div className={`inline-flex rounded-xl border p-1 ${c.bgSurface} ${c.borderCard}`}>
+            <div className={`flex rounded-xl border p-1 ${c.bgSurface} ${c.borderCard}`}>
               <button
                 type="button"
                 onClick={() => setViewMode("workflow")}
-                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "workflow" ? "bg-[#155DFC] text-white" : c.textSecondary}`}
+                className={`rounded-lg px-3 py-1.5 text-[12px] font-medium ${viewMode === "workflow" ? "bg-[#155DFC] text-white" : c.textSecondary}`}
               >
-                <Layers className="h-4 w-4" />
                 業務
               </button>
               <button
                 type="button"
                 onClick={() => setViewMode("worker")}
-                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-[12px] font-medium ${viewMode === "worker" ? "bg-[#155DFC] text-white" : c.textSecondary}`}
+                className={`rounded-lg px-3 py-1.5 text-[12px] font-medium ${viewMode === "worker" ? "bg-[#155DFC] text-white" : c.textSecondary}`}
               >
-                <UserRound className="h-4 w-4" />
                 作業者
               </button>
             </div>

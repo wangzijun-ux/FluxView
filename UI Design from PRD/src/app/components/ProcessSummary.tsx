@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useNavigate } from "react-router";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
 import type { WorkflowDefinition, WorkflowStepSetting } from "./masterStore";
@@ -65,6 +66,10 @@ function formatTime(totalMinutes: number) {
 
 function formatHourValue(value: number) {
   return `${value.toFixed(1)}h`;
+}
+
+function formatHeadcountValue(value: number) {
+  return `${value.toFixed(1)}人`;
 }
 
 function hashString(value: string) {
@@ -153,6 +158,18 @@ function calculateRequiredHeadcount(
   targetEndTime: string,
   fallbackHeadcount: number,
 ) {
+  const requiredValue = calculateRequiredHeadcountValue(planned, uph, startTime, targetEndTime, fallbackHeadcount);
+  if (requiredValue <= 0) return 0;
+  return Math.max(1, Math.ceil(requiredValue));
+}
+
+function calculateRequiredHeadcountValue(
+  planned: number,
+  uph: number,
+  startTime: string,
+  targetEndTime: string,
+  fallbackHeadcount: number,
+) {
   const safePlanned = Math.max(0, planned);
   if (safePlanned === 0) return 0;
 
@@ -162,7 +179,7 @@ function calculateRequiredHeadcount(
   const durationMinutes = endMinutes - startMinutes;
 
   if (durationMinutes <= 0) return Math.max(1, fallbackHeadcount);
-  return Math.max(1, Math.ceil(safePlanned / (effectiveUph * (durationMinutes / 60))));
+  return Math.max(1, safePlanned / (effectiveUph * (durationMinutes / 60)));
 }
 
 function calculateRequiredPersonHours(planned: number, uph: number) {
@@ -272,6 +289,35 @@ function aggregateAreaPlanValues(
 
 function countAssigned(snapshot: Record<string, string[]> | undefined, stepId: string) {
   return (snapshot?.[stepId] ?? []).filter(Boolean).length;
+}
+
+function getAssignedCountAtReference(params: {
+  stepId: string;
+  startTime: string;
+  selectedDate: string;
+  today: string;
+  nowMinutes: number;
+  timeLabels: string[];
+  snapshotsByTime: Record<string, Record<string, string[]>>;
+}) {
+  const { stepId, startTime, selectedDate, today, nowMinutes, timeLabels, snapshotsByTime } = params;
+  if (timeLabels.length === 0) return 0;
+
+  const selectedDateValue = selectedDate.replaceAll("-", "");
+  const todayValue = today.replaceAll("-", "");
+
+  if (selectedDateValue > todayValue) {
+    const futureLabel = timeLabels.find((label) => parseTime(label) >= parseTime(startTime)) ?? timeLabels[0];
+    return countAssigned(snapshotsByTime[futureLabel], stepId);
+  }
+
+  if (selectedDateValue < todayValue) {
+    const lastLabel = timeLabels[timeLabels.length - 1];
+    return countAssigned(snapshotsByTime[lastLabel], stepId);
+  }
+
+  const currentLabel = [...timeLabels].reverse().find((label) => parseTime(label) <= nowMinutes) ?? timeLabels[0];
+  return countAssigned(snapshotsByTime[currentLabel], stepId);
 }
 
 function getPlannedValueAtMinute(startTime: string, targetEndTime: string, planned: number, minute: number) {
@@ -1140,7 +1186,7 @@ function StepAreaDetailRows({
               )}
             </td>
             <td className="px-4 py-4 align-middle">
-              <div className={`${colors.textPrimary}`}>{step.requiredPersonHours.toFixed(1)} 人時</div>
+              <div className={`${colors.textPrimary}`}>{formatHeadcountValue(step.requiredHeadcountValue ?? step.requiredHeadcount)}</div>
             </td>
             <td className="px-4 py-4 align-middle">
               <div className="mx-auto min-w-[168px]">
@@ -1204,6 +1250,7 @@ function StepAreaDetailRows({
 
 export function ProcessSummary() {
   const c = useThemeColors();
+  const navigate = useNavigate();
   const {
     selectedSiteId,
     sites,
@@ -1572,6 +1619,13 @@ export function ProcessSummary() {
             };
           });
           const plan = aggregateAreaPlanValues(areaRows, basePlan);
+          const requiredHeadcountValue = calculateRequiredHeadcountValue(
+            plan.planned,
+            step.uph,
+            plan.startTime,
+            plan.targetEndTime,
+            step.headcount,
+          );
           const requiredHeadcount = calculateRequiredHeadcount(
             plan.planned,
             step.uph,
@@ -1619,7 +1673,17 @@ export function ProcessSummary() {
                 return label ? [{ id: `skill-${id}`, label, kind: "skill" as const }] : [];
               }),
             ],
+            assignedCount: getAssignedCountAtReference({
+              stepId: step.id,
+              startTime: plan.startTime,
+              selectedDate,
+              today,
+              nowMinutes,
+              timeLabels: deploymentTimeLabels,
+              snapshotsByTime: storedDeploymentSnapshots,
+            }),
             requiredHeadcount,
+            requiredHeadcountValue,
             requiredPersonHours: calculateRequiredPersonHours(plan.planned, step.uph),
             areaRows,
             actual: metrics.actual,
@@ -1802,6 +1866,7 @@ export function ProcessSummary() {
 
   const inputClass = `h-10 w-full rounded-xl border px-3 text-[13px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`;
   const tableInputClass = `${inputClass} h-9 rounded-lg px-2.5 text-[12px]`;
+  const compactTableInputClass = `h-10 rounded-lg border px-2.5 text-[13px] outline-none transition ${c.bgInput} ${c.borderCard} ${c.textPrimary}`;
   const cardClass = `${c.bgCard} border ${c.border} rounded-2xl`;
   const trendButtonClass = `mx-auto block rounded-2xl p-2 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/60 ${
     c.isDark ? "hover:bg-slate-900/70" : "hover:bg-slate-100"
@@ -2001,14 +2066,14 @@ export function ProcessSummary() {
                         c.isDark ? "border-violet-400/25 bg-violet-500/12 text-violet-200" : "border-violet-200 bg-violet-50 text-violet-700"
                       }`}
                     >
-                      必要人時 {workflow.allSteps.reduce((sum, step) => sum + step.requiredPersonHours, 0).toFixed(1)}h
+                      必要人数 {workflow.allSteps.reduce((sum, step) => sum + step.requiredHeadcountValue, 0).toFixed(1)}人
                     </span>
                   </div>
                 </div>
               </div>
 
               <div className="overflow-x-auto">
-                <table className="min-w-[1360px] w-full text-center text-sm">
+                <table className="min-w-[1480px] w-full text-center text-sm">
                   <thead className={`${c.bgSurface} ${c.textSecondary}`}>
                     <tr>
                       <th className="px-4 py-3 text-center font-medium">工程</th>
@@ -2016,7 +2081,9 @@ export function ProcessSummary() {
                       <th className="px-4 py-3 text-center font-medium">予定数</th>
                       <th className="px-4 py-3 text-center font-medium">UPH</th>
                       <th className="px-4 py-3 text-center font-medium">進捗</th>
-                      <th className="px-4 py-3 text-center font-medium">必要人時</th>
+                      <th className="px-4 py-3 text-center font-medium">必要人数</th>
+                      <th className="px-4 py-3 text-center font-medium">配置人数</th>
+                      <th className="px-4 py-3 text-center font-medium">見込み終了時刻</th>
                       <th className="px-4 py-3 text-center font-medium">進捗推移</th>
                       <th className="px-4 py-3 text-center font-medium">状態</th>
                     </tr>
@@ -2069,13 +2136,13 @@ export function ProcessSummary() {
                               </div>
                             </td>
                         <td className="px-4 py-4 align-middle">
-                          <div className="mx-auto flex max-w-[280px] items-center gap-2">
+                          <div className="mx-auto flex max-w-[256px] items-center justify-center gap-2">
                             <input
                               type="time"
                               value={step.startTime}
                               readOnly
                               tabIndex={-1}
-                              className={`${inputClass} max-w-[132px] cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
+                              className={`${compactTableInputClass} w-[104px] flex-none cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
                             />
                             <span className={`shrink-0 text-xs font-semibold ${c.textMuted}`}>~</span>
                             <input
@@ -2083,7 +2150,7 @@ export function ProcessSummary() {
                               value={step.targetEndTime}
                               readOnly
                               tabIndex={-1}
-                              className={`${inputClass} max-w-[132px] cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
+                              className={`${compactTableInputClass} w-[104px] flex-none cursor-default text-center ${c.isDark ? "bg-slate-950/70" : "bg-slate-50"}`}
                             />
                           </div>
                         </td>
@@ -2125,7 +2192,7 @@ export function ProcessSummary() {
                                 return nextStore;
                               });
                             }}
-                            className={`${inputClass} mx-auto max-w-[132px] text-center`}
+                            className={`${compactTableInputClass} mx-auto w-[104px] text-center`}
                           />
                           {step.processableCount !== null && (
                             <div
@@ -2166,7 +2233,39 @@ export function ProcessSummary() {
                           </div>
                         </td>
                         <td className="px-4 py-4 align-middle">
-                          <div className={`${c.textPrimary}`}>{step.requiredPersonHours.toFixed(1)} 人時</div>
+                          <div className={`${c.textPrimary}`}>{formatHeadcountValue(step.requiredHeadcountValue)}</div>
+                        </td>
+                        <td className="px-4 py-4 align-middle">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const params = new URLSearchParams({
+                                date: selectedDate,
+                                time: step.startTime,
+                                workflowId: step.workflowId,
+                                processId: step.processId,
+                                shipperId: step.shipperId,
+                              });
+                              const primaryArea = step.areaRows.find((detail) => detail.tone === "configured");
+                              if (primaryArea) params.set("areaId", primaryArea.id);
+                              navigate(`/live-command?${params.toString()}`);
+                            }}
+                            className={`inline-flex items-center justify-center rounded-full border px-3 py-1 text-xs font-semibold transition ${c.borderCard} ${c.textPrimary} ${c.bgSurface} ${c.isDark ? "hover:bg-slate-900" : "hover:bg-slate-100"}`}
+                          >
+                            {step.assignedCount}人
+                          </button>
+                        </td>
+                        <td className="px-4 py-4 align-middle">
+                          <div className="min-w-[124px] text-center">
+                            <div className={`font-semibold ${step.eta === "-" ? c.textMuted : "text-violet-500"}`}>{step.eta}</div>
+                            {formatEtaOffset(step.etaMinutes, step.referenceMinutes, step.eta) ? (
+                              <div className="mt-1 text-[11px] font-medium text-rose-500">
+                                {formatEtaOffset(step.etaMinutes, step.referenceMinutes, step.eta)}
+                              </div>
+                            ) : (
+                              <div className={`mt-1 text-[11px] ${c.textMuted}`}>完了見込み</div>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4 align-middle">
                           <button
