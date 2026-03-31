@@ -1,6 +1,7 @@
 import { DemoAccessGate } from "./DemoAccessGate";
 import { Layout } from "./Layout";
 import { Login } from "./Login";
+import { MasterDataProvider } from "./MasterDataContext";
 import { WorkerBandView } from "./WorkerBandView";
 import { WorkerView } from "./WorkerView";
 
@@ -22,16 +23,20 @@ export function ProtectedLayout() {
 
 export function ProtectedWorkerView() {
   return (
-    <DemoAccessGate title="作業者ビュー DEMO">
-      <WorkerView />
-    </DemoAccessGate>
+    <MasterDataProvider>
+      <DemoAccessGate title="作業者ビュー DEMO">
+        <WorkerView />
+      </DemoAccessGate>
+    </MasterDataProvider>
   );
 }
 
 export function ProtectedWorkerBandView() {
   return (
-    <DemoAccessGate title="作業者ビュー（バンド） DEMO">
-      <WorkerBandView />
-    </DemoAccessGate>
+    <MasterDataProvider>
+      <DemoAccessGate title="作業者ビュー バンド表示 DEMO">
+        <WorkerBandView />
+      </DemoAccessGate>
+    </MasterDataProvider>
   );
 }

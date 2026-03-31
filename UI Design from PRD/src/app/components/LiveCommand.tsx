@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { createPortal } from "react-dom";
+import type { MouseEvent } from "react";
 import { useLocation } from "react-router";
 import {
   AlertTriangle,
@@ -17,7 +18,6 @@ import {
   Search,
   Trash2,
   Users,
-  X,
 } from "lucide-react";
 import { useMasterData } from "./MasterDataContext";
 import { useThemeColors } from "./ThemeContext";
@@ -298,11 +298,13 @@ function getWorkerStatusMeta(status: DeploymentWorker["status"]) {
 type DragState = {
   workerId: string;
   fromStepId: string | null;
+  preserveSource?: boolean;
 };
 
 type DragMember = {
   workerId: string;
   fromStepId: string | null;
+  preserveSource?: boolean;
 };
 
 type TeamDragState = {
@@ -819,9 +821,9 @@ function WorkerCard({
   selected = false,
   draggable = true,
   onClick,
+  onMouseDown,
   onDragStart,
   onDragEnd,
-  onSplit,
   qualificationItems,
   skillItems,
   c,
@@ -836,9 +838,9 @@ function WorkerCard({
   selected?: boolean;
   draggable?: boolean;
   onClick?: (event: any) => void;
+  onMouseDown?: (event: MouseEvent<HTMLDivElement>) => void;
   onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnd?: () => void;
-  onSplit?: (workerId: string) => void;
   qualificationItems: CapabilityItem[];
   skillItems: CapabilityItem[];
   c: ReturnType<typeof useThemeColors>;
@@ -949,17 +951,13 @@ function WorkerCard({
       <div
         draggable={draggable}
         onClick={onClick}
+        onMouseDown={onMouseDown}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
-        onContextMenu={(event) => {
-          if (!onSplit) return;
-          event.preventDefault();
-          event.stopPropagation();
-          onSplit(worker.id);
-        }}
         tabIndex={0}
         aria-label={`${worker.name} / ${shiftLabel}`}
         className={[
+          "select-none",
           isCompact
             ? "relative inline-flex h-9 w-9 items-center justify-center rounded-full border shadow-sm transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
             : "relative inline-flex h-12 w-12 items-center justify-center rounded-full border shadow-sm transition duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50",
@@ -1150,13 +1148,11 @@ function WorkerTaskPoolCard({
   card,
   onDragStart,
   onDragEnd,
-  onSplit,
   c,
 }: {
   card: WorkerTaskCardView;
   onDragStart?: (event: DragEvent<HTMLDivElement>) => void;
   onDragEnd?: () => void;
-  onSplit?: (workerId: string) => void;
   c: ReturnType<typeof useThemeColors>;
 }) {
   const capabilityItems = [...card.qualificationItems, ...card.skillItems].slice(0, 4);
@@ -1166,14 +1162,8 @@ function WorkerTaskPoolCard({
       draggable={card.draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onContextMenu={(event) => {
-        if (!onSplit) return;
-        event.preventDefault();
-        event.stopPropagation();
-        onSplit(card.worker.id);
-      }}
       className={[
-        "group rounded-[24px] border border-white/10 bg-[#2f2d2a] p-4 text-white shadow-[0_10px_32px_rgba(15,23,42,0.14)] transition duration-200",
+        "select-none group rounded-[24px] border border-white/10 bg-[#2f2d2a] p-4 text-white shadow-[0_10px_32px_rgba(15,23,42,0.14)] transition duration-200",
         card.draggable ? "cursor-grab active:cursor-grabbing hover:-translate-y-0.5" : "",
         card.muted ? "opacity-90" : "",
       ].join(" ")}
@@ -1321,7 +1311,8 @@ export function LiveCommand() {
   const [selectedTime, setSelectedTime] = useState("");
   const [keyword, setKeyword] = useState("");
   const [rightTab, setRightTab] = useState<RightTab>("staff");
-  const [isWorkerPoolModalOpen, setIsWorkerPoolModalOpen] = useState(false);
+  const [rightPanelWidth, setRightPanelWidth] = useState(360);
+  const [isRightPanelResizing, setIsRightPanelResizing] = useState(false);
   const [temporaryTeams, setTemporaryTeams] = useState<TemporaryWorkerTeam[]>([]);
   const [dragState, setDragState] = useState<DragState | null>(null);
   const [teamDragState, setTeamDragState] = useState<TeamDragState | null>(null);
@@ -1335,6 +1326,9 @@ export function LiveCommand() {
   const [draftAreaAssignments, setDraftAreaAssignments] = useState<Record<string, AreaAssignmentSnapshot>>({});
   const [workerSplitOverrides, setWorkerSplitOverrides] = useState<Record<string, number>>({});
   const [focusedPlacementRowKey, setFocusedPlacementRowKey] = useState("");
+  const rightPanelResizeStateRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const shiftPressedRef = useRef(false);
+  const splitDragIntentRef = useRef(false);
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
   const snapshotScopeRef = useRef("");
   const handledPlacementFocusRef = useRef("");
@@ -1351,17 +1345,65 @@ export function LiveCommand() {
   }, [placementAlert]);
 
   useEffect(() => {
-    if (!isWorkerPoolModalOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsWorkerPoolModalOpen(false);
-        setTeamDragState(null);
-        setDragState(null);
+      if (event.key === "Shift") {
+        shiftPressedRef.current = true;
       }
     };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Shift") {
+        shiftPressedRef.current = false;
+      }
+    };
+
+    const handleWindowBlur = () => {
+      shiftPressedRef.current = false;
+      splitDragIntentRef.current = false;
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isWorkerPoolModalOpen]);
+    window.addEventListener("keyup", handleKeyUp);
+    window.addEventListener("blur", handleWindowBlur);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isRightPanelResizing) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const resizeState = rightPanelResizeStateRef.current;
+      if (!resizeState) return;
+
+      const delta = resizeState.startX - event.clientX;
+      const nextWidth = Math.min(520, Math.max(320, resizeState.startWidth + delta));
+      setRightPanelWidth(nextWidth);
+    };
+
+    const stopResizing = () => {
+      setIsRightPanelResizing(false);
+      rightPanelResizeStateRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", stopResizing);
+
+    return () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", stopResizing);
+    };
+  }, [isRightPanelResizing]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2391,6 +2433,43 @@ export function LiveCommand() {
         return left.name.localeCompare(right.name, "ja");
       });
   }, [activeWorkers, workerTeamMetaMap]);
+
+  // 同一グループに同じ作業者のスロットが複数ある場合、自動的にマージする
+  useEffect(() => {
+    const mergeNeeded = new Map<string, number>();
+
+    activeWorkerGroups.forEach((group) => {
+      const slotCounts = new Map<string, number>();
+      group.slots.forEach((slot) => {
+        slotCounts.set(slot.workerId, (slotCounts.get(slot.workerId) ?? 0) + 1);
+      });
+      slotCounts.forEach((count, workerId) => {
+        if (count > 1) {
+          mergeNeeded.set(workerId, (mergeNeeded.get(workerId) ?? 0) + (count - 1));
+        }
+      });
+    });
+
+    if (mergeNeeded.size === 0) return;
+
+    const currentSplitCounts = effectiveWorkerSplitCounts;
+    setWorkerSplitOverrides((prev) => {
+      let next = prev;
+      mergeNeeded.forEach((mergeCount, workerId) => {
+        const current = currentSplitCounts.get(workerId) ?? 1;
+        const updated = Math.max(1, current - mergeCount);
+        if (updated >= current) return;
+        if (next === prev) next = { ...prev };
+        if (updated <= 1) {
+          delete next[workerId];
+        } else {
+          next[workerId] = updated;
+        }
+      });
+      return next;
+    });
+  }, [activeWorkerGroups, effectiveWorkerSplitCounts]);
+
   const createTemporaryTeamFromUserIds = (userIds: string[]) => {
     const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
     if (uniqueUserIds.length === 0) return;
@@ -2522,7 +2601,59 @@ export function LiveCommand() {
     setSelectedWorkerIds([]);
   };
 
-  const beginWorkerDrag = (workerId: string) => {
+  const ensureSplitCapacityForPoolDrag = (workerIds: string[]) => {
+    const uniqueWorkerIds = Array.from(new Set(workerIds.filter(Boolean)));
+    if (uniqueWorkerIds.length === 0) return;
+
+    setWorkerSplitOverrides((prev) => {
+      let next = prev;
+
+      uniqueWorkerIds.forEach((targetWorkerId) => {
+        const currentSplitCount = effectiveWorkerSplitCounts.get(targetWorkerId) ?? 1;
+        const requiredSplitCount = currentSplitCount + 1;
+
+        if (requiredSplitCount <= currentSplitCount) return;
+
+        if (next === prev) {
+          next = { ...prev };
+        }
+        next[targetWorkerId] = requiredSplitCount;
+      });
+
+      return next;
+    });
+  };
+
+  const ensureSplitCapacityForAssignedDrag = (members: DragMember[]) => {
+    if (members.length === 0) return;
+
+    const extraAssignmentsByWorker = new Map<string, number>();
+    members.forEach(({ workerId }) => {
+      extraAssignmentsByWorker.set(workerId, (extraAssignmentsByWorker.get(workerId) ?? 0) + 1);
+    });
+
+    setWorkerSplitOverrides((prev) => {
+      let next = prev;
+
+      extraAssignmentsByWorker.forEach((extraAssignments, workerId) => {
+        const currentSplitCount = effectiveWorkerSplitCounts.get(workerId) ?? 1;
+        const assignedCount = currentWorkerAssignmentCounts.get(workerId) ?? 0;
+        const requiredSplitCount = Math.max(currentSplitCount, assignedCount + extraAssignments);
+
+        if (requiredSplitCount <= currentSplitCount) return;
+
+        if (next === prev) {
+          next = { ...prev };
+        }
+        next[workerId] = requiredSplitCount;
+      });
+
+      return next;
+    });
+  };
+
+  const beginWorkerDrag = (workerId: string, event?: DragEvent<HTMLDivElement>) => {
+    const preserveSource = Boolean(event?.shiftKey || splitDragIntentRef.current || shiftPressedRef.current);
     const selectedIds =
       selectedWorkerIds.includes(workerId) && selectedWorkerIds.length > 1
         ? selectedWorkerIds
@@ -2534,16 +2665,21 @@ export function LiveCommand() {
         teamId: "__selected__",
         teamName: `選択中作業者 ${selectedIds.length}名`,
         workerIds: selectedIds,
-        members: selectedIds.map((selectedWorkerId) => ({ workerId: selectedWorkerId, fromStepId: null })),
+        members: selectedIds.map((selectedWorkerId) => ({
+          workerId: selectedWorkerId,
+          fromStepId: null,
+          preserveSource,
+        })),
       });
       return;
     }
 
     setTeamDragState(null);
-    setDragState({ workerId, fromStepId: null });
+    setDragState({ workerId, fromStepId: null, preserveSource });
   };
 
-  const beginAssignedDrag = (workerId: string, fromStepId: string | null) => {
+  const beginAssignedDrag = (workerId: string, fromStepId: string | null, event?: DragEvent<HTMLDivElement>) => {
+    const preserveSource = Boolean(event?.shiftKey || splitDragIntentRef.current || shiftPressedRef.current);
     const key = buildAssignedSelectionKey(workerId, fromStepId);
     const selectedMembers =
       selectedAssignedKeys.includes(key) && selectedAssignedKeys.length > 1
@@ -2556,19 +2692,32 @@ export function LiveCommand() {
         teamId: "__selected-assigned__",
         teamName: `選択中作業者 ${selectedMembers.length}名`,
         workerIds: selectedMembers.map((member) => member.workerId),
-        members: selectedMembers,
+        members: selectedMembers.map((member) => ({
+          ...member,
+          preserveSource,
+        })),
       });
       return;
     }
 
     setTeamDragState(null);
-    setDragState({ workerId, fromStepId });
+    setDragState({ workerId, fromStepId, preserveSource });
   };
 
   const endWorkerDrag = () => {
     setDragState(null);
     setTeamDragState(null);
+    splitDragIntentRef.current = false;
   };
+  const rememberSplitDragIntent = (event: MouseEvent<HTMLDivElement | HTMLButtonElement>) => {
+    const nextIntent = Boolean(event.shiftKey || shiftPressedRef.current);
+    shiftPressedRef.current = nextIntent;
+    splitDragIntentRef.current = nextIntent;
+  };
+
+  const shouldPreserveDraggedTeamSource = (team: TeamDragState) =>
+    resolveTeamDragMembers(team).some((member) => member.preserveSource);
+
   const returnMembersToUnassigned = (members: DragMember[]) => {
     const effectiveMembers = members.filter((member) => member.fromStepId);
     if (!selectedTime || effectiveMembers.length === 0) return;
@@ -2621,6 +2770,8 @@ export function LiveCommand() {
       );
     }
 
+    const enableTeamPlacement = modalMode || workCardViewMode === "table";
+
     return (
       <div className="grid gap-3">
         {activeWorkerGroups.map((group) => (
@@ -2654,20 +2805,27 @@ export function LiveCommand() {
               </div>
               <div className="flex items-center gap-2">
                 <div className={`rounded-full px-2 py-0.5 text-[10px] whitespace-nowrap ${c.bgSurface} ${c.textMuted}`}>{group.slots.length} 名</div>
-                {modalMode && group.id !== "__unassigned__" ? (
+                {enableTeamPlacement && group.id !== "__unassigned__" ? (
                   <button
                     type="button"
                     draggable
+                    onMouseDown={rememberSplitDragIntent}
                     onDragStart={(event) => {
                       event.dataTransfer.effectAllowed = "move";
+                      const preserveSource = Boolean(event.shiftKey || splitDragIntentRef.current || shiftPressedRef.current);
                       setDragState(null);
                       setTeamDragState({
                         teamId: group.id,
                         teamName: group.name,
                         workerIds: group.slots.map((slot) => slot.workerId),
+                        members: group.slots.map((slot) => ({
+                          workerId: slot.workerId,
+                          fromStepId: null,
+                          preserveSource,
+                        })),
                       });
                     }}
-                    onDragEnd={() => setTeamDragState(null)}
+                    onDragEnd={endWorkerDrag}
                     className="inline-flex items-center gap-1 rounded-full border border-[#155DFC]/20 bg-[#EEF4FF] px-2.5 py-1 text-[10px] font-semibold whitespace-nowrap text-[#155DFC]"
                   >
                     <Users className="h-3.5 w-3.5" />
@@ -2698,7 +2856,6 @@ export function LiveCommand() {
                   selected={selectedWorkerIds.includes(slot.workerId)}
                   muted={false}
                   draggable={interactive || modalMode}
-                  onSplit={interactive ? splitWorker : undefined}
                   onClick={
                     interactive || modalMode
                       ? (event) => toggleWorkerSelection(slot.workerId, event)
@@ -2706,10 +2863,11 @@ export function LiveCommand() {
                   }
                   qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
                   skillItems={skillItemsForIds(slot.worker.skillIds)}
+                  onMouseDown={interactive || modalMode ? rememberSplitDragIntent : undefined}
                   onDragStart={
                     interactive || modalMode
-                      ? () => {
-                          beginWorkerDrag(slot.workerId);
+                      ? (event) => {
+                          beginWorkerDrag(slot.workerId, event);
                         }
                       : undefined
                   }
@@ -2881,11 +3039,20 @@ export function LiveCommand() {
     workerId: string;
     processView: ProcessView;
     sourceStepId: string | null;
+    preserveSource?: boolean;
     targetShipper?: ProcessShipperRow | null;
     baseSnapshots: Record<string, AssignmentSnapshot>;
     baseAreaAssignments: Record<string, AreaAssignmentSnapshot>;
   }) => {
-    const { workerId, processView, sourceStepId, targetShipper = null, baseSnapshots, baseAreaAssignments } = params;
+    const {
+      workerId,
+      processView,
+      sourceStepId,
+      preserveSource = false,
+      targetShipper = null,
+      baseSnapshots,
+      baseAreaAssignments,
+    } = params;
     const worker = workerMap.get(workerId);
     if (!worker) return null;
 
@@ -2926,7 +3093,18 @@ export function LiveCommand() {
     const endMinutes = parseTimeLabel(endTime);
     if (endMinutes < startMinutes) return null;
 
-    const allowParallelAssignment = (workerSplitOverrides[worker.id] ?? 1) > 1;
+    const allowParallelAssignment = preserveSource || (workerSplitOverrides[worker.id] ?? 1) > 1;
+
+    // 配置先エリアにすでに同じ作業者がいるかチェック（マージ判定用）
+    const snapshotAtStart = baseSnapshots[startTime] ?? materializeSnapshot({}, steps);
+    const areaAtStart = baseAreaAssignments[startTime] ?? {};
+    const isMerge =
+      !preserveSource &&
+      eligibleStepIds.some((stepId) => {
+        if (!(snapshotAtStart[stepId] ?? []).includes(worker.id)) return false;
+        return getAssignedAreaId(stepId, worker.id, areaAtStart) === processView.areaId;
+      });
+
     const nextSnapshots = { ...baseSnapshots };
     const nextAreaAssignments = { ...baseAreaAssignments };
 
@@ -2944,9 +3122,10 @@ export function LiveCommand() {
 
         const assignedAreaId = getAssignedAreaId(stepId, worker.id, currentAreaSnapshot);
         const shouldRemove =
-          !allowParallelAssignment ||
-          assignedAreaId !== processView.areaId ||
-          (sourceStepId !== null && stepId === sourceStepId);
+          !preserveSource &&
+          (!allowParallelAssignment ||
+            assignedAreaId !== processView.areaId ||
+            (sourceStepId !== null && stepId === sourceStepId));
 
         if (!shouldRemove) return;
 
@@ -2954,6 +3133,18 @@ export function LiveCommand() {
           (assignedWorkerId) => assignedWorkerId !== worker.id,
         );
         delete currentAreaSnapshot[buildAreaAssignmentKey(stepId, worker.id)];
+      });
+
+      eligibleStepIds.forEach((stepId) => {
+        const assignedAreaId = getAssignedAreaId(stepId, worker.id, currentAreaSnapshot);
+        if (assignedAreaId !== processView.areaId) return;
+
+        if ((nextSnapshot[stepId] ?? []).includes(worker.id)) {
+          nextSnapshot[stepId] = (nextSnapshot[stepId] ?? []).filter(
+            (assignedWorkerId) => assignedWorkerId !== worker.id,
+          );
+          delete currentAreaSnapshot[buildAreaAssignmentKey(stepId, worker.id)];
+        }
       });
 
       const targetStepId =
@@ -2989,6 +3180,7 @@ export function LiveCommand() {
       nextAreaAssignments,
       startTime,
       endTime,
+      isMerge,
       selectedSteps: eligibleStepIds
         .map((stepId) => deploymentStepMap.get(stepId))
         .filter((step): step is DeploymentStep => Boolean(step)),
@@ -3002,12 +3194,14 @@ export function LiveCommand() {
     workerId: string,
     processView: ProcessView,
     sourceStepId: string | null,
+    preserveSource = false,
     targetShipper: ProcessShipperRow | null = null,
   ) => {
     const placement = buildPlacementDraftResult({
       workerId,
       processView,
       sourceStepId,
+      preserveSource,
       targetShipper,
       baseSnapshots: draftSnapshots,
       baseAreaAssignments: draftAreaAssignments,
@@ -3016,6 +3210,24 @@ export function LiveCommand() {
 
     setDraftSnapshots(placement.nextSnapshots);
     setDraftAreaAssignments(placement.nextAreaAssignments);
+
+    if (placement.isMerge) {
+      setWorkerSplitOverrides((prev) => {
+        const current = effectiveWorkerSplitCounts.get(workerId) ?? 1;
+        const next = Math.max(1, current - 1);
+        if (next <= 1) {
+          const { [workerId]: _, ...rest } = prev;
+          return rest;
+        }
+        return { ...prev, [workerId]: next };
+      });
+    } else if (preserveSource) {
+      if (sourceStepId === null) {
+        ensureSplitCapacityForPoolDrag([workerId]);
+      } else {
+        ensureSplitCapacityForAssignedDrag([{ workerId, fromStepId }]);
+      }
+    }
 
     const requirementWarningLines = getRequirementWarningLines(workerId, placement.selectedSteps);
     const requirementWarning = requirementWarningLines.join(" / ");
@@ -3039,17 +3251,23 @@ export function LiveCommand() {
     let placedCount = 0;
     let targetLabel = processView.processName;
     const teamMembers = resolveTeamDragMembers(team);
+    const mergeCounts = new Map<string, number>();
 
-    teamMembers.forEach(({ workerId, fromStepId }) => {
+    teamMembers.forEach(({ workerId, fromStepId, preserveSource }) => {
       const placement = buildPlacementDraftResult({
         workerId,
         processView,
         sourceStepId: fromStepId,
+        preserveSource,
         targetShipper,
         baseSnapshots: nextSnapshots,
         baseAreaAssignments: nextAreaAssignments,
       });
       if (!placement) return;
+
+      if (placement.isMerge) {
+        mergeCounts.set(workerId, (mergeCounts.get(workerId) ?? 0) + 1);
+      }
 
       nextSnapshots = placement.nextSnapshots;
       nextAreaAssignments = placement.nextAreaAssignments;
@@ -3062,6 +3280,33 @@ export function LiveCommand() {
 
     setDraftSnapshots(nextSnapshots);
     setDraftAreaAssignments(nextAreaAssignments);
+
+    if (mergeCounts.size > 0) {
+      setWorkerSplitOverrides((prev) => {
+        let next = prev;
+        mergeCounts.forEach((mergeCount, workerId) => {
+          const current = effectiveWorkerSplitCounts.get(workerId) ?? 1;
+          const updated = Math.max(1, current - mergeCount);
+          if (next === prev) next = { ...prev };
+          if (updated <= 1) {
+            delete next[workerId];
+          } else {
+            next[workerId] = updated;
+          }
+        });
+        return next;
+      });
+    }
+
+    const preservedPoolMembers = teamMembers.filter((member) => member.preserveSource && member.fromStepId === null);
+    const preservedAssignedMembers = teamMembers.filter((member) => member.preserveSource && member.fromStepId !== null);
+
+    if (preservedPoolMembers.length > 0) {
+      ensureSplitCapacityForPoolDrag(preservedPoolMembers.map((member) => member.workerId));
+    }
+    if (preservedAssignedMembers.length > 0) {
+      ensureSplitCapacityForAssignedDrag(preservedAssignedMembers);
+    }
 
     const details = Array.from(warningLines);
     setPlacementAlert({
@@ -3221,14 +3466,13 @@ export function LiveCommand() {
               shiftLabel={workerShiftLabelMap.get(slot.workerId) ?? "シフト未設定"}
               splitCount={slot.splitCount}
               muted
-              onSplit={splitWorker}
               qualificationItems={qualificationItemsForIds(slot.worker.qualificationIds)}
               skillItems={skillItemsForIds(slot.worker.skillIds)}
-              onDragStart={() => {
-                setTeamDragState(null);
-                setDragState({ workerId: slot.workerId, fromStepId: null });
+              onMouseDown={rememberSplitDragIntent}
+              onDragStart={(event) => {
+                beginWorkerDrag(slot.workerId, event);
               }}
-              onDragEnd={() => setDragState(null)}
+              onDragEnd={endWorkerDrag}
               c={c}
             />
           ))}
@@ -3237,6 +3481,14 @@ export function LiveCommand() {
               待機・離席なし
             </div>
           )}
+        </div>
+      </div>
+
+      <div className={`rounded-2xl border border-dashed px-4 py-3 text-center ${c.borderCard} ${c.bgCard}`}>
+        <div className={`text-[11px] leading-5 ${c.textSecondary}`}>
+          <span className="font-semibold">分割方法</span>
+          <br />
+          アイコン選択 → マウス左ボタン押下・保持 → Shift 押下 → ドラッグ → ドロップ
         </div>
       </div>
 
@@ -3374,13 +3626,32 @@ export function LiveCommand() {
                         onDrop={(event) => {
                           event.preventDefault();
                           if (teamDragState) {
-                            applyTeamPlacement(teamDragState, processView, row);
-                            setTeamDragState(null);
+                            const shouldPreserveSource = shouldPreserveDraggedTeamSource(teamDragState);
+                            applyTeamPlacement(
+                              shouldPreserveSource
+                                ? {
+                                    ...teamDragState,
+                                    members: resolveTeamDragMembers(teamDragState).map((member) => ({
+                                      ...member,
+                                      preserveSource: true,
+                                    })),
+                                  }
+                                : teamDragState,
+                              processView,
+                              row,
+                            );
+                            endWorkerDrag();
                             return;
                           }
                           if (dragState) {
-                            applyPlacement(dragState.workerId, processView, dragState.fromStepId, row);
-                            setDragState(null);
+                            applyPlacement(
+                              dragState.workerId,
+                              processView,
+                              dragState.fromStepId,
+                              Boolean(dragState.preserveSource),
+                              row,
+                            );
+                            endWorkerDrag();
                           }
                         }}
                       >
@@ -3428,8 +3699,9 @@ export function LiveCommand() {
                                     qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
                                     skillItems={skillItemsForIds(worker.skillIds)}
                                     onClick={(event) => toggleAssignedSelection(worker.id, assignment.sourceStepId, event)}
-                                    onDragStart={() => {
-                                      beginAssignedDrag(worker.id, assignment.sourceStepId);
+                                    onMouseDown={rememberSplitDragIntent}
+                                    onDragStart={(event) => {
+                                      beginAssignedDrag(worker.id, assignment.sourceStepId, event);
                                     }}
                                     onDragEnd={endWorkerDrag}
                                     c={c}
@@ -3761,7 +4033,10 @@ export function LiveCommand() {
 
       </section>
 
-      <div className="grid min-h-0 flex-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div
+        className="grid min-h-0 flex-1 gap-4 overflow-hidden xl:gap-0 xl:[grid-template-columns:minmax(0,1fr)_12px_var(--live-command-right-panel-width)]"
+        style={{ ["--live-command-right-panel-width" as string]: `${rightPanelWidth}px` }}
+      >
         <div
           className={[
             "min-h-0 content-start gap-2.5 pr-1",
@@ -3797,12 +4072,12 @@ export function LiveCommand() {
                                 shiftLabel={workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}
                                 splitCount={effectiveWorkerSplitCounts.get(worker.id) ?? 1}
                                 selected={selectedAssignedKeys.includes(assignedSelectionKey)}
-                                onSplit={splitWorker}
                                 onClick={(event) => toggleAssignedSelection(worker.id, assignment.sourceStepId, event)}
                                 qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
                                 skillItems={skillItemsForIds(worker.skillIds)}
-                                onDragStart={() => {
-                                  beginAssignedDrag(worker.id, assignment.sourceStepId);
+                                onMouseDown={rememberSplitDragIntent}
+                                onDragStart={(event) => {
+                                  beginAssignedDrag(worker.id, assignment.sourceStepId, event);
                                 }}
                                 onDragEnd={endWorkerDrag}
                                 c={c}
@@ -3837,12 +4112,12 @@ export function LiveCommand() {
                                 shiftLabel={workerShiftLabelMap.get(worker.id) ?? "シフト未設定"}
                                 splitCount={effectiveWorkerSplitCounts.get(worker.id) ?? 1}
                                 selected={selectedAssignedKeys.includes(assignedSelectionKey)}
-                                onSplit={splitWorker}
                                 onClick={(event) => toggleAssignedSelection(worker.id, assignment.sourceStepId, event)}
                                 qualificationItems={qualificationItemsForIds(worker.qualificationIds)}
                                 skillItems={skillItemsForIds(worker.skillIds)}
-                                onDragStart={() => {
-                                  beginAssignedDrag(worker.id, assignment.sourceStepId);
+                                onMouseDown={rememberSplitDragIntent}
+                                onDragStart={(event) => {
+                                  beginAssignedDrag(worker.id, assignment.sourceStepId, event);
                                 }}
                                 onDragEnd={endWorkerDrag}
                                 c={c}
@@ -3892,12 +4167,31 @@ export function LiveCommand() {
                         onDrop={(event) => {
                           event.preventDefault();
                           if (teamDragState) {
-                            applyTeamPlacement(teamDragState, processView, row);
+                            const shouldPreserveSource = shouldPreserveDraggedTeamSource(teamDragState);
+                            applyTeamPlacement(
+                              shouldPreserveSource
+                                ? {
+                                    ...teamDragState,
+                                    members: resolveTeamDragMembers(teamDragState).map((member) => ({
+                                      ...member,
+                                      preserveSource: true,
+                                    })),
+                                  }
+                                : teamDragState,
+                              processView,
+                              row,
+                            );
                             endWorkerDrag();
                             return;
                           }
                           if (!dragState) return;
-                          applyPlacement(dragState.workerId, processView, dragState.fromStepId, row);
+                          applyPlacement(
+                            dragState.workerId,
+                            processView,
+                            dragState.fromStepId,
+                            Boolean(dragState.preserveSource),
+                            row,
+                          );
                           endWorkerDrag();
                         }}
                       >
@@ -4096,7 +4390,29 @@ export function LiveCommand() {
           )}
         </div>
 
-        <aside className="flex min-h-0 flex-col gap-4">
+        <div className="relative hidden xl:block">
+          <button
+            type="button"
+            onMouseDown={(event) => {
+              rightPanelResizeStateRef.current = {
+                startX: event.clientX,
+                startWidth: rightPanelWidth,
+              };
+              setIsRightPanelResizing(true);
+            }}
+            className="absolute inset-y-0 left-1/2 w-3 -translate-x-1/2 cursor-col-resize"
+            aria-label="右パネルの幅を変更"
+          >
+            <span className={`absolute inset-y-6 left-1/2 w-px -translate-x-1/2 rounded-full ${c.isDark ? "bg-white/12" : "bg-slate-200"}`} />
+            <span
+              className={`absolute left-1/2 top-1/2 h-14 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full transition ${
+                isRightPanelResizing ? "bg-[#155DFC]" : c.isDark ? "bg-white/18" : "bg-slate-300"
+              }`}
+            />
+          </button>
+        </div>
+
+        <aside className="flex min-h-0 flex-col gap-4 xl:w-[var(--live-command-right-panel-width)]">
           <section className={`${c.bgCard} ${c.border} flex min-h-0 flex-1 flex-col rounded-2xl border`}>
             <div className={`border-b px-4 py-4 ${c.border}`}>
               <div className="flex items-center gap-2">
@@ -4127,23 +4443,6 @@ export function LiveCommand() {
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
               {rightTab === "staff" ? (
                 <div className="grid gap-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className={`text-sm font-semibold ${c.textPrimary}`}>作業者プール</div>
-                      <div className={`mt-1 text-xs ${c.textSecondary}`}>未配置・待機中の作業者を確認できます。</div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setTeamDragState(null);
-                        setDragState(null);
-                        setIsWorkerPoolModalOpen(true);
-                      }}
-                      className={`inline-flex items-center justify-center rounded-xl border px-3 py-2 text-xs font-semibold transition ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
-                    >
-                      拡大表示
-                    </button>
-                  </div>
                   {workerPoolContent}
                 </div>
               ) : (
@@ -4194,43 +4493,6 @@ export function LiveCommand() {
         </aside>
       </div>
 
-      {isWorkerPoolModalOpen ? (
-        <div className="fixed inset-0 z-[115] flex items-center justify-center bg-slate-950/45 px-6 py-8 backdrop-blur-[2px]">
-          <div className={`${c.bgCard} ${c.border} flex max-h-[calc(100vh-64px)] w-full max-w-[1320px] flex-col overflow-hidden rounded-[28px] border shadow-[0_28px_80px_rgba(15,23,42,0.22)]`}>
-            <div className={`flex items-start justify-between gap-4 border-b px-6 py-5 ${c.border}`}>
-              <div>
-                <div className={`text-lg font-semibold whitespace-nowrap ${c.textPrimary}`}>作業者プール</div>
-                <div className={`mt-1 overflow-x-auto text-sm whitespace-nowrap ${c.textSecondary}`}>多人数をまとめて確認できる拡大ビューです。icon を仮チーム作成枠へ入れると新しい仮チームを作成でき、チーム単位でもそのまま配置できます。</div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setIsWorkerPoolModalOpen(false);
-                  setTeamDragState(null);
-                  setDragState(null);
-                }}
-                className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border transition ${c.borderCard} ${c.bgSurface} ${c.textSecondary}`}
-                aria-label="作業者プールを閉じる"
-              >
-                <X className="h-4.5 w-4.5" />
-              </button>
-            </div>
-            <div className="flex items-center justify-between gap-3 border-b px-6 py-3">
-              <div className={`text-sm whitespace-nowrap ${c.textSecondary}`}>選択中時刻: <span className={`font-semibold ${c.textPrimary}`}>{selectedTime || "-"}</span></div>
-              <div className="flex items-center gap-2">
-                <span className={`rounded-full px-3 py-1 text-xs whitespace-nowrap ${c.bgSurface} ${c.textSecondary}`}>未配置 {activeWorkers.length} 名</span>
-                <span className={`rounded-full px-3 py-1 text-xs whitespace-nowrap ${c.bgSurface} ${c.textSecondary}`}>待機・離席 {standbyWorkers.length} 名</span>
-              </div>
-            </div>
-            <div className="min-h-0 overflow-auto p-6">
-              <div className="grid gap-4">
-                {workerPoolModalContent}
-                {workerPoolModalPlacementTargetsContent}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

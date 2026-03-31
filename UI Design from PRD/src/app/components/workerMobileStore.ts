@@ -911,6 +911,22 @@ export function buildDefaultAnnouncements(siteName: string, date = new Date()) {
   ] satisfies WorkerNotificationRecord[];
 }
 
+function buildCleanDefaultAnnouncements(siteName: string, date = new Date()) {
+  const dateKey = formatLocalDateKey(date);
+  return [
+    {
+      id: `announce:${siteName}:${dateKey}`,
+      siteId: "",
+      workerId: null,
+      type: "announce",
+      title: "朝礼連絡",
+      message: `${siteName} の本日の作業は 06:00 開始です。配置、注意事項、引継ぎ内容を確認してから入場してください。`,
+      createdAt: toDateTimeIso(date, "05:00"),
+      deliverAt: toDateTimeIso(date, "05:00"),
+    },
+  ] satisfies WorkerNotificationRecord[];
+}
+
 export function getVisibleWorkerNotifications(params: {
   siteId: string;
   workerId: string;
@@ -921,7 +937,7 @@ export function getVisibleWorkerNotifications(params: {
   const current = now.getTime();
 
   return normalizeNotifications([
-    ...buildDefaultAnnouncements(siteName, now).map((record) => ({ ...record, siteId })),
+    ...buildCleanDefaultAnnouncements(siteName, now).map((record) => ({ ...record, siteId })),
     ...readWorkerNotifications(),
   ]).filter((record) => {
     if (record.siteId !== siteId) return false;

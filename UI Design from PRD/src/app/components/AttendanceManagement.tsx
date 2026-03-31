@@ -2407,9 +2407,12 @@ export function AttendanceManagement() {
                                                                 ? (c.isDark ? "text-cyan-200" : "text-slate-900")
                                                                 : c.textPrimary;
                                                         const popoverShift = isEditing ? (editingShiftDraft ?? createShiftEditorDraft(shift)) : shift;
-                                                        const matchedTemplate =
-                                                            quickTemplates.find((template) => template.id === popoverShift?.templateId)
-                                                            ?? quickTemplates.find((template) => template.start === popoverShift?.start && template.end === popoverShift?.end);
+                                                                        const visibleQuickTemplates = quickTemplates.filter((template) => template.category === worker.category);
+                                                                        const matchedTemplate =
+                                                                            visibleQuickTemplates.find((template) => template.id === popoverShift?.templateId)
+                                                                            ?? visibleQuickTemplates.find((template) => template.start === popoverShift?.start && template.end === popoverShift?.end)
+                                                                            ?? quickTemplates.find((template) => template.id === popoverShift?.templateId)
+                                                                            ?? quickTemplates.find((template) => template.start === popoverShift?.start && template.end === popoverShift?.end);
                                                         const shiftAdjustment = ensureShiftAdjustment(popoverShift);
                                                         const plannedStart = shiftAdjustment.plannedStart || matchedTemplate?.start || popoverShift?.start || "";
                                                         const plannedEnd = shiftAdjustment.plannedEnd || matchedTemplate?.end || popoverShift?.end || "";
@@ -2472,7 +2475,7 @@ export function AttendanceManagement() {
                                                                         </div>
 
                                                                         <div className="grid grid-cols-4 gap-2">
-                                                                            {quickTemplates.map((template) => {
+                                                                            {visibleQuickTemplates.map((template) => {
                                                                                 const isActiveTemplate =
                                                                                     !popoverShift?.isOff &&
                                                                                     popoverShift?.start === template.start &&
@@ -2508,6 +2511,11 @@ export function AttendanceManagement() {
                                                                                     </button>
                                                                                 );
                                                                             })}
+                                                                            {visibleQuickTemplates.length === 0 ? (
+                                                                                <div className="col-span-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2.5 text-center text-[11px] text-slate-500">
+                                                                                    この雇用形態で使えるテンプレートはありません
+                                                                                </div>
+                                                                            ) : null}
                                                                             <button
                                                                                 type="button"
                                                                                 onClick={() =>

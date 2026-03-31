@@ -514,7 +514,7 @@ export function WorkerView() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className={`text-[12px] font-semibold ${c.textMuted}`}>WORKER DEMO LOGIN</div>
-                <div className={`mt-1 text-[24px] font-semibold ${c.textPrimary}`}>菴懈･ｭ蜩｡繝ｭ繧ｰ繧､繝ｳ</div>
+                <div className={`mt-1 text-[24px] font-semibold ${c.textPrimary}`}>作業者ログイン</div>
               </div>
             </div>
 
@@ -594,7 +594,7 @@ export function WorkerView() {
             </button>
 
             <div className="min-w-0 flex-1 text-center">
-              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentUserDetail?.name ?? currentWorker?.name ?? "菴懈･ｭ蜩｡"}</div>
+              <div className={`truncate text-[15px] font-semibold ${c.textPrimary}`}>{currentUserDetail?.name ?? currentWorker?.name ?? "作業者"}</div>
               <div className={`truncate text-[12px] ${c.textSecondary}`}>{siteName}</div>
             </div>
 
@@ -833,7 +833,7 @@ export function WorkerView() {
                     <div className={`text-[13px] font-semibold ${c.textPrimary}`}>{latestChangeNotification.title}</div>
                     <div className={`mt-1 text-[13px] leading-6 ${c.textSecondary}`}>{latestChangeNotification.message}</div>
                     <div className={`mt-2 text-[11px] ${c.textMuted}`}>
-                      騾夂衍譎ょ綾 {formatNotificationTime(latestChangeNotification.deliverAt)}
+                      配信時刻 {formatNotificationTime(latestChangeNotification.deliverAt)}
                     </div>
                   </div>
                 </div>
@@ -988,7 +988,7 @@ export function WorkerView() {
                         className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-amber-500 px-3 text-[12px] font-semibold text-white"
                       >
                         <Pause className="h-4 w-4" />
-                        菴懈･ｭ繧剃ｸｭ譁ｭ
+                        作業を中断
                       </button>
                     ) : (
                       <button
@@ -997,7 +997,8 @@ export function WorkerView() {
                         className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-3 text-[12px] font-semibold text-white"
                       >
                         <Play className="h-4 w-4" />
-                        菴懈･ｭ繧貞・髢・                      </button>
+                        {activeInputStatus === "paused" ? "作業を再開" : "作業を開始"}
+                      </button>
                     )}
                     <button
                       type="button"
@@ -1052,9 +1053,9 @@ export function WorkerView() {
 
               <div className="mt-5">
                 <div className={`text-[13px] font-semibold text-violet-500`}>{primaryAnnouncement.title}</div>
-                <div className={`mt-3 text-[20px] font-semibold leading-8 ${c.textPrimary}`}>菴懈･ｭ髢句ｧ句燕縺ｫ譛譁ｰ縺ｮ縺顔衍繧峨○繧堤｢ｺ隱阪＠縺ｦ縺上□縺輔＞</div>
+                <div className={`mt-3 text-[20px] font-semibold leading-8 ${c.textPrimary}`}>作業開始前に最新のお知らせを確認してください</div>
                 <div className={`mt-3 text-[14px] leading-7 ${c.textSecondary}`}>{primaryAnnouncement.message}</div>
-                <div className={`mt-4 text-[12px] ${c.textMuted}`}>騾夂衍譎ょ綾 {formatNotificationTime(primaryAnnouncement.deliverAt)}</div>
+                <div className={`mt-4 text-[12px] ${c.textMuted}`}>配信時刻 {formatNotificationTime(primaryAnnouncement.deliverAt)}</div>
               </div>
 
               <button
@@ -1062,7 +1063,8 @@ export function WorkerView() {
                 onClick={() => setDismissedAnnouncementId(primaryAnnouncement.id)}
                 className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-[#155DFC] px-4 py-3 text-[14px] font-semibold text-white"
               >
-                遒ｺ隱阪＠縺ｦ髢峨§繧・                <ChevronRight className="h-4 w-4" />
+                確認して進む
+                <ChevronRight className="h-4 w-4" />
               </button>
             </div>
           </div>

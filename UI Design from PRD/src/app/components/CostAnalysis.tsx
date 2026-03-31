@@ -32,6 +32,18 @@ import {
   type WorkerSubmissionRecord,
 } from "./workerMobileStore";
 import { DEFAULT_USER_UNIT_PRICE, readUsersFromStorage } from "./userStore";
+import {
+  Area,
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 const OVERHEAD_RATE = 0.08;
 const DEFAULT_SLOT_INTERVAL = 30;
@@ -777,6 +789,48 @@ export function CostAnalysis() {
     });
   }, [actualTaskFacts, analysisDate, averageLaborRate, plannedStepFacts, siteScope.storageScopeKey, slotInterval]);
 
+  const timeSlotInsights = useMemo(() => {
+    const pressured = timeSlotRows
+      .filter((row) => row.status === "逼迫")
+      .slice()
+      .sort((left, right) => right.requiredHeadcount - left.requiredHeadcount)
+      .slice(0, 3)
+      .map((row) => ({
+        label: row.label,
+        title: "逼迫時間帯",
+        message: `必要 ${formatHeadcount(row.requiredHeadcount)} に対し、計画配置 ${formatHeadcount(row.plannedAssignedHeadcount)} です。`,
+        tone: "border-rose-200 bg-rose-50 text-rose-700",
+      }));
+
+    const surplus = timeSlotRows
+      .filter((row) => row.status === "余力")
+      .slice()
+      .sort((left, right) => right.plannedAssignedHeadcount - left.plannedAssignedHeadcount)
+      .slice(0, 3)
+      .map((row) => ({
+        label: row.label,
+        title: "余力時間帯",
+        message: `計画配置 ${formatHeadcount(row.plannedAssignedHeadcount)} に対し、必要 ${formatHeadcount(row.requiredHeadcount)} です。`,
+        tone: "border-amber-200 bg-amber-50 text-amber-700",
+      }));
+
+    return [...pressured, ...surplus].slice(0, 4);
+  }, [timeSlotRows]);
+
+  const peakRequiredSlot = useMemo(() => {
+    return timeSlotRows.reduce<TimeSlotRow | null>((best, row) => {
+      if (!best || row.requiredHeadcount > best.requiredHeadcount) return row;
+      return best;
+    }, null);
+  }, [timeSlotRows]);
+
+  const peakActualCostSlot = useMemo(() => {
+    return timeSlotRows.reduce<TimeSlotRow | null>((best, row) => {
+      if (!best || row.actualCost > best.actualCost) return row;
+      return best;
+    }, null);
+  }, [timeSlotRows]);
+
   const topRows = useMemo(() => breakdownRows.slice(0, 5), [breakdownRows]);
   const maxTrendValue = useMemo(
     () => Math.max(1, ...trendMap.map((bucket) => Math.max(bucket.plannedCost, bucket.actualCost))),
@@ -1309,48 +1363,171 @@ export function CostAnalysis() {
               </div>
             </div>
           </div>
-          <div className="mt-5 overflow-x-auto">
-            <table className="min-w-[1040px] w-full table-fixed border-separate border-spacing-0">
-              <thead>
-                <tr className={c.textSecondary}>
-                  {["時間帯", "必要人数", "計画配置人数", "実績件数", "理論コスト", "計画コスト", "実績コスト", "状況"].map((header) => (
-                    <th
-                      key={header}
-                      className={`border-b px-4 py-3 text-left text-xs font-semibold ${c.borderCard}`}
-                    >
-                      {header}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {timeSlotRows.map((row) => {
-                  const toneClass =
-                    row.status === "逼迫"
-                      ? "border-rose-200 bg-rose-50 text-rose-600"
-                      : row.status === "余力"
-                        ? "border-amber-200 bg-amber-50 text-amber-700"
-                        : "border-emerald-200 bg-emerald-50 text-emerald-700";
+          <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.9fr)]">
+            <div className={`${SUB_CARD_CLASS} ${c.bgSurface} ${c.borderCard}`}>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className={`rounded-2xl border px-4 py-3 ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[11px] font-medium ${c.textMuted}`}>最大必要人数</div>
+                  <div className={`mt-2 text-lg font-bold ${c.textPrimary}`}>
+                    {peakRequiredSlot ? formatHeadcount(peakRequiredSlot.requiredHeadcount) : formatHeadcount(0)}
+                  </div>
+                  <div className={`mt-1 text-xs ${c.textSecondary}`}>
+                    {peakRequiredSlot ? `${peakRequiredSlot.label} 時点` : "データなし"}
+                  </div>
+                </div>
+                <div className={`rounded-2xl border px-4 py-3 ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[11px] font-medium ${c.textMuted}`}>最大実績コスト</div>
+                  <div className={`mt-2 text-lg font-bold ${c.textPrimary}`}>
+                    {peakActualCostSlot ? formatYen(peakActualCostSlot.actualCost) : formatYen(0)}
+                  </div>
+                  <div className={`mt-1 text-xs ${c.textSecondary}`}>
+                    {peakActualCostSlot ? `${peakActualCostSlot.label} 時点` : "データなし"}
+                  </div>
+                </div>
+                <div className={`rounded-2xl border px-4 py-3 ${c.bgCard} ${c.borderCard}`}>
+                  <div className={`text-[11px] font-medium ${c.textMuted}`}>逼迫スロット数</div>
+                  <div className={`mt-2 text-lg font-bold ${c.textPrimary}`}>
+                    {timeSlotRows.filter((row) => row.status === "逼迫").length}
+                  </div>
+                  <div className={`mt-1 text-xs ${c.textSecondary}`}>全 {timeSlotRows.length} 区間中</div>
+                </div>
+              </div>
 
-                  return (
-                    <tr key={row.label} className={`${c.bgCardHover}`}>
-                      <td className={`border-b px-4 py-4 text-sm font-semibold ${c.borderCard} ${c.textPrimary}`}>{row.label}</td>
-                      <td className={`border-b px-4 py-4 text-sm ${c.borderCard} ${c.textPrimary}`}>{formatHeadcount(row.requiredHeadcount)}</td>
-                      <td className={`border-b px-4 py-4 text-sm ${c.borderCard} ${c.textPrimary}`}>{formatHeadcount(row.plannedAssignedHeadcount)}</td>
-                      <td className={`border-b px-4 py-4 text-sm ${c.borderCard} ${c.textPrimary}`}>{formatVolume(row.actualVolume)}</td>
-                      <td className={`border-b px-4 py-4 text-sm ${c.borderCard} ${c.textPrimary}`}>{formatYen(row.theoreticalCost)}</td>
-                      <td className={`border-b px-4 py-4 text-sm ${c.borderCard} ${c.textPrimary}`}>{formatYen(row.plannedCost)}</td>
-                      <td className={`border-b px-4 py-4 text-sm font-semibold ${c.borderCard} ${c.textPrimary}`}>{formatYen(row.actualCost)}</td>
-                      <td className={`border-b px-4 py-4 ${c.borderCard}`}>
-                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold ${toneClass}`}>
-                          {row.status}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+              <div className={`mt-4 rounded-[22px] border p-4 ${c.bgCard} ${c.borderCard}`}>
+                <div className="mb-3 flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#155DFC]" />
+                    <span className={c.textSecondary}>計画配置人数</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#F59E0B]" />
+                    <span className={c.textSecondary}>必要人数</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="h-2.5 w-2.5 rounded-full bg-[#10B981]" />
+                    <span className={c.textSecondary}>実績コスト</span>
+                  </div>
+                </div>
+                <div className="h-[360px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={timeSlotRows} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={c.isDark ? "rgba(148,163,184,0.12)" : "rgba(148,163,184,0.22)"} />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fill: c.isDark ? "#94a3b8" : "#64748b", fontSize: 11 }}
+                        axisLine={false}
+                        tickLine={false}
+                        interval={slotInterval === 30 ? 1 : 0}
+                      />
+                      <YAxis
+                        yAxisId="headcount"
+                        tick={{ fill: c.isDark ? "#94a3b8" : "#64748b", fontSize: 11 }}
+                        axisLine={false}
+                        tickLine={false}
+                        width={44}
+                      />
+                      <YAxis
+                        yAxisId="cost"
+                        orientation="right"
+                        tick={{ fill: c.isDark ? "#94a3b8" : "#64748b", fontSize: 11 }}
+                        axisLine={false}
+                        tickLine={false}
+                        width={56}
+                        tickFormatter={(value: number) => `¥${Math.round(value / 1000)}k`}
+                      />
+                      <Tooltip
+                        contentStyle={{
+                          borderRadius: 16,
+                          borderColor: c.isDark ? "rgba(71,85,105,0.8)" : "rgba(203,213,225,0.9)",
+                          backgroundColor: c.isDark ? "rgba(15,23,42,0.96)" : "rgba(255,255,255,0.96)",
+                        }}
+                        formatter={(value: number, name: string) => {
+                          if (name === "実績コスト") return [formatYen(value), name];
+                          if (name === "実績件数") return [formatVolume(value), name];
+                          return [formatHeadcount(value), name];
+                        }}
+                        labelFormatter={(label) => `${label}`}
+                      />
+                      <Legend />
+                      <Bar
+                        yAxisId="headcount"
+                        dataKey="plannedAssignedHeadcount"
+                        name="計画配置人数"
+                        fill="#155DFC"
+                        radius={[8, 8, 0, 0]}
+                        maxBarSize={20}
+                      />
+                      <Line
+                        yAxisId="headcount"
+                        type="monotone"
+                        dataKey="requiredHeadcount"
+                        name="必要人数"
+                        stroke="#F59E0B"
+                        strokeWidth={3}
+                        dot={false}
+                        activeDot={{ r: 5 }}
+                      />
+                      <Area
+                        yAxisId="cost"
+                        type="monotone"
+                        dataKey="actualCost"
+                        name="実績コスト"
+                        stroke="#10B981"
+                        fill={c.isDark ? "rgba(16,185,129,0.18)" : "rgba(16,185,129,0.14)"}
+                        strokeWidth={2}
+                      />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <div className={`${SUB_CARD_CLASS} ${c.bgSurface} ${c.borderCard}`}>
+                <div className={`text-sm font-semibold ${c.textPrimary}`}>時間帯インサイト</div>
+                <div className="mt-4 space-y-3">
+                  {timeSlotInsights.length > 0 ? (
+                    timeSlotInsights.map((item) => (
+                      <div key={`${item.title}:${item.label}`} className={`rounded-2xl border px-4 py-3 ${item.tone}`}>
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-semibold">{item.title}</span>
+                          <span className="text-xs font-medium">{item.label}</span>
+                        </div>
+                        <div className="mt-2 text-sm leading-6">{item.message}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className={`rounded-2xl border px-4 py-6 text-sm ${c.bgCard} ${c.borderCard} ${c.textSecondary}`}>
+                      目立つ逼迫・余力はありません。現在の計画では大きな時間帯偏りは見られません。
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className={`${SUB_CARD_CLASS} ${c.bgSurface} ${c.borderCard}`}>
+                <div className={`text-sm font-semibold ${c.textPrimary}`}>集計サマリー</div>
+                <div className="mt-4 space-y-3">
+                  <div className={`rounded-2xl border px-4 py-3 ${c.bgCard} ${c.borderCard}`}>
+                    <div className={`text-[11px] font-medium ${c.textMuted}`}>理論コスト合計</div>
+                    <div className={`mt-2 text-lg font-bold ${c.textPrimary}`}>
+                      {formatYen(timeSlotRows.reduce((sum, row) => sum + row.theoreticalCost, 0))}
+                    </div>
+                  </div>
+                  <div className={`rounded-2xl border px-4 py-3 ${c.bgCard} ${c.borderCard}`}>
+                    <div className={`text-[11px] font-medium ${c.textMuted}`}>計画コスト合計</div>
+                    <div className={`mt-2 text-lg font-bold ${c.textPrimary}`}>
+                      {formatYen(timeSlotRows.reduce((sum, row) => sum + row.plannedCost, 0))}
+                    </div>
+                  </div>
+                  <div className={`rounded-2xl border px-4 py-3 ${c.bgCard} ${c.borderCard}`}>
+                    <div className={`text-[11px] font-medium ${c.textMuted}`}>実績コスト合計</div>
+                    <div className={`mt-2 text-lg font-bold ${c.textPrimary}`}>
+                      {formatYen(timeSlotRows.reduce((sum, row) => sum + row.actualCost, 0))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       ) : null}
